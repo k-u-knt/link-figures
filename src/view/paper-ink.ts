@@ -1,6 +1,6 @@
 /** The text colours that read on a sheet of the given paper colour. */
 export interface PaperInk {
-  /** Black on light paper, white on dark; `#rrggbb`. */
+  /** Black on paper lighter than the contrast crossover (see `CROSSOVER`), white on darker; `#rrggbb`. */
   ink: string;
   /** The ink 60% of the way toward the paper, for secondary text and hairlines; `#rrggbb`. */
   muted: string;
@@ -10,6 +10,11 @@ type Rgb = [number, number, number];
 
 const WHITE: Rgb = [255, 255, 255];
 const BLACK: Rgb = [0, 0, 0];
+/**
+ * Relative luminance at which black and white text have the same contrast ratio, ((L + 0.05) / 0.05 = 1.05 / (L + 0.05)):
+ * paper above it reads better with black ink, paper at or below it with white.
+ */
+const CROSSOVER = 0.179;
 /** How far toward the paper the muted ink is blended. */
 const MUTED_BLEND = 0.6;
 
@@ -35,7 +40,7 @@ const toHex = ([r, g, b]: Rgb): string => "#" + [r, g, b].map((c) => c.toString(
 /** Paper that cannot be read as a colour counts as white. */
 export function paperInk(paper: string): PaperInk {
   const rgb = parseHex(paper) ?? WHITE;
-  const inkRgb = luminance(rgb) >= 0.5 ? BLACK : WHITE;
+  const inkRgb = luminance(rgb) > CROSSOVER ? BLACK : WHITE;
   const muted = inkRgb.map((c, i) => Math.round(c + (rgb[i] - c) * MUTED_BLEND)) as Rgb;
   return { ink: toHex(inkRgb), muted: toHex(muted) };
 }

@@ -7,17 +7,23 @@ test("black paper gets white ink and a dark grey", () => expect(paperInk("#00000
 
 test("off-white paper (#f4f4f4) is still light", () => expect(paperInk("#f4f4f4")).toEqual({ ink: "#000000", muted: "#929292" }));
 
-test("a dark colour gets white ink, a pale one black", () => {
-  expect(paperInk("#1e1e1e").ink).toBe("#ffffff");
-  expect(paperInk("#fdf6e3").ink).toBe("#000000");
-  expect(paperInk("#ffee99").ink).toBe("#000000");
-  expect(paperInk("#003366").ink).toBe("#ffffff");
+test("mid and dark greys follow the contrast crossover: #999999 gets black ink, #333333 white", () => {
+  expect(paperInk("#999999")).toEqual({ ink: "#000000", muted: "#5c5c5c" });
+  expect(paperInk("#333333")).toEqual({ ink: "#ffffff", muted: "#858585" });
 });
 
-test("the switch is at a relative luminance of 0.5", () => {
-  // Linear luminance of a grey v/255 is 0.5 near v = 188.
-  expect(paperInk("#bdbdbd").ink).toBe("#000000");
-  expect(paperInk("#bbbbbb").ink).toBe("#ffffff");
+test("a dark colour gets white ink, a pale or mid one black", () => {
+  expect(paperInk("#1e1e1e").ink).toBe("#ffffff");
+  expect(paperInk("#003366").ink).toBe("#ffffff");
+  expect(paperInk("#fdf6e3").ink).toBe("#000000");
+  expect(paperInk("#ffee99").ink).toBe("#000000");
+  expect(paperInk("#808080").ink).toBe("#000000");
+});
+
+test("the switch is at a relative luminance of 0.179, where black and white text have equal contrast", () => {
+  // Linear luminance of a grey v/255 is 0.179 at v = 117.4.
+  expect(paperInk("#767676").ink).toBe("#000000");
+  expect(paperInk("#757575").ink).toBe("#ffffff");
 });
 
 test("short, upper-case and alpha forms are read; the alpha is ignored", () => {

@@ -154,7 +154,7 @@ describe("the type", () => {
     expect(fields[1]).toMatchObject({ unit: "pt", min: 1, step: 0.5 });
     expect(fields[2].options!.map((o) => o.value)).toEqual(["normal", "bold"]);
     expect(fields[5].options!.map((o) => o.value)).toEqual(["left", "center", "right"]);
-    expect(fields[6].step).toBe(0.1);
+    expect(fields[6]).toMatchObject({ min: 0.5, step: 0.1 });
     for (const field of fields) expect(readValue(base(), field.key)).toBeDefined();
   });
 });
@@ -376,6 +376,41 @@ describe("editing", () => {
     text.blur();
     expect((swapped.nodes[0] as TextNode).text).toBe("Text");
     expect((component.store.doc.nodes[0] as TextNode).text).toBe("A");
+  });
+
+  test("lf-activate on the node's element (what the pointer controller sends for a double-click) enters edit mode like a dblclick", () => {
+    const { nodeEl, text, node, type } = setup({ text: "Text" });
+    nodeEl.fire("lf-activate");
+    expect(text.attrs.get("contenteditable")).toBe("plaintext-only");
+    expect(text.ownerDocument.activeElement).toBe(text);
+    expect(text.ownerDocument.selection.anchorNode).toBe(text);
+
+    type("A");
+    text.blur();
+    expect(node()!.text).toBe("A");
+    expect(text.attrs.has("contenteditable")).toBe(false);
+  });
+
+  test("both a dblclick on the text and lf-activate for the same double-click start one edit, not two", () => {
+    const { nodeEl, text, type } = setup({ text: "Text" });
+    text.fire("dblclick");
+    type("typed");
+    nodeEl.fire("lf-activate");
+    // The second activation found it editing already: nothing typed was lost, nothing was selected afresh.
+    expect(text.textContent).toBe("typed");
+    expect(text.attrs.get("contenteditable")).toBe("plaintext-only");
+  });
+
+  test("lf-activate is refused for a locked node, a read-only view and a renderer with no view, as a dblclick is", () => {
+    for (const made of [setup({ locked: true }), setup({}, { readOnly: true })]) {
+      made.nodeEl.fire("lf-activate");
+      expect(made.text.attrs.has("contenteditable")).toBe(false);
+      expect(made.text.ownerDocument.activeElement).toBeNull();
+    }
+    const stage = new FakeEl();
+    textNodeType.mount(base(), asEl(stage), { component: {} } as never);
+    stage.children[0].fire("lf-activate");
+    expect(stage.children[0].children[0].children[0].attrs.has("contenteditable")).toBe(false);
   });
 
   test("a locked node, a read-only view and a renderer with no view to edit through do not enter edit mode", () => {

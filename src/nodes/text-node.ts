@@ -29,8 +29,9 @@ interface EditingView {
 
 /**
  * One text node's DOM: `.lf-node` holding `.lf-node-body` holding `.lf-text`, which shows the text as it is (line
- * breaks and spaces kept) in the node's font. Double-clicking it edits the text in place: plain text only, committed
- * when the element loses focus, abandoned with Escape.
+ * breaks and spaces kept) in the node's font. Double-clicking it edits the text in place (the double-click arrives as
+ * `dblclick` on the text or as `lf-activate` on the node, see the constructor): plain text only, committed when the
+ * element loses focus, abandoned with Escape.
  */
 class TextNodeRenderer implements NodeRenderer {
   private node: TextNode;
@@ -50,6 +51,9 @@ class TextNodeRenderer implements NodeRenderer {
     this.textEl.style.overflow = "hidden";
     // The pointer controller leaves presses and keys on an editable element to it, so these need no `stopPropagation`.
     this.textEl.addEventListener("dblclick", () => this.beginEdit());
+    // The same, from the pointer controller: its press captured the pointer, so the double-click that follows reaches the
+    // stage and not this element, and the controller finds the node in the model and tells it so.
+    this.el.addEventListener("lf-activate", () => this.beginEdit());
     this.textEl.addEventListener("blur", () => this.endEdit());
     this.textEl.addEventListener("keydown", (ev) => this.onKeyDown(ev));
     this.update(node);
@@ -193,7 +197,7 @@ export const textNodeType: NodeType<TextNode> = {
       { kind: "toggle", key: "font.italic", label: "Italic" },
       { kind: "color", key: "font.color", label: "Color" },
       { kind: "select", key: "font.align", label: "Align", options: ALIGN_OPTIONS },
-      { kind: "number", key: "font.lineHeight", label: "Line height", step: 0.1 },
+      { kind: "number", key: "font.lineHeight", label: "Line height", min: 0.5, step: 0.1 },
     ];
   },
 

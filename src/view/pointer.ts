@@ -78,6 +78,7 @@ export class PointerController {
     on("mousedown", (ev) => {
       if (this.gesture.kind !== "idle" && ev.button === 0) ev.preventDefault();
     });
+    on("dblclick", (ev) => this.onDoubleClick(ev));
     on("keydown", (ev) => this.onKeyDown(ev));
     on("blur", () => this.endGesture());
     this.unsubscribeSelection = this.view.selection.onChange(() => this.sync());
@@ -315,6 +316,22 @@ export class PointerController {
     } catch {
       // Already released.
     }
+  }
+
+  // Double-click
+
+  /**
+   * What a double-click on a node means is for the node's type to say (a text node starts editing). A press on a node
+   * captures the pointer, which sends the `click` and `dblclick` that follow to the stage, so the node's own element
+   * never sees them. The node under the pointer is therefore found in the model, as for a press, and told by an
+   * `lf-activate` event on its element.
+   */
+  private onDoubleClick(ev: MouseEvent): void {
+    if (this.view.readOnly || isEditable(ev.target)) return;
+    const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    const hit = hitTest(this.itemsOnAllPages(this.store.doc), world);
+    const el = hit === null ? undefined : this.view.nodeHost.elementFor(hit);
+    el?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
   }
 
   // Keyboard

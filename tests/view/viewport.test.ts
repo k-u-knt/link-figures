@@ -1,4 +1,4 @@
-import { Viewport, nearestPage, pageWorldRect } from "../../src/view/viewport";
+import { Viewport, nearestPage, pageInFocus, pageWorldRect } from "../../src/view/viewport";
 import { createDocument, createPage } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -74,3 +74,31 @@ test("nearestPage picks the page whose centre is nearest the point", () => {
   expect(nearestPage(d, { x: 100, y: second - 1 })).toBe(d.pages[1]);
 });
 test("nearestPage of a document without pages is undefined", () => { const d = createDocument("a4-portrait"); d.pages = []; expect(nearestPage(d, { x: 0, y: 0 })).toBeUndefined(); });
+
+describe("pageInFocus", () => {
+  const twoPages = () => {
+    const d = createDocument("a4-portrait");
+    d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id)));
+    d.nodes.push({ id: "p-on-2", page: d.pages[1].id } as any, { id: "p-on-1", page: d.pages[0].id } as any);
+    return d;
+  };
+
+  test("is the page of the selected node, wherever the stage is centred", () => {
+    const d = twoPages();
+    expect(pageInFocus(d, ["p-on-2"], d.pages[0])).toBe(d.pages[1]);
+    expect(pageInFocus(d, ["p-on-1"], d.pages[1])).toBe(d.pages[0]);
+  });
+
+  test("is the page the stage is centred on when nothing is selected", () => {
+    const d = twoPages();
+    expect(pageInFocus(d, [], d.pages[1])).toBe(d.pages[1]);
+    expect(pageInFocus(d, [], undefined)).toBeUndefined();
+  });
+
+  test("passes over selected ids that are not in the document, and over a node whose page is gone", () => {
+    const d = twoPages();
+    d.nodes.push({ id: "p-orphan", page: "pg-gone" } as any);
+    expect(pageInFocus(d, ["p-gone", "p-orphan", "p-on-2"], d.pages[0])).toBe(d.pages[1]);
+    expect(pageInFocus(d, ["p-gone", "p-orphan"], d.pages[0])).toBe(d.pages[0]);
+  });
+});

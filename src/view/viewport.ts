@@ -1,5 +1,5 @@
 import { pageOriginsPx, pageSizePx, type Pt, type Rect } from "../model/geometry";
-import type { Document, Page } from "../model/types";
+import type { Document, NodeId, Page } from "../model/types";
 
 export interface Size {
   width: number;
@@ -84,4 +84,17 @@ export function nearestPage(doc: Document, world: Pt): Page | undefined {
     }
   }
   return best;
+}
+
+/**
+ * The page that page-level commands and the inspector act on: the page of the first selected node that is in the
+ * document (a selection is never spread over pages), else `nearest`, the page the stage is centred on.
+ */
+export function pageInFocus(doc: Document, selection: readonly NodeId[], nearest: Page | undefined): Page | undefined {
+  for (const id of selection) {
+    const node = doc.nodes.find((n) => n.id === id);
+    const page = node && doc.pages.find((p) => p.id === node.page);
+    if (page) return page;
+  }
+  return nearest;
 }

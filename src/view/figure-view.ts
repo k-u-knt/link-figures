@@ -22,7 +22,7 @@ import { PageLayer } from "./page-layer";
 import { isEditable, PointerController } from "./pointer";
 import { SelectionState } from "./selection";
 import { Toolbar } from "./toolbar";
-import { nearestPage, pageWorldRect, Viewport } from "./viewport";
+import { nearestPage, pageInFocus, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
 const blankDocument = (): Document => createDocument(DEFAULT_SETTINGS.defaultPreset);
@@ -226,8 +226,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   // What the commands, the toolbar and the inspector use.
 
+  /** The page of the selected nodes when something is selected, else `currentPage()`: what page-level commands and the Page inspector act on. */
+  focusPage(): Page {
+    const nearest = this.currentPage();
+    return pageInFocus(this.store.doc, this.selection.ids, nearest) ?? nearest;
+  }
+
   commandContext(): CommandContext {
-    return { app: this.app, view: this, store: this.store, selection: this.selectedIds(), page: this.currentPage() };
+    return { app: this.app, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() };
   }
 
   /** Runs `command` on the current context, if it applies; a failure is shown to the user rather than lost. */

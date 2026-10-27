@@ -5,6 +5,7 @@ import type { Node } from "../../src/model/types";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
 import { clampToField, colorInputValue, formatNumber, Inspector } from "../../src/view/inspector";
+import { pageInFocus } from "../../src/view/viewport";
 import { SelectionState } from "../../src/view/selection";
 import { FakeEl } from "./fake-dom";
 
@@ -23,7 +24,15 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   const registries = createRegistries();
   registries.nodeTypes.register(fileType);
   const selection = new SelectionState();
-  const view = { readOnly: false, store, selection, plugin: { registries }, currentPage: () => store.doc.pages[0] };
+  // The stage is centred on the first page; `focusPage` is the view's rule for the page that is acted on.
+  const view = {
+    readOnly: false,
+    store,
+    selection,
+    plugin: { registries },
+    currentPage: () => store.doc.pages[0],
+    focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[0])!,
+  };
   const el = new FakeEl("div");
   const inspector = new Inspector(view as never, el as never);
   // What the figure view does: render on every store change and every selection change.
@@ -202,6 +211,27 @@ describe("updating", () => {
     view.readOnly = false;
     inspector.render();
     expect(titleOf(el)).toBe("Page");
+  });
+
+  test("the page section is that of the view's focus page, not of the page the stage is centred on", () => {
+    const { el, store, view } = setup((d) => { d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id), "Second")); });
+    expect(el.find((e) => e.hasClass("lf-inspector-sub"))?.text).toBe("Page 1");
+    view.focusPage = () => store.doc.pages[1];
+    store.commit("edit", (d) => { d.pages[1].name = "Second!"; });
+    expect(el.find((e) => e.hasClass("lf-inspector-sub"))?.text).toBe("Second!");
+    el.typeInto("margins.left", "9");
+    expect(store.doc.pages.map((p) => p.margins.left)).toEqual([0, 9]);
+  });
+
+  test("a selected node on another page than the one the stage is centred on is shown as a node, and with it deselected the page shown is the centred one", () => {
+    const { el, selection } = setup((d) => {
+      d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id), "Second"));
+      addNode(d, { id: "p-on-2", page: d.pages[1].id });
+    });
+    selection.set(["p-on-2"]);
+    expect(titleOf(el)).toBe("Node");
+    selection.clear();
+    expect(el.find((e) => e.hasClass("lf-inspector-sub"))?.text).toBe("Page 1");
   });
 
   test("a page that has gone from under the inspector shows the page that is there now", () => {

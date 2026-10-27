@@ -120,7 +120,7 @@ interface Section {
 }
 
 /**
- * The right-hand panel, generated from fields. With nothing selected it shows the page nearest the middle of the stage;
+ * The right-hand panel, generated from fields. With nothing selected it shows the page nearest the middle of the stage (`focusPage`);
  * with nodes selected it shows the first one's fields (the base fields and its node type's), and writes go to every
  * selected node. Every write is a commit labelled `inspect:<key>`, so a run of edits to one field is one undo step.
  * Values are shown as the user thinks of them: a node's position and size in millimetres, though it stores pixels.
@@ -158,7 +158,7 @@ export class Inspector {
   }
 
   private pageSection(): Section | null {
-    const page = this.view.currentPage();
+    const page = this.view.focusPage();
     if (!page) return null;
     const id = page.id;
     const live = () => this.view.store.doc.pages.find((p) => p.id === id);

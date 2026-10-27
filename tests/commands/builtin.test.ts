@@ -5,6 +5,7 @@ import { DocumentStore } from "../../src/model/store";
 import type { Document, Node, NodeId } from "../../src/model/types";
 import { createRegistries } from "../../src/registry";
 import type { Command, CommandContext } from "../../src/registry/command";
+import { pageInFocus } from "../../src/view/viewport";
 
 /** A view that records what the commands ask of it. */
 class FakeView implements EditorView {
@@ -14,14 +15,17 @@ class FakeView implements EditorView {
   calls: string[] = [];
   constructor(public store: DocumentStore, public pageIndex = 0) {}
   selectedIds(): NodeId[] { return [...this.selection]; }
+  /** The page the stage is centred on (`pageIndex`). */
   currentPage() { return this.store.doc.pages[this.pageIndex]; }
+  /** What the real view's `focusPage` does. */
+  focusPage() { return pageInFocus(this.store.doc, this.selection, this.currentPage())!; }
   setSelection(ids: NodeId[]): void { this.selection = ids; }
   fitPage(): void { this.calls.push("fit"); }
   zoomTo(z: number): void { this.calls.push(`zoom:${z}`); }
   requestExport(): void { this.calls.push("export"); }
   deleteSelection(): boolean { this.calls.push("delete"); return true; }
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
-  commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.currentPage() }; }
+  commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
 }
 
@@ -304,4 +308,43 @@ test("open source applies to one selected file node that has a link, and opens t
   expect(open.applies(ctx())).toBe(false);
   view.selection = ["p-none"];
   expect(open.applies(ctx())).toBe(false);
+});
+
+describe("page-level commands with a selection on a page the stage is not centred on", () => {
+  // Two pages; the stage is centred on page 1 (pageIndex 0) and a node of page 2 is selected.
+  const twoPages = () => setup((d) => {
+    d.pages.push(createPage("nature-single", d.pages.map((p) => p.id)));
+    fileNode(d, { id: "p-on-1", page: d.pages[0].id });
+    fileNode(d, { id: "p-on-2", page: d.pages[1].id });
+  });
+
+  test("the command context's page is the selection's page, else the page the stage is centred on", () => {
+    const { ctx, view, store } = twoPages();
+    expect(ctx().page).toBe(store.doc.pages[0]);
+    view.selection = ["p-on-2"];
+    expect(ctx().page).toBe(store.doc.pages[1]);
+    view.selection = [];
+    expect(ctx().page).toBe(store.doc.pages[0]);
+  });
+
+  test("add page goes after the selection's page", () => {
+    const { command, ctx, view, store } = twoPages();
+    const [first, second] = store.doc.pages.map((p) => p.id);
+    view.selection = ["p-on-2"];
+    command("add-page").run(ctx());
+    const pages = store.doc.pages;
+    expect(pages.map((p) => p.id).slice(0, 2)).toEqual([first, second]);
+    expect(pages).toHaveLength(3);
+    // Same preset as the page it follows (page 2, not the page in the middle of the stage).
+    expect(pages[2]).toMatchObject({ preset: "nature-single", width: 89 });
+  });
+
+  test("delete page removes the selection's page and its nodes, not the page in the middle of the stage", () => {
+    const { command, ctx, view, store } = twoPages();
+    const first = store.doc.pages[0].id;
+    view.selection = ["p-on-2"];
+    command("delete-page").run(ctx());
+    expect(store.doc.pages.map((p) => p.id)).toEqual([first]);
+    expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-on-1"]);
+  });
 });

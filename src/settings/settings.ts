@@ -1,4 +1,5 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
+import { MAX_DPI, MIN_DPI } from "../constants";
 import type LinkFiguresPlugin from "../main";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 
@@ -21,9 +22,6 @@ export const DEFAULT_SETTINGS: LinkFiguresSettings = {
   exportFolder: "",
   exportDpi: 300,
 };
-
-const MIN_DPI = 72;
-const MAX_DPI = 1200;
 
 export class LinkFiguresSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly owner: LinkFiguresPlugin) {

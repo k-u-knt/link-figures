@@ -18,6 +18,9 @@ export const RESOLVE_DEBOUNCE_MS = 300;
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
 export const PANEL_EXTENSIONS = [...IMAGE_EXTENSIONS, "pdf", "tif", "tiff"];
 export const PDF_SCREEN_DPI = 150;
+/** The range of the export resolution (dpi). */
+export const MIN_DPI = 72;
+export const MAX_DPI = 1200;
 export const PT_TO_PX = 96 / 72;
 export const PX_TO_PT = 72 / 96;
 

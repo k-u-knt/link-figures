@@ -1,6 +1,7 @@
 import { Notice, TextFileView, type PaneType, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
 import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
+import { ExportModal } from "../export/export-modal";
 import { FormatError, NotFigureError } from "../format/errors";
 import { loadDocument } from "../format/load";
 import type { ParsedFigureFile } from "../format/parse";
@@ -221,7 +222,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   requestExport(): void {
-    // Task 14 opens the export modal
+    // A file that could not be read shows only the stand-in document, which is not the user's figure.
+    if (!this.loaded) {
+      new Notice("Link Figures: there is no figure to export.");
+      return;
+    }
+    new ExportModal(this).open();
   }
 
   // What the commands, the toolbar and the inspector use.

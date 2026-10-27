@@ -57,10 +57,13 @@ describe("inlineSvg", () => {
     expect(inlineSvg(`<svg><g id='a' fill="url( #a )" stroke='url("#a")' style="fill:url('#a')" xlink:href='#a'/></svg>`, "p-")).toBe(
       `<g id='p-a' fill="url(#p-a)" stroke='url("#p-a")' style="fill:url('#p-a')" xlink:href='#p-a'/>`,
     ));
-  test("leaves attributes that merely end in id, links to other documents and plain text alone", () =>
-    expect(inlineSvg('<svg><g data-id="x" xml:id="y" href="other.svg#x"/><text>id="z" url(#q)</text></svg>', "p-")).toBe(
-      '<g data-id="x" xml:id="y" href="other.svg#x"/><text>id="z" url(#p-q)</text>',
-    ));
+  test("leaves attributes that merely end in id and plain text alone; a link to another document is dropped with a warning", () => {
+    const warnings: string[] = [];
+    expect(inlineSvg('<svg><g data-id="x" xml:id="y" href="other.svg#x"/><text>id="z" url(#q)</text></svg>', "p-", warnings)).toBe(
+      '<g data-id="x" xml:id="y"/><text>id="z" url(#p-q)</text>',
+    );
+    expect(warnings).toEqual(["external reference removed: other.svg#x"]);
+  });
 });
 
 describe("inlineSvg: fidelity and safety", () => {
@@ -192,5 +195,111 @@ describe("svgRootAttributes", () => {
   test("is empty when there is nothing to carry", () => {
     expect(svgRootAttributes('<svg viewBox="0 0 1 1"/>')).toBe("");
     expect(svgRootAttributes("not svg")).toBe("");
+  });
+});
+
+describe("inlineSvg: what the export must not run or fetch", () => {
+  test("script and foreignObject under a namespace prefix are removed, self-closing or not", () =>
+    expect(
+      inlineSvg(
+        '<svg xmlns:svg="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/2000/svg"><svg:script>alert(1)</svg:script><g/>' +
+          '<x:foreignObject width="1"><div xmlns="http://www.w3.org/1999/xhtml">hi</div></x:foreignObject><svg:script href="x.js"/><a.b-c:script>y()</a.b-c:script><rect/></svg>',
+        "p-",
+      ),
+    ).toBe("<g/><rect/>"));
+
+  test("removal is repeated until nothing changes, so a removed element cannot leave another behind", () => {
+    expect(inlineSvg("<svg><scr<script></script>ipt>alert(1)</script><g/></svg>", "p-")).toBe("<g/>");
+    expect(inlineSvg("<svg><foreign<svg:script/>Object>x</foreignObject><g/></svg>", "p-")).toBe("<g/>");
+    expect(inlineSvg("<svg><scr<!-- -->ipt>alert(1)</script><g/></svg>", "p-")).toBe("<g/>");
+  });
+
+  test("a javascript: href, under any prefix and with any spacing or case, is dropped", () => {
+    const warnings: string[] = [];
+    const out = inlineSvg(
+      `<svg><a href="javascript:alert(1)"><g/></a><a xlink:href=' JavaScript:x()'/><a ns:href="javascript:y"/><use href="#g"/></svg>`,
+      "p-",
+      warnings,
+    );
+    expect(out).toBe('<a><g/></a><a/><a/><use href="#p-g"/>');
+    expect(out).not.toMatch(/javascript/i);
+    expect(warnings).toEqual([
+      "external reference removed: javascript:alert(1)",
+      "external reference removed: JavaScript:x()",
+      "external reference removed: javascript:y",
+    ]);
+  });
+
+  test("an href that is not #… or data:… is dropped with one warning per value; fragments and data stay", () => {
+    const warnings: string[] = [];
+    const out = inlineSvg(
+      '<svg><image href="http://example.com/a.png"/><image xlink:href="plot.png"/><image href="http://example.com/a.png"/>' +
+        '<image href="data:image/png;base64,AAAA"/><use xlink:href="#g"/></svg>',
+      "p-",
+      warnings,
+    );
+    expect(out).toBe('<image/><image/><image/><image href="data:image/png;base64,AAAA"/><use xlink:href="#p-g"/>');
+    expect(warnings).toEqual(["external reference removed: http://example.com/a.png", "external reference removed: plot.png"]);
+  });
+
+  test("a url() that leaves the document becomes none, in attributes, style attributes and style rules alike", () => {
+    const warnings: string[] = [];
+    const out = inlineSvg(
+      `<svg><style>.a{fill:url(https://x.org/p.svg#p)}.b{fill:url(#g)}</style>` +
+        `<rect fill="url(http://a/b)" style="background:url('http://c/d.png');stroke:url(&quot;e.svg#f&quot;)" mask="url(data:image/png;base64,AA)"/><g filter='url("#f")'/></svg>`,
+      "p-",
+      warnings,
+    );
+    expect(out).toBe(
+      `<style>#p-root .p-a{fill:none}#p-root .p-b{fill:url(#p-g)}</style>` +
+        `<rect fill="none" style="background:none;stroke:none" mask="url(data:image/png;base64,AA)"/><g filter='url("#p-f")'/>`,
+    );
+    expect(warnings).toEqual([
+      "external reference removed: https://x.org/p.svg#p",
+      "external reference removed: http://a/b",
+      "external reference removed: http://c/d.png",
+      "external reference removed: e.svg#f",
+    ]);
+  });
+
+  test("a long reference is shown cut to 80 characters", () => {
+    const warnings: string[] = [];
+    const url = `http://example.com/${"x".repeat(100)}`;
+    inlineSvg(`<svg><image href="${url}"/></svg>`, "p-", warnings);
+    expect(warnings).toEqual([`external reference removed: ${url.slice(0, 80)}…`]);
+  });
+
+  test("the url() of an at-rule that is dropped anyway is not reported", () => {
+    const warnings: string[] = [];
+    inlineSvg("<svg><style>@import url(http://x/y.css);@font-face{src:url(f.woff)}.a{x:y}</style></svg>", "p-", warnings);
+    expect(warnings).toEqual(["@import rule in <style> dropped", "@font-face rule in <style> dropped"]);
+  });
+
+  test("the root's own attributes lose their references out too", () => {
+    const warnings: string[] = [];
+    expect(svgRootAttributes(`<svg href="http://x/" xlink:href="#a" style="background:url(http://y/z.png)" fill="url(#g)"/>`, "p-", warnings)).toBe(
+      ' xlink:href="#a" style="background:none" fill="url(#p-g)"',
+    );
+    expect(warnings).toEqual(["external reference removed: http://x/", "external reference removed: http://y/z.png"]);
+  });
+});
+
+describe("inlineSvg: entity expansion", () => {
+  test("expansion adds at most 2 MB to the document; past that the references stay as they are, with a warning", () => {
+    const warnings: string[] = [];
+    const big = "x".repeat(90_000);
+    // 30 references of 90 kB each would add 2.7 MB: the first 23 (2.07 MB) fit, the rest are left.
+    const text = `<!DOCTYPE svg [<!ENTITY a "${big}">]><svg><text>${"&a;".repeat(30)}</text></svg>`;
+    const out = inlineSvg(text, "p-", warnings);
+    expect(out.length).toBeLessThanOrEqual(text.length + 2 * 1024 * 1024);
+    expect(out.split(big).length - 1).toBe(23);
+    expect(out.match(/&a;/g)).toHaveLength(7);
+    expect(warnings).toEqual(["entity expansion stopped at 2 MB; the remaining references were left as they are"]);
+  });
+
+  test("expansion under the limit warns of nothing", () => {
+    const warnings: string[] = [];
+    expect(inlineSvg(`<!DOCTYPE svg [<!ENTITY a "b">]><svg><g id="&a;"/></svg>`, "p-", warnings)).toBe('<g id="p-b"/>');
+    expect(warnings).toEqual([]);
   });
 });

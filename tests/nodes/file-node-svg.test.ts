@@ -149,6 +149,15 @@ test("svg asset: what inlining had to drop is warned about, with the node's id",
   expect(c.warnings).toEqual([`Node ${n.id}: @media rule in <style> dropped`]);
 });
 
+test("svg asset: references out of the file, on its root or inside it, are dropped and warned about once each, with the node's id", () => {
+  const c = ctx();
+  const n = node({ file: "plot.svg" });
+  const text = '<svg viewBox="0 0 1 1" style="background:url(http://t/x.png)"><image href="http://t/x.png"/><svg:script>evil()</svg:script></svg>';
+  const out = fileNodeSvg(n, { kind: "svg", text, width: 1, height: 1 }, c) as string;
+  expect(out).not.toMatch(/http:|script/);
+  expect(c.warnings).toEqual([`Node ${n.id}: external reference removed: http://t/x.png`]);
+});
+
 test("ids from uid are used for every clip path in one build", () => {
   let n = 0;
   const c = { ...ctx(), uid: (p: string) => `${p}-${++n}` };

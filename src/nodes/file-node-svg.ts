@@ -27,11 +27,12 @@ function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   const aspect = node.fit === "cover" ? "xMidYMid slice" : "xMidYMid meet";
   const prefix = `${node.id}-`;
   const dropped: string[] = [];
+  const rootAttributes = svgRootAttributes(text, prefix, dropped);
   const content = inlineSvg(text, prefix, dropped);
   for (const message of dropped) ctx.warnings.push(`Node ${node.id}: ${message}`);
   return (
     `<svg x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" viewBox="${viewBox.join(" ")}" ` +
-    `preserveAspectRatio="${aspect}" id="${prefix}root"${svgRootAttributes(text, prefix)}>${content}</svg>`
+    `preserveAspectRatio="${aspect}" id="${prefix}root"${rootAttributes}>${content}</svg>`
   );
 }
 

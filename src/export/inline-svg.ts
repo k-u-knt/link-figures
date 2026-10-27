@@ -4,7 +4,9 @@
  *
  * Inlining makes the file's elements part of the figure's document, so everything that is global there is made the
  * file's own: ids, `class` names and `<style>` rules are carried into the node's namespace, and what could run or
- * escape (scripts, event attributes, `<foreignObject>`) is dropped.
+ * escape (scripts, event attributes, `<foreignObject>`, `javascript:` links) is dropped, as is every reference out of
+ * the document (an `href` or `url()` that is not `#…` or `data:…`): the export puts this SVG in the live DOM, where
+ * such a reference would be fetched.
  */
 
 /** CSS pixels per user unit of each absolute length unit, as a fraction (`px * n / d`) so that `72pt` is exactly 96. */
@@ -32,33 +34,55 @@ const ROOT_START = new RegExp(`<svg(?=[\\s/>])(${QUOTED_TAG_BODY})>`, "y");
 const PREDEFINED_ENTITIES = new Set(["amp", "lt", "gt", "quot", "apos"]);
 /** An entity whose value would grow past this is not defined, so nested definitions cannot blow the text up. */
 const MAX_ENTITY_LENGTH = 100_000;
+/** What expanding entities may add to a document in all (2 MB): many references to a large entity cannot blow it up either. */
+const MAX_EXPANSION_LENGTH = 2 * 1024 * 1024;
+const EXPANSION_CAPPED_WARNING = "entity expansion stopped at 2 MB; the remaining references were left as they are";
 
-function expandEntityRefs(text: string, entities: Map<string, string>): string {
-  return text.replace(/&([A-Za-z_][\w.-]*);/g, (ref, name: string) => entities.get(name) ?? ref);
+/**
+ * Replaces `&name;` references to `entities` by their values while the text grows by at most `budget` characters in
+ * all. Past that, expanding stops: the remaining references are left as they are, and `capped` says so.
+ */
+function expandEntityRefs(text: string, entities: Map<string, string>, budget: number): { text: string; capped: boolean } {
+  let grown = 0;
+  let capped = false;
+  const out = text.replace(/&([A-Za-z_][\w.-]*);/g, (ref, name: string) => {
+    const value = entities.get(name);
+    if (value === undefined || capped) return ref;
+    if (grown + value.length - ref.length > budget) {
+      capped = true;
+      return ref;
+    }
+    grown += value.length - ref.length;
+    return value;
+  });
+  return { text: out, capped };
 }
 
 /**
  * Replaces `&name;` references to entities declared in the DOCTYPE's internal subset (`<!ENTITY name "value">`) by
  * their values, and drops the DOCTYPE. Once the DOCTYPE is gone an undeclared `xmlns:x="&ns_x;"` (Illustrator) would
- * make the whole document not well-formed.
+ * make the whole document not well-formed. Expansion adds at most `MAX_EXPANSION_LENGTH` characters (`capped` past that).
  */
-function expandEntities(text: string): string {
-  if (!text.includes("<!ENTITY")) return text;
+function expandEntities(text: string): { text: string; capped: boolean } {
+  if (!text.includes("<!ENTITY")) return { text, capped: false };
   const doctype = /<!DOCTYPE(?:[^>[]|\[[\s\S]*?\])*>/i.exec(text);
-  if (!doctype) return text;
+  if (!doctype) return { text, capped: false };
   const entities = new Map<string, string>();
   for (const m of doctype[0].matchAll(/<!ENTITY\s+([^\s%"']+)\s+(?:"([^"]*)"|'([^']*)')\s*>/g)) {
     if (PREDEFINED_ENTITIES.has(m[1])) continue;
-    const value = expandEntityRefs(m[2] ?? m[3] ?? "", entities);
-    if (value.length <= MAX_ENTITY_LENGTH) entities.set(m[1], value);
+    const value = expandEntityRefs(m[2] ?? m[3] ?? "", entities, MAX_ENTITY_LENGTH);
+    if (!value.capped && value.text.length <= MAX_ENTITY_LENGTH) entities.set(m[1], value.text);
   }
   const rest = text.slice(doctype.index + doctype[0].length);
-  return text.slice(0, doctype.index) + (entities.size > 0 ? expandEntityRefs(rest, entities) : rest);
+  const expanded = entities.size > 0 ? expandEntityRefs(rest, entities, MAX_EXPANSION_LENGTH) : { text: rest, capped: false };
+  return { text: text.slice(0, doctype.index) + expanded.text, capped: expanded.capped };
 }
 
 interface RootTag {
   /** The text with entities expanded; the offsets below index into it. */
   doc: string;
+  /** Entity expansion stopped at its limit. */
+  capped: boolean;
   /** The attribute text of the root `<svg>`. */
   attrs: string;
   /** Where the markup between the root's start and end tags lies; empty for a self-closing root. */
@@ -68,7 +92,7 @@ interface RootTag {
 
 /** Finds the root `<svg>` after the prolog; null when the text does not begin like an SVG file. */
 function parseRoot(text: string): RootTag | null {
-  const doc = expandEntities(text);
+  const { text: doc, capped } = expandEntities(text);
   let pos = 0;
   for (;;) {
     PROLOG_ITEM.lastIndex = pos;
@@ -81,10 +105,10 @@ function parseRoot(text: string): RootTag | null {
   if (!start) return null;
   const attrs = start[1];
   const innerStart = pos + start[0].length;
-  if (attrs.trimEnd().endsWith("/")) return { doc, attrs, innerStart, innerEnd: innerStart };
+  if (attrs.trimEnd().endsWith("/")) return { doc, capped, attrs, innerStart, innerEnd: innerStart };
   const close = doc.lastIndexOf("</svg");
   const closed = close >= innerStart && /^<\/svg\s*>/.test(doc.slice(close, close + 40));
-  return { doc, attrs, innerStart, innerEnd: closed ? close : doc.length };
+  return { doc, capped, attrs, innerStart, innerEnd: closed ? close : doc.length };
 }
 
 function attributesOf(attrs: string): Map<string, string> {
@@ -147,15 +171,20 @@ const OWN_ROOT_ATTRIBUTES = new Set(["x", "y", "width", "height", "viewBox", "pr
  * id), as ` name="value"` text for the element that takes the root's place: namespace prefixes (` xmlns:xlink="…"`,
  * without which inlined `xlink:href` is not well-formed), and the presentation attributes the content inherits
  * (`fill`, `stroke`, `style`, `class`…). `class` and `url(#x)` references are carried into `idPrefix`'s namespace;
- * event attributes are dropped.
+ * event attributes are dropped, and so are references out of the document (see `inlineSvg`), each with a warning.
  */
-export function svgRootAttributes(text: string, idPrefix = ""): string {
+export function svgRootAttributes(text: string, idPrefix = "", warnings?: string[]): string {
   const root = parseRoot(text);
   if (!root) return "";
+  const scope: Scope = { idPrefix, rootClasses: new Set(), warnings };
   let out = "";
   for (const [name, value] of attributesOf(root.attrs)) {
     if (OWN_ROOT_ATTRIBUTES.has(name) || /^on[a-z]/i.test(name)) continue;
-    const carried = prefixUrlRefs(name === "class" ? prefixClasses(value, idPrefix) : value, idPrefix);
+    if (HREF_NAME.test(name) && !isLocalRef(value)) {
+      externalRemoved(scope, value);
+      continue;
+    }
+    const carried = prefixUrlRefs(dropExternalUrls(name === "class" ? prefixClasses(value, idPrefix) : value, scope), idPrefix);
     out += ` ${name}="${carried.replace(/"/g, "&quot;")}"`;
   }
   return out;
@@ -170,6 +199,58 @@ interface Scope {
 
 function warn(scope: Scope, message: string): void {
   if (scope.warnings && !scope.warnings.includes(message)) scope.warnings.push(message);
+}
+
+/** `href`, `xlink:href` or the attribute under any other prefix. */
+const HREF_NAME = /^(?:[A-Za-z_][\w.-]*:)?href$/i;
+/** The same, as an attribute in a start tag, with its value (double- or single-quoted). */
+const HREF_ATTRIBUTE = /\s+(?:[A-Za-z_][\w.-]*:)?href\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+/** `url(…)` with its value unquoted, quoted, or quoted with `&quot;` or `&apos;` (inside an attribute). */
+const URL_FUNCTION = /url\(\s*(?:"([^"]*)"|'([^']*)'|&quot;((?:(?!&quot;)[\s\S])*)&quot;|&apos;((?:(?!&apos;)[\s\S])*)&apos;|([^)"']*?))\s*\)/gi;
+const MAX_REFERENCE_SHOWN = 80;
+
+/** A reference that stays in the document: a fragment (`#id`) or inline data (`data:`). Anything else would be fetched. */
+function isLocalRef(value: string): boolean {
+  return /^\s*(?:#|data:)/i.test(value);
+}
+
+function externalRemoved(scope: Scope, value: string): void {
+  const shown = value.trim();
+  warn(scope, `external reference removed: ${shown.length > MAX_REFERENCE_SHOWN ? `${shown.slice(0, MAX_REFERENCE_SHOWN)}…` : shown}`);
+}
+
+/** Every `url(…)` that leads out of the document (see `isLocalRef`) becomes `none`, with a warning. */
+function dropExternalUrls(text: string, scope: Scope): string {
+  return text.replace(URL_FUNCTION, (whole, ...values: (string | undefined)[]) => {
+    const value = values.slice(0, 5).find((v) => v !== undefined) ?? "";
+    if (isLocalRef(value)) return whole;
+    externalRemoved(scope, value);
+    return "none";
+  });
+}
+
+/** In a start tag: an `href` under any prefix that leads out of the document (`javascript:` included) is dropped, with a warning. */
+function dropExternalHrefs(tag: string, scope: Scope): string {
+  return tag.replace(HREF_ATTRIBUTE, (attribute, double: string | undefined, single: string | undefined) => {
+    const value = double ?? single ?? "";
+    if (isLocalRef(value)) return attribute;
+    externalRemoved(scope, value);
+    return "";
+  });
+}
+
+/** Elements dropped with all they hold, under any namespace prefix (`<svg:script>`). */
+const DROPPED_ELEMENTS = ["script", "foreignObject"].map(
+  (name) => new RegExp(`<(?:[\\w.-]+:)?${name}\\b${QUOTED_TAG_BODY}/>|<(?:[\\w.-]+:)?${name}\\b[\\s\\S]*?</(?:[\\w.-]+:)?${name}\\s*>`, "gi"),
+);
+
+/** Removes the `DROPPED_ELEMENTS` again and again until nothing changes, so that removing one cannot make another. */
+function dropElements(markup: string): string {
+  for (let before = ""; before !== markup; ) {
+    before = markup;
+    for (const element of DROPPED_ELEMENTS) markup = markup.replace(element, "");
+  }
+  return markup;
 }
 
 /** Index of the closing quote of the string that opens at `i` (or the end of `s`). */
@@ -327,8 +408,10 @@ function prefixAttributes(tag: string, idPrefix: string): string {
  * `idPrefix`'s namespace: every `id`, every reference to one (`url(#x)`, `href="#x"`, `xlink:href="#x"` or any
  * other prefix), every `class` name, and every `<style>` rule, which is also scoped to `#{idPrefix}root`, the id
  * the element that takes the root's place must carry. Dropped: the XML declaration, DOCTYPE (its entities are
- * expanded first), comments, `<script>`, `<foreignObject>` and `on…` attributes, and `<style>` at-rules, each
- * kind of which adds a message to `warnings`.
+ * expanded first), comments, `<script>` and `<foreignObject>` (under any prefix), `on…` attributes, and `<style>`
+ * at-rules; every `href` (any prefix) and `url()` that leads out of the document (not `#…` or `data:…`, so
+ * `javascript:` too), the `href` dropped and the `url()` made `none`. At-rules and references out add a message to
+ * `warnings` (one per kind or value), as does an entity expansion that stopped at its limit.
  */
 export function inlineSvg(text: string, idPrefix: string, warnings?: string[]): string {
   const root = parseRoot(text);
@@ -338,15 +421,13 @@ export function inlineSvg(text: string, idPrefix: string, warnings?: string[]): 
     rootClasses: new Set((attributesOf(root.attrs).get("class") ?? "").split(/\s+/).filter(Boolean)),
     warnings,
   };
-  const inner = root.doc
-    .slice(root.innerStart, root.innerEnd)
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(new RegExp(`<script\\b${QUOTED_TAG_BODY}/>|<script\\b[\\s\\S]*?</script\\s*>`, "gi"), "")
-    .replace(new RegExp(`<foreignObject\\b${QUOTED_TAG_BODY}/>|<foreignObject\\b[\\s\\S]*?</foreignObject\\s*>`, "gi"), "");
+  if (root.capped) warn(scope, EXPANSION_CAPPED_WARNING);
+  const inner = dropElements(root.doc.slice(root.innerStart, root.innerEnd).replace(/<!--[\s\S]*?-->/g, ""));
+  // Scoped first, so that the `url()`s of an at-rule that is dropped anyway are not reported.
   return prefixUrlRefs(
-    scopeStyleElements(inner, scope)
+    dropExternalUrls(scopeStyleElements(inner, scope), scope)
       .trim()
-      .replace(new RegExp(`<[A-Za-z_][^\\s/>]*${QUOTED_TAG_BODY}>`, "g"), (tag) => prefixAttributes(tag, idPrefix)),
+      .replace(new RegExp(`<[A-Za-z_][^\\s/>]*${QUOTED_TAG_BODY}>`, "g"), (tag) => prefixAttributes(dropExternalHrefs(tag, scope), idPrefix)),
     idPrefix,
   );
 }

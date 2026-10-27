@@ -3,3 +3,4 @@ main.js
 test-vault/.obsidian/
 *.map
 .superpowers/
+.DS_Store

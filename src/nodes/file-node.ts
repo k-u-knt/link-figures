@@ -1,0 +1,254 @@
+import { Component, MarkdownRenderer, setIcon } from "obsidian";
+import type { FileAsset } from "../export/asset-types";
+import { joinLinktext } from "../format/links-section";
+import type { Resolved } from "../links/types";
+import { imagePlacement, type Rect } from "../model/geometry";
+import type { FileNode } from "../model/types";
+import type { Field } from "../registry/fields";
+import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import { fileNodeSvg } from "./file-node-svg";
+
+export { fileNodeSvg };
+
+type Size = { width: number; height: number };
+/** A caller of `naturalSize()` waiting for the image to load. */
+interface Waiter {
+  resolve(size: Size): void;
+  reject(error: Error): void;
+}
+type Missing = Extract<Resolved, { kind: "missing" }>;
+
+const REASON_TEXT: Record<Missing["reason"], string> = {
+  file: "File not found",
+  subpath: "Subpath not found (heading or block)",
+  "no-image": "No image in that section",
+  decode: "The file could not be decoded",
+};
+
+/** What a browser uses for an image that reports no size of its own (an SVG without width, height or viewBox). */
+const FALLBACK_NATURAL: Size = { width: 300, height: 150 };
+
+/** Link targets that have more than one page. */
+const PAGED_EXTENSIONS = new Set(["pdf", "tif", "tiff"]);
+
+function extensionOf(path: string): string {
+  return /\.([^./\\]+)$/.exec(path)?.[1].toLowerCase() ?? "";
+}
+
+type BodyKind = "pending" | "image" | "content" | "missing";
+
+/**
+ * One file node's DOM: `.lf-node` holding the body (the image, the rendered note section, or a placeholder) and the
+ * badge that opens the link. What the body shows comes from `ctx.resolved(id)`; `update` re-reads it.
+ * Also answers `naturalSize()` (see `NodeHost.naturalSize`).
+ */
+class FileNodeRenderer implements NodeRenderer {
+  private node: FileNode;
+  private readonly el: HTMLElement;
+  private readonly body: HTMLElement;
+  private readonly badge: HTMLElement;
+
+  /** The `Resolved` the body was built from; `null` before the first build, `undefined` while the node is unresolved. */
+  private renderedResolved: Resolved | undefined | null = null;
+  private bodyKind: BodyKind = "pending";
+  private imageEl: HTMLImageElement | null = null;
+  private contentEl: HTMLElement | null = null;
+  /** Owns the components the markdown renderer creates, so a re-render or unmount can release them. */
+  private card: Component | null = null;
+  /** Why the image could not be shown although it resolved; shown on the badge. */
+  private loadFailure: string | null = null;
+
+  /** The loaded image's own size; null until it has loaded, and while the body shows no image. */
+  private natural: Size | null = null;
+  private waiters: Waiter[] = [];
+
+  constructor(node: FileNode, host: HTMLElement, private readonly ctx: RenderContext) {
+    this.node = node;
+    this.el = host.createDiv({ cls: "lf-node" });
+    this.body = this.el.createDiv({ cls: "lf-node-body" });
+    this.badge = this.el.createDiv({ cls: "lf-badge" });
+    setIcon(this.badge, "link");
+    this.badge.addEventListener("click", (evt) => this.ctx.openLink(joinLinktext(this.node.file, this.node.subpath), evt));
+    this.update(node);
+  }
+
+  update(node: FileNode): void {
+    this.node = node;
+    this.applyBox();
+    const resolved = this.ctx.resolved(node.id);
+    if (resolved !== this.renderedResolved) this.renderBody(resolved);
+    else this.refreshBody();
+    this.refreshBadge(resolved);
+  }
+
+  unmount(): void {
+    this.clearBody("The node was removed");
+    this.el.remove();
+  }
+
+  /** The size of the image shown: now if it has loaded, else once it has; rejects when the node shows no image. */
+  naturalSize(): Promise<Size> {
+    if (this.natural) return Promise.resolve(this.measured(this.natural));
+    if (this.bodyKind === "content" || this.bodyKind === "missing") return Promise.reject(new Error("The node shows no image"));
+    return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
+  }
+
+  private applyBox(): void {
+    const n = this.node;
+    const style = this.el.style;
+    style.left = `${n.x}px`;
+    style.top = `${n.y}px`;
+    style.width = `${n.width}px`;
+    style.height = `${n.height}px`;
+    style.zIndex = String(n.z);
+    style.transform = n.rotation === 0 ? "" : `rotate(${n.rotation}deg)`;
+    style.opacity = n.opacity === 1 ? "" : String(n.opacity);
+  }
+
+  private renderBody(resolved: Resolved | undefined): void {
+    this.renderedResolved = resolved;
+    this.loadFailure = null;
+    if (!resolved) {
+      this.clearBody("The node is not resolved yet", false);
+    } else if (resolved.kind === "image") {
+      this.showImage(resolved.src);
+    } else if (resolved.kind === "content") {
+      this.showContent(resolved);
+    } else {
+      this.showPlaceholder(REASON_TEXT[resolved.reason]);
+    }
+  }
+
+  /** The body already shows what was resolved; only the node's own box, crop, fit or scale may have changed. */
+  private refreshBody(): void {
+    if (this.bodyKind === "image") this.placeImage();
+    else if (this.bodyKind === "content") this.scaleContent();
+  }
+
+  private refreshBadge(resolved: Resolved | undefined): void {
+    const linktext = joinLinktext(this.node.file, this.node.subpath);
+    const problem = resolved?.kind === "missing" ? REASON_TEXT[resolved.reason] : this.loadFailure;
+    this.badge.classList.toggle("is-missing", problem !== null);
+    this.badge.title = problem === null ? linktext : `${linktext}: ${problem}`;
+  }
+
+  /** Empties the body and releases what it held. Callers waiting on `naturalSize()` are rejected unless the node may yet get an image. */
+  private clearBody(reason: string, failWaiters = true): void {
+    if (this.card) {
+      this.ctx.component.removeChild(this.card);
+      this.card = null;
+    }
+    this.body.empty();
+    this.imageEl = null;
+    this.contentEl = null;
+    this.natural = null;
+    this.bodyKind = "pending";
+    if (failWaiters) this.settle((w) => w.reject(new Error(reason)));
+  }
+
+  private showImage(src: string): void {
+    if (this.bodyKind !== "image" || !this.imageEl) {
+      this.clearBody("The node was replaced", false);
+      const img = this.body.createDiv({ cls: "lf-image" }).createEl("img");
+      img.draggable = false;
+      img.addEventListener("load", () => this.onImageLoad(img));
+      img.addEventListener("error", () => this.onImageError(img));
+      this.imageEl = img;
+      this.bodyKind = "image";
+    }
+    // A new `src` keeps the old size until it has loaded, so a refreshed image does not jump.
+    if (this.imageEl.getAttribute("src") !== src) this.imageEl.src = src;
+    this.placeImage();
+  }
+
+  private onImageLoad(img: HTMLImageElement): void {
+    if (img !== this.imageEl) return;
+    this.natural = { width: img.naturalWidth, height: img.naturalHeight };
+    this.placeImage();
+    const size = this.measured(this.natural);
+    this.settle((w) => w.resolve(size));
+  }
+
+  private onImageError(img: HTMLImageElement): void {
+    if (img !== this.imageEl) return;
+    this.showPlaceholder("The image could not be loaded");
+    this.loadFailure = "The image could not be loaded";
+    this.refreshBadge(this.renderedResolved ?? undefined);
+  }
+
+  /** The image's size, or a default for an image that has none (so a caller never divides by zero). */
+  private measured(size: Size): Size {
+    return size.width > 0 && size.height > 0 ? size : FALLBACK_NATURAL;
+  }
+
+  /** Positions the whole image so that the crop region covers (or fits in) the node's box; `object-fit` cannot crop. */
+  private placeImage(): void {
+    const img = this.imageEl;
+    if (!img) return;
+    const box = { width: this.node.width, height: this.node.height };
+    const place: Rect = imagePlacement(box, this.natural ?? { width: 0, height: 0 }, this.node.crop, this.node.fit);
+    const style = img.style;
+    style.left = `${place.x}px`;
+    style.top = `${place.y}px`;
+    style.width = `${place.width}px`;
+    style.height = `${place.height}px`;
+  }
+
+  private showContent(resolved: Extract<Resolved, { kind: "content" }>): void {
+    this.clearBody("The node shows note content, not an image");
+    this.bodyKind = "content";
+    const holder = this.body.createDiv({ cls: ["lf-content", "markdown-rendered"] });
+    this.contentEl = holder;
+    this.scaleContent();
+    // The source note's path, so relative links and embeds inside the section resolve as they do in the note.
+    const card = new Component();
+    this.ctx.component.addChild(card);
+    this.card = card;
+    MarkdownRenderer.render(this.ctx.app, resolved.markdown, holder, resolved.file.path, card).catch((error: unknown) => {
+      console.error(`Link Figures: could not render the content of node ${this.node.id}`, error);
+    });
+  }
+
+  private scaleContent(): void {
+    if (this.contentEl) this.contentEl.style.fontSize = `calc(var(--font-text-size) * ${this.node.scale})`;
+  }
+
+  private showPlaceholder(text: string): void {
+    this.clearBody("The node shows no image");
+    this.bodyKind = "missing";
+    this.body.createDiv({ cls: "lf-placeholder", text });
+  }
+
+  private settle(apply: (waiter: Waiter) => void): void {
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const waiter of waiters) apply(waiter);
+  }
+}
+
+/** A note section or image linked from the vault, drawn live from its source. */
+export const fileNodeType: NodeType<FileNode> = {
+  type: "file",
+  name: "Linked file",
+  icon: "image",
+
+  mount(node: FileNode, host: HTMLElement, ctx: RenderContext): NodeRenderer {
+    return new FileNodeRenderer(node, host, ctx);
+  },
+
+  bounds(node: FileNode): Rect {
+    return { x: node.x, y: node.y, width: node.width, height: node.height };
+  },
+
+  /** M2 adds the rest. */
+  inspector(node: FileNode): Field[] {
+    return PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
+  },
+
+  toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
+    const asset = ctx.assets.get(node.id);
+    // A rasterised content card is the exporter's business, not an asset of this node type.
+    const fileAsset: FileAsset | undefined = asset && asset.kind !== "raster" ? asset : undefined;
+    return fileNodeSvg(node, fileAsset, ctx);
+  },
+};

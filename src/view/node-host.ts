@@ -1,0 +1,219 @@
+import { Keymap } from "obsidian";
+import { resolveFileNode } from "../links/resolver";
+import type { Resolved } from "../links/types";
+import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
+import type { NodeRenderer, NodeTypeRegistry, RenderContext } from "../registry/node-type";
+import type { LinkFiguresView } from "./figure-view";
+import type { PageLayer } from "./page-layer";
+
+/** A renderer that shows an image can say how big that image is by itself. */
+interface MeasuringRenderer extends NodeRenderer {
+  naturalSize(): Promise<{ width: number; height: number }>;
+}
+
+function isMeasuring(renderer: NodeRenderer): renderer is MeasuringRenderer {
+  return typeof (renderer as Partial<MeasuringRenderer>).naturalSize === "function";
+}
+
+interface Entry {
+  renderer: NodeRenderer;
+  /** The element the node type's `mount` added to the page's node host. */
+  el: HTMLElement;
+  page: PageId;
+}
+
+/** Everything about a file node that decides what its link resolves to; a change to any of it needs a new resolution. */
+function linkKey(node: FileNode): string {
+  return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex, node.pageIndex, node.range]);
+}
+
+/**
+ * Keeps the nodes drawn on the pages in step with the document, and resolves file nodes' links into what they show.
+ * The document is the view's `store`; resolutions are kept in the view's `resolvedCache` and `index`.
+ */
+export class NodeHost {
+  private readonly entries = new Map<NodeId, Entry>();
+  /** The `linkKey` each file node was last sent to the resolver with, to tell an edit that needs a new resolution. */
+  private readonly resolvedKeys = new Map<NodeId, string>();
+  /** The newest resolution started for each node. A result that is no longer the newest, or whose node is gone, is dropped. */
+  private readonly tokens = new Map<NodeId, number>();
+  private nextToken = 0;
+  private readonly ctx: RenderContext;
+
+  constructor(
+    private readonly view: LinkFiguresView,
+    private readonly pageLayer: PageLayer,
+    private readonly nodeTypes: NodeTypeRegistry,
+  ) {
+    this.ctx = {
+      app: view.app,
+      // A getter: the figure file can be renamed while it is open.
+      get figurePath() {
+        return view.file?.path ?? "";
+      },
+      resolved: (id) => view.resolvedCache.get(id),
+      openLink: (linktext, evt) => {
+        void view.app.workspace.openLinkText(linktext, view.file?.path ?? "", Keymap.isModEvent(evt));
+      },
+      component: view,
+    };
+  }
+
+  /** Draws every node afresh: unmounts what is drawn, clears the pages' node hosts, mounts `doc`'s nodes. Resolving is the caller's. */
+  renderAll(doc: Document): void {
+    for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
+    this.entries.clear();
+    this.resolvedKeys.clear();
+    this.tokens.clear();
+    // The same page ids survive an external reload, so what the old nodes left in their hosts is cleared explicitly.
+    for (const page of doc.pages) this.hostFor(page.id)?.replaceChildren();
+
+    const ids = new Set(doc.nodes.map((n) => n.id));
+    for (const id of [...this.view.resolvedCache.keys()]) if (!ids.has(id)) this.forgetResolution(id);
+    for (const node of doc.nodes) this.mountNode(node);
+  }
+
+  /** Brings the drawn nodes in line with `doc` after `changed` nodes were added, removed or edited. Pages are already rendered. */
+  applyChange(doc: Document, changed: Set<NodeId>): void {
+    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+    const stale: NodeId[] = [];
+    for (const id of changed) {
+      const node = byId.get(id);
+      if (!node) {
+        this.remove(id);
+        continue;
+      }
+      const entry = this.entries.get(id);
+      if (!entry) {
+        this.mountNode(node);
+      } else if (entry.page !== node.page) {
+        // Moved to another page: its element has to move to that page's host, so it is drawn again from what is resolved.
+        this.unmountEntry(id, entry);
+        this.entries.delete(id);
+        this.mountNode(node);
+      } else {
+        this.updateEntry(entry, node);
+      }
+      if (node.type === "file" && this.resolvedKeys.get(id) !== linkKey(node)) stale.push(id);
+    }
+    if (stale.length > 0) void this.resolve(stale);
+  }
+
+  /** The `.lf-node` element of a node (or whatever its node type mounted), for hit-testing and for rasterising it. */
+  elementFor(id: NodeId): HTMLElement | undefined {
+    return this.entries.get(id)?.el;
+  }
+
+  /**
+   * The natural size of the image a node shows. Waits for the image if it is still being resolved or loaded; rejects
+   * for a node that shows note content, is missing, or is not drawn.
+   */
+  naturalSize(id: NodeId): Promise<{ width: number; height: number }> {
+    const renderer = this.entries.get(id)?.renderer;
+    if (!renderer || !isMeasuring(renderer)) return Promise.reject(new Error(`Link Figures: node ${id} shows no image`));
+    return renderer.naturalSize();
+  }
+
+  /**
+   * Resolves the file nodes among `ids` against the vault, records what each depends on, and redraws them.
+   * Never rejects: a resolution that fails shows as a missing link.
+   */
+  async resolve(ids: NodeId[]): Promise<void> {
+    const figure = this.view.file;
+    if (!figure || ids.length === 0) return;
+    const byId = new Map(this.view.store.doc.nodes.map((n) => [n.id, n] as const));
+    const pending: Promise<void>[] = [];
+    for (const id of ids) {
+      const node = byId.get(id);
+      if (node?.type === "file") pending.push(this.resolveFile(node, figure.path));
+    }
+    await Promise.all(pending);
+  }
+
+  private async resolveFile(node: FileNode, figurePath: string): Promise<void> {
+    const token = ++this.nextToken;
+    this.tokens.set(node.id, token);
+    this.resolvedKeys.set(node.id, linkKey(node));
+
+    let resolved: Resolved;
+    try {
+      resolved = await resolveFileNode(node, figurePath, this.view.plugin.access, this.view.plugin.decoders);
+    } catch (error) {
+      console.error(`Link Figures: could not resolve the link of node ${node.id}`, error);
+      resolved = { kind: "missing", reason: "file", deps: [] };
+    }
+
+    // Edited again, reloaded or removed while resolving: a newer resolution, or none, owns the node now.
+    if (this.tokens.get(node.id) !== token) return;
+    const current = this.view.store.doc.nodes.find((n) => n.id === node.id);
+    if (!current) return;
+
+    this.view.resolvedCache.set(node.id, resolved);
+    this.view.index.track(node.id, resolved.deps);
+    const entry = this.entries.get(node.id);
+    if (entry) this.updateEntry(entry, current);
+  }
+
+  private mountNode(node: Node): void {
+    const type = this.nodeTypes.get(node.type);
+    if (!type) {
+      console.warn(`Link Figures: no node type "${node.type}" is registered, so node ${node.id} is not drawn`);
+      return;
+    }
+    const host = this.hostFor(node.page);
+    if (!host) {
+      console.warn(`Link Figures: node ${node.id} is on page "${node.page}", which does not exist, so it is not drawn`);
+      return;
+    }
+    try {
+      const last = host.lastElementChild;
+      const renderer = type.mount(node, host, this.ctx);
+      const el = host.lastElementChild;
+      if (!el || el === last) throw new Error("mount added no element");
+      (el as HTMLElement).dataset.nodeId = node.id;
+      this.entries.set(node.id, { renderer, el: el as HTMLElement, page: node.page });
+    } catch (error) {
+      console.error(`Link Figures: could not draw node ${node.id}`, error);
+    }
+  }
+
+  private updateEntry(entry: Entry, node: Node): void {
+    try {
+      entry.renderer.update(node);
+    } catch (error) {
+      console.error(`Link Figures: could not redraw node ${node.id}`, error);
+    }
+  }
+
+  private unmountEntry(id: NodeId, entry: Entry): void {
+    try {
+      entry.renderer.unmount();
+    } catch (error) {
+      console.error(`Link Figures: could not remove node ${id}`, error);
+    }
+  }
+
+  /** A node that is gone from the document: undrawn, and no longer resolved or watched. */
+  private remove(id: NodeId): void {
+    const entry = this.entries.get(id);
+    if (entry) this.unmountEntry(id, entry);
+    this.entries.delete(id);
+    this.forgetResolution(id);
+  }
+
+  private forgetResolution(id: NodeId): void {
+    this.resolvedKeys.delete(id);
+    this.tokens.delete(id);
+    this.view.resolvedCache.delete(id);
+    this.view.index.untrack(id);
+  }
+
+  /** The page's node host, or undefined for a page that is not rendered (a node pointing at it is skipped, not fatal). */
+  private hostFor(page: PageId): HTMLElement | undefined {
+    try {
+      return this.pageLayer.nodesHost(page);
+    } catch {
+      return undefined;
+    }
+  }
+}

@@ -14,6 +14,7 @@ import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { FigureViewLike } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
+import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
 import { nearestPage, pageWorldRect, Viewport } from "./viewport";
 
@@ -51,6 +52,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   /** World to stage transform; `applyViewport` copies it onto `viewportEl`. */
   readonly viewport = new Viewport();
   pageLayer!: PageLayer;
+  nodeHost!: NodeHost;
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
@@ -73,8 +75,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
 
   constructor(leaf: WorkspaceLeaf, readonly plugin: LinkFiguresPlugin) {
     super(leaf);
-    this.watcher = new LinkWatcher(plugin.app, this.index, (_ids) => {
-      /* Task 10 wires nodeHost.resolve */
+    this.watcher = new LinkWatcher(plugin.app, this.index, (ids) => {
+      void this.nodeHost.resolve(ids);
     });
   }
 
@@ -217,6 +219,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.viewportEl = this.stageEl.createDiv({ cls: "lf-viewport" });
     this.inspectorEl = main.createDiv({ cls: "lf-inspector" });
     this.pageLayer = new PageLayer(this.viewportEl);
+    // Made here, not in `onOpen`, because this is what makes sure a page layer exists whichever of the two runs first.
+    this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries.nodeTypes);
     this.applyViewport();
   }
 
@@ -337,8 +341,17 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     const store = new DocumentStore(doc);
     this.store = store;
     this.pageLayer.render(doc);
+    this.nodeHost.renderAll(doc);
+    void this.nodeHost.resolve(doc.nodes.map((n) => n.id));
     this.unsubscribe = store.subscribe((ev) => {
       if (ev.pagesChanged) this.pageLayer.render(store.doc);
+      if (ev.kind === "replace") {
+        // Same page ids and node ids can survive a reload, so nothing already drawn is trusted.
+        this.nodeHost.renderAll(store.doc);
+        void this.nodeHost.resolve(store.doc.nodes.map((n) => n.id));
+      } else {
+        this.nodeHost.applyChange(store.doc, ev.changedNodeIds);
+      }
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
       if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") this.requestSave();
     });

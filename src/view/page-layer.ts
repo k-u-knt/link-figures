@@ -31,11 +31,17 @@ export class PageLayer {
   /** Brings the sheets in line with `doc`: one `.lf-page` per page, in document order. */
   render(doc: Document): void {
     const origins = pageOriginsPx(doc);
-    const live = new Set<PageId>();
-    let previous: HTMLElement | null = null;
+    const live = new Set(doc.pages.map((page) => page.id));
 
+    // Dead sheets go first: reordering the survivors around them would move elements, which reloads whatever they host.
+    for (const [id, parts] of this.pages) {
+      if (live.has(id)) continue;
+      parts.page.remove();
+      this.pages.delete(id);
+    }
+
+    let previous: HTMLElement | null = null;
     for (const page of doc.pages) {
-      live.add(page.id);
       let parts = this.pages.get(page.id);
       if (!parts) {
         parts = this.createParts(page);
@@ -47,12 +53,6 @@ export class PageLayer {
       const expected: ChildNode | null = previous ? previous.nextSibling : this.viewportEl.firstChild;
       if (parts.page !== expected) this.viewportEl.insertBefore(parts.page, expected);
       previous = parts.page;
-    }
-
-    for (const [id, parts] of this.pages) {
-      if (live.has(id)) continue;
-      parts.page.remove();
-      this.pages.delete(id);
     }
   }
 

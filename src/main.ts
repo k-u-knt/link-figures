@@ -3,6 +3,7 @@ import { VIEW_TYPE } from "./constants";
 import { createDecoders } from "./links/decoders";
 import { ObsidianVaultAccess } from "./links/obsidian-access";
 import type { Decoders } from "./links/types";
+import { fileNodeType } from "./nodes/file-node";
 import { createRegistries, type Registries } from "./registry";
 import { DEFAULT_SETTINGS, LinkFiguresSettingTab, type LinkFiguresSettings } from "./settings/settings";
 import { LinkFiguresView } from "./view/figure-view";
@@ -22,6 +23,7 @@ export default class LinkFiguresPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
 
+    this.registries.nodeTypes.register(fileNodeType);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     installOpenHook(this);
 

@@ -22,12 +22,22 @@
   flex: none;
 }
 
+/* The stage with the inspector beside it. */
+.lf-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
 /* The pan/zoom surface, dotted like Obsidian's Canvas. */
 .lf-stage {
   position: relative;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
+  outline: none;
   background-color: var(--canvas-background, var(--background-primary));
   background-image: radial-gradient(circle, var(--canvas-dot-pattern, var(--background-modifier-border)) 1px, transparent 1px);
   background-size: 20px 20px;
@@ -58,4 +68,56 @@
   font-size: var(--font-smaller);
   user-select: text;
   cursor: text;
+}
+
+/* Space held, or a drag with it: the canvas is about to be, or is being, panned. */
+.lf-stage.lf-pan-ready,
+.lf-stage.lf-pan-ready * {
+  cursor: grab;
+}
+
+.lf-stage.lf-panning,
+.lf-stage.lf-panning * {
+  cursor: grabbing;
+}
+
+/* The world: panned and zoomed by one transform, with everything inside in world pixels. */
+.lf-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.lf-page {
+  position: absolute;
+  box-shadow: var(--shadow-s);
+}
+
+.lf-page-nodes,
+.lf-page-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+/* Handles and guides opt back in to pointer events themselves. */
+.lf-page-overlay {
+  pointer-events: none;
+}
+
+.lf-page-margins {
+  position: absolute;
+  outline: 1px dashed var(--text-faint);
+  pointer-events: none;
+}
+
+.lf-page-label {
+  position: absolute;
+  top: -1.6em;
+  left: 0;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+  color: var(--canvas-card-label-color, var(--text-faint));
+  pointer-events: none;
+  user-select: none;
 }

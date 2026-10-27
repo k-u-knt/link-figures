@@ -9,13 +9,25 @@ import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
 import { createDocument } from "../model/defaults";
+import type { Pt, Rect } from "../model/geometry";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { FigureViewLike } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
+import { PageLayer } from "./page-layer";
+import { nearestPage, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
 const blankDocument = (): Document => createDocument(DEFAULT_SETTINGS.defaultPreset);
+
+/** Wheel zoom: one unit of `deltaY` scales the zoom by `exp(-0.01)`, which suits a trackpad pinch (a ctrl+wheel). */
+const WHEEL_ZOOM_RATE = 0.01;
+
+/** Text being typed into must keep its space bar. */
+function isEditable(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
 
 function describeLoadError(error: unknown): string {
   if (error instanceof FormatError || error instanceof NotFigureError) return error.message;
@@ -36,6 +48,10 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   toolbarEl!: HTMLElement;
   inspectorEl!: HTMLElement;
 
+  /** World to stage transform; `applyViewport` copies it onto `viewportEl`. */
+  readonly viewport = new Viewport();
+  pageLayer!: PageLayer;
+
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
 
@@ -47,6 +63,13 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   private loaded = false;
   private errorEl: HTMLElement | null = null;
   private unsubscribe: (() => void) | null = null;
+  /** The next loaded document is to be fitted to the stage once the stage has a size. */
+  private needsFit = true;
+  private fitFrame: number | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private spaceHeld = false;
+  /** The pointer that is dragging the canvas, and where it was last seen (client coordinates). */
+  private panning: { pointerId: number; x: number; y: number } | null = null;
 
   constructor(leaf: WorkspaceLeaf, readonly plugin: LinkFiguresPlugin) {
     super(leaf);
@@ -71,7 +94,18 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
 
   async onOpen(): Promise<void> {
     this.ensureDom();
+    this.wireStageInput();
+    // A stage that was hidden or not yet laid out when the document loaded is fitted once it has a size.
+    this.resizeObserver = new ResizeObserver(() => this.fitWhenSized());
+    this.resizeObserver.observe(this.stageEl);
     this.watcher.start(this);
+  }
+
+  async onClose(): Promise<void> {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    if (this.fitFrame !== null) window.cancelAnimationFrame(this.fitFrame);
+    this.fitFrame = null;
   }
 
   getViewData(): string {
@@ -101,6 +135,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.rawText = data;
     this.serializedAtLoad = serializeFigureFile(loaded.doc, loaded.parsed);
     this.loaded = true;
+    this.scheduleFit();
   }
 
   clear(): void {
@@ -109,6 +144,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.readOnly = false;
     this.rawText = "";
     this.serializedAtLoad = "";
+    // A file is about to be loaded (or none): whichever comes next starts from a fitted page, an edit reload of the same file does not.
+    this.needsFit = true;
     this.clearError();
   }
 
@@ -135,8 +172,11 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     return []; // Task 11 reads the selection state
   }
 
+  /** The page whose centre is nearest the middle of the stage. */
   currentPage(): Page {
-    return this.store.doc.pages[0]; // Task 9 picks the page nearest the stage centre
+    const stage = this.stageSize();
+    const middle = this.viewport.toWorld({ x: stage.width / 2, y: stage.height / 2 });
+    return nearestPage(this.store.doc, middle) ?? this.store.doc.pages[0];
   }
 
   setSelection(_ids: NodeId[]): void {
@@ -144,26 +184,140 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   }
 
   fitPage(): void {
-    // Task 9 fits the current page to the stage
+    this.fitPageTo(this.currentPage());
   }
 
-  zoomTo(_z: number): void {
-    // Task 9 sets the viewport zoom
+  /** Sets the zoom (1 is 100%) and puts the current page in the middle of the stage. */
+  zoomTo(z: number): void {
+    const stage = this.stageSize();
+    const rect = this.pageRect(this.currentPage());
+    if (!rect || stage.width === 0 || stage.height === 0) return;
+    this.viewport.centreOn({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, stage, z);
+    this.applyViewport();
+  }
+
+  applyViewport(): void {
+    this.viewportEl.style.transform = this.viewport.cssTransform();
   }
 
   requestExport(): void {
     // Task 14 opens the export modal
   }
 
-  /** Builds `.lf-view` once; `onOpen` and `showError` both call it because `setViewData` may run before `onOpen`. */
+  /** Builds `.lf-view` once; `onOpen`, `showError` and `setDocument` all call it because `setViewData` may run before `onOpen`. */
   private ensureDom(): void {
     if (this.stageEl) return;
     this.contentEl.empty();
     const root = this.contentEl.createDiv({ cls: "lf-view" });
     this.toolbarEl = root.createDiv({ cls: "lf-toolbar" });
-    this.stageEl = root.createDiv({ cls: "lf-stage" });
+    const main = root.createDiv({ cls: "lf-main" });
+    this.stageEl = main.createDiv({ cls: "lf-stage" });
+    // Focusable by click (not by tab), so the space bar reaches the stage once it has been clicked.
+    this.stageEl.tabIndex = -1;
     this.viewportEl = this.stageEl.createDiv({ cls: "lf-viewport" });
-    this.inspectorEl = root.createDiv({ cls: "lf-inspector" });
+    this.inspectorEl = main.createDiv({ cls: "lf-inspector" });
+    this.pageLayer = new PageLayer(this.viewportEl);
+    this.applyViewport();
+  }
+
+  /** Wheel zoom and pan, and drag-to-pan with the middle button or the space bar. */
+  private wireStageInput(): void {
+    const stage = this.stageEl;
+    // Not passive: zooming must stop the wheel from also doing what the page would do with it.
+    this.registerDomEvent(stage, "wheel", (ev) => this.onWheel(ev), { passive: false });
+    this.registerDomEvent(stage, "pointerdown", (ev) => this.onPointerDown(ev));
+    this.registerDomEvent(stage, "pointermove", (ev) => this.onPointerMove(ev));
+    this.registerDomEvent(stage, "pointerup", (ev) => this.endPan(ev));
+    this.registerDomEvent(stage, "pointercancel", (ev) => this.endPan(ev));
+    this.registerDomEvent(stage, "keydown", (ev) => this.onSpace(ev, true));
+    this.registerDomEvent(stage, "keyup", (ev) => this.onSpace(ev, false));
+    this.registerDomEvent(stage, "blur", () => this.setSpaceHeld(false));
+  }
+
+  private onWheel(ev: WheelEvent): void {
+    if (this.errorEl) return; // the error text scrolls
+    ev.preventDefault();
+    if (ev.ctrlKey || ev.metaKey) this.viewport.zoomAt(this.stagePoint(ev), Math.exp(-ev.deltaY * WHEEL_ZOOM_RATE));
+    else this.viewport.panBy(-ev.deltaX, -ev.deltaY);
+    this.applyViewport();
+  }
+
+  private onPointerDown(ev: PointerEvent): void {
+    if (this.errorEl || this.panning) return;
+    if (ev.button !== 1 && !(ev.button === 0 && this.spaceHeld)) return;
+    ev.preventDefault();
+    this.panning = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+    this.stageEl.setPointerCapture(ev.pointerId);
+    this.stageEl.classList.add("lf-panning");
+  }
+
+  private onPointerMove(ev: PointerEvent): void {
+    const pan = this.panning;
+    if (!pan || ev.pointerId !== pan.pointerId) return;
+    this.viewport.panBy(ev.clientX - pan.x, ev.clientY - pan.y);
+    pan.x = ev.clientX;
+    pan.y = ev.clientY;
+    this.applyViewport();
+  }
+
+  private endPan(ev: PointerEvent): void {
+    if (!this.panning || ev.pointerId !== this.panning.pointerId) return;
+    this.panning = null;
+    this.stageEl.classList.remove("lf-panning");
+  }
+
+  private onSpace(ev: KeyboardEvent, down: boolean): void {
+    if (ev.code !== "Space" || this.errorEl) return;
+    if (down) {
+      if (isEditable(ev.target) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      ev.preventDefault();
+    }
+    this.setSpaceHeld(down);
+  }
+
+  private setSpaceHeld(held: boolean): void {
+    this.spaceHeld = held;
+    this.stageEl.classList.toggle("lf-pan-ready", held);
+  }
+
+  /** A pointer position in stage pixels, which is what the viewport maps to and from. */
+  private stagePoint(ev: { clientX: number; clientY: number }): Pt {
+    const box = this.stageEl.getBoundingClientRect();
+    return { x: ev.clientX - box.left, y: ev.clientY - box.top };
+  }
+
+  private stageSize(): { width: number; height: number } {
+    return { width: this.stageEl?.clientWidth ?? 0, height: this.stageEl?.clientHeight ?? 0 };
+  }
+
+  private pageRect(page: Page | undefined): Rect | null {
+    return page ? pageWorldRect(this.store.doc, page) : null;
+  }
+
+  private fitPageTo(page: Page | undefined): void {
+    const rect = this.pageRect(page);
+    if (!rect) return;
+    this.viewport.fitRect(rect, this.stageSize());
+    this.applyViewport();
+  }
+
+  private scheduleFit(): void {
+    if (this.fitFrame !== null) return;
+    this.fitFrame = window.requestAnimationFrame(() => {
+      this.fitFrame = null;
+      this.fitWhenSized();
+    });
+  }
+
+  /** Fits the first page of a freshly loaded document, once; waits (for the next resize) while the stage has no size. */
+  private fitWhenSized(): void {
+    if (!this.needsFit || !this.loaded) return;
+    const stage = this.stageSize();
+    if (stage.width === 0 || stage.height === 0) return;
+    const first = this.store.doc.pages[0];
+    if (!first) return;
+    this.needsFit = false;
+    this.fitPageTo(first);
   }
 
   private clearError(): void {
@@ -175,12 +329,16 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
 
   /** Swaps in a fresh store and drops everything derived from the previous document. */
   private setDocument(doc: Document, parsed: ParsedFigureFile): void {
+    this.ensureDom();
     this.unsubscribe?.();
     for (const node of this.store.doc.nodes) this.index.untrack(node.id);
     this.resolvedCache.clear();
     this.parsed = parsed;
-    this.store = new DocumentStore(doc);
-    this.unsubscribe = this.store.subscribe((ev) => {
+    const store = new DocumentStore(doc);
+    this.store = store;
+    this.pageLayer.render(doc);
+    this.unsubscribe = store.subscribe((ev) => {
+      if (ev.pagesChanged) this.pageLayer.render(store.doc);
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
       if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") this.requestSave();
     });

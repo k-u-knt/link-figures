@@ -102,6 +102,10 @@ export function parseFigureFile(text: string): ParsedFigureFile {
     else if (FIGURE_HEADING.test(t)) figureAt = i;
   }
 
+  // An unclosed fence swallows the rest of the file, hiding the headings. Writing back would append a second
+  // Links/Figure pair whose closing fence closes the user's, so refuse to read it instead.
+  if (figureAt === -1 && fence !== null) throw new FormatError("A fenced code block is not closed, so the figure sections cannot be located");
+
   const firstHeading = linksAt !== -1 ? linksAt : figureAt;
   if (firstHeading === -1) return { frontmatter, preamble: rest, links: [], bodyJson: null, trailing: "" };
 

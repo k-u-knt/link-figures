@@ -27,6 +27,14 @@ test("isFigureText detects the frontmatter key only", () => {
 test("an unterminated lnkfig fence is a FormatError", () => expect(() => parseFigureFile("---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{}\n")).toThrow(FormatError));
 test("marker without a Figure section has bodyJson null and keeps the text", () => { const p = parseFigureFile("---\nlink-figures: 1\n---\nJust notes.\n"); expect(p.bodyJson).toBeNull(); expect(p.preamble).toBe("Just notes.\n"); expect(p.links).toEqual([]); expect(p.trailing).toBe(""); });
 test("headings inside a fenced block in the preamble are not sections", () => { const text = "---\nlink-figures: 1\n---\n```md\n## Links\n- p-aaaa: ![[x.png]] ^p-aaaa\n## Figure\n```\n\n## Figure\n```lnkfig\n{}\n```\n"; const p = parseFigureFile(text); expect(p.links).toEqual([]); expect(p.preamble).toBe("```md\n## Links\n- p-aaaa: ![[x.png]] ^p-aaaa\n## Figure\n```\n\n"); expect(p.bodyJson).toBe("{}"); });
+test("an unclosed non-lnkfig fence in the preamble is a FormatError, not a silent default document", () => {
+  const stray = "---\nlink-figures: 1\n---\nnotes\n```\nstray fence\n";
+  expect(() => parseFigureFile(stray)).toThrow(FormatError);
+  expect(() => loadDocument(stray)).toThrow(FormatError);
+  expect(() => parseFigureFile("---\nlink-figures: 1\n---\n```js\nnever closed\n")).toThrow(FormatError);
+  expect(() => parseFigureFile("---\nlink-figures: 1\n---\n~~~\nnever closed\n")).toThrow(FormatError);
+  expect(() => parseFigureFile("---\nlink-figures: 1\n---\n## Links\n- p-1: ![[a.png]] ^p-1\n```\nstray\n")).toThrow(FormatError);
+});
 test("a differently-tagged fence before the lnkfig block is skipped", () => { const p = parseFigureFile("---\nlink-figures: 1\n---\n## Figure\n```json\n{\"no\":1}\n```\n```lnkfig\n{\"yes\":1}\n```\n"); expect(p.bodyJson).toBe('{"yes":1}'); });
 test("a Figure heading without a lnkfig block gives bodyJson null", () => { const p = parseFigureFile("---\nlink-figures: 1\n---\n## Figure\nnothing here\n"); expect(p.bodyJson).toBeNull(); expect(p.trailing).toBe("nothing here\n"); });
 

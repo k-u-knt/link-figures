@@ -20,7 +20,8 @@ vi.mock("obsidian", async () => {
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
 vi.mock("../../src/links/decoders/tiff", () => ({ decodeTiff: vi.fn() }));
-const { runExport } = await import("../../src/export/export-modal");
+const { exportSummary, runExport } = await import("../../src/export/export-modal");
+const { isFigureSource } = await import("../../src/export/write");
 const { svgExporter } = await import("../../src/export/exporters/svg");
 const { fileNodeType } = await import("../../src/nodes/file-node");
 
@@ -77,7 +78,7 @@ test("each page gets its own assets and SVG, and the files are written to the fo
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "exports", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(vault.calls).toEqual(["createFolder exports", "createBinary exports/Fig - Page 1.svg", "createBinary exports/Fig - Page 2.svg"]);
@@ -103,7 +104,7 @@ test("the exporter is given the pages asked for, with their SVGs, their assets, 
   };
   await runExport(
     { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 150 },
-    { app, nodeTypes: types, resolved: (id) => resolved.get(id), elementFor: () => undefined },
+    { app, nodeTypes: types, resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(seen?.pages).toEqual([doc.pages[0]]);
   expect(seen?.nodeTypes).toBe(types);
@@ -118,7 +119,7 @@ test("what could not be embedded comes back as warnings, from the collection and
   const { app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(out.warnings).toEqual([
@@ -135,7 +136,7 @@ test("an exporter that fails stops the export before anything is written", async
   await expect(
     runExport(
       { exporter: failing, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300 },
-      { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined },
+      { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
     ),
   ).rejects.toThrow("no way");
   expect(vault.calls).toEqual([]);
@@ -146,7 +147,7 @@ test("a figure with an empty page exports a sheet of paper", async () => {
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Blank", folder: "", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out).toEqual({ files: 1, warnings: [] });
   expect(text(vault.content.get("Blank - Page 1.svg"))).toContain('<rect width="793.7007874015749" height="1122.5196850393702" fill="#ffffff"/>');
@@ -165,7 +166,7 @@ test("two pages with the same name are written to two files, and the rename is a
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(vault.calls).toEqual(["createBinary Fig - Page 2.svg", "createBinary Fig - Page 2 (2).svg"]);
@@ -179,7 +180,7 @@ test("names that only become the same once unsafe characters are replaced do not
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(3);
   expect(vault.calls).toEqual([
@@ -199,7 +200,73 @@ test("pages with different names produce no rename warning, and the exporter's o
   const { app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.warnings).toEqual([]);
+});
+
+describe("an export never writes over a source of the figure", () => {
+  /** An exporter that makes one file of each name given. */
+  const named = (...names: string[]): Exporter => ({
+    ...svgExporter,
+    run: async (input) => ({ files: names.map((name) => ({ name, blob: new Blob([name]) })), warnings: input.warnings }),
+  });
+  const FIGURE = "Figures/Figure 2.lnkfig.md";
+  /** What the view hands `runExport`: the figure, notes, and the files its nodes depend on are protected. */
+  const guard = (...deps: string[]) => (path: string) => isFigureSource(path, FIGURE, (p) => deps.includes(p));
+
+  test("a file named like a source PDF beside the figure is refused with a warning; the others are written and counted", async () => {
+    const doc = createDocument("nature-double");
+    const { vault, app } = world();
+    vault.entries.set("Figures/Figure 2.pdf", new FakeTFile("Figures/Figure 2.pdf"));
+    vault.content.set("Figures/Figure 2.pdf", new TextEncoder().encode("the plot").buffer as ArrayBuffer);
+    const out = await runExport(
+      { exporter: named("Figure 2.pdf", "Figure 2 - Page 1.svg"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 },
+      { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard("Figures/Figure 2.pdf") },
+    );
+    expect(out.files).toBe(1);
+    expect(out.warnings).toEqual(["Refused to overwrite Figures/Figure 2.pdf: it is a source of this figure"]);
+    expect(vault.calls).toEqual(["createFolder Figures", "createBinary Figures/Figure 2 - Page 1.svg"]);
+    expect(text(vault.content.get("Figures/Figure 2.pdf"))).toBe("the plot");
+  });
+
+  test("the figure's own file, and any note, are never written", async () => {
+    const doc = createDocument("nature-double");
+    const { vault, app } = world();
+    const out = await runExport(
+      { exporter: named("Figure 2.lnkfig.md", "Legend.md"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 },
+      { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard() },
+    );
+    expect(out.files).toBe(0);
+    expect(out.warnings).toEqual([
+      "Refused to overwrite Figures/Figure 2.lnkfig.md: it is a source of this figure",
+      "Refused to overwrite Figures/Legend.md: it is a source of this figure",
+    ]);
+    expect(vault.calls).toEqual([]);
+  });
+
+  test("exporting again writes over the previous export, silently", async () => {
+    const doc = createDocument("nature-double");
+    const { vault, app } = world();
+    const run = { exporter: svgExporter, doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 };
+    const deps = { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard("Figures/plot.svg") };
+    await runExport(run, deps);
+    const again = await runExport(run, deps);
+    expect(again).toEqual({ files: 1, warnings: [] });
+    expect(vault.calls).toEqual(["createFolder Figures", "createBinary Figures/Figure 2 - Page 1.svg", "modifyBinary Figures/Figure 2 - Page 1.svg"]);
+  });
+});
+
+test("isFigureSource: the figure file, any note (whatever the case of .md) and a dependency, nothing else", () => {
+  const isDependency = (p: string) => p === "Data/plot.pdf";
+  expect(isFigureSource("Figures/Fig.lnkfig.md", "Figures/Fig.lnkfig.md", isDependency)).toBe(true);
+  expect(isFigureSource("Figures/Notes.MD", "Figures/Fig.lnkfig.md", isDependency)).toBe(true);
+  expect(isFigureSource("Data/plot.pdf", "Figures/Fig.lnkfig.md", isDependency)).toBe(true);
+  expect(isFigureSource("Figures/Fig.pdf", "Figures/Fig.lnkfig.md", isDependency)).toBe(false);
+});
+
+test("the success message names the folder, or the vault root", () => {
+  expect(exportSummary(2, "Figures/out")).toBe("Exported 2 file(s) to Figures/out");
+  expect(exportSummary(1, "")).toBe("Exported 1 file(s) to the vault root");
+  expect(exportSummary(1, "/")).toBe("Exported 1 file(s) to the vault root");
 });

@@ -30,6 +30,11 @@ export class InvalidationIndex {
     return [...(this.nodesByPath.get(path) ?? [])];
   }
 
+  /** True when some node depends on `path`. */
+  has(path: string): boolean {
+    return this.nodesByPath.has(path);
+  }
+
   rename(oldPath: string, newPath: string): void {
     if (oldPath === newPath) return;
     const nodes = this.nodesByPath.get(oldPath);

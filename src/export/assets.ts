@@ -88,6 +88,8 @@ async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "i
       if (!mime) throw new Error(`"${path}" is not an image type that can be embedded`);
       const dataUri = bytesToDataUri(await deps.readBinary(path), mime);
       const natural = await loadNaturalSize(dataUri);
+      // svg2pdf.js leaves an AVIF image out of the PDF with nothing but a console message; the SVG export keeps it.
+      if (mime === "image/avif") deps.warnings.push(`Node ${node.id}: AVIF is not supported by the PDF export`);
       return { kind: "image", dataUri, naturalWidth: natural.width, naturalHeight: natural.height };
     }
     case "svg": {

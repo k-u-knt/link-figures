@@ -45,3 +45,16 @@ describe("missingNodeIds", () => {
     expect(missingNodeIds(doc.nodes, cache)).toEqual([]);
   });
 });
+
+test("has: true while some node depends on the path, false once none does", () => {
+  const index = new InvalidationIndex();
+  index.track("n1", ["a.png", "b.md"]);
+  index.track("n2", ["a.png"]);
+  expect(index.has("a.png")).toBe(true);
+  expect(index.has("c.png")).toBe(false);
+  index.untrack("n1");
+  expect(index.has("a.png")).toBe(true);
+  expect(index.has("b.md")).toBe(false);
+  index.rename("a.png", "moved/a.png");
+  expect([index.has("a.png"), index.has("moved/a.png")]).toEqual([false, true]);
+});

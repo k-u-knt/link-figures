@@ -368,3 +368,67 @@ test("a crop with no area fails the export instead of drawing a broken page", as
   const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source), { crop: { x: 0.5, y: 0, w: 0, h: 1 } });
   await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} .*no area`));
 });
+
+describe("fonts the PDF cannot set", () => {
+  test("a label in Calibri is reported once, naming the font it gets; Arial, Helvetica and Times New Roman are not", async () => {
+    const i = input();
+    const [first, second] = i.doc.pages;
+    const label = (page: Page, family: string) => {
+      const node = textNodeDefaults(page, { text: "A" }, i.doc.nodes.map((n) => n.id));
+      node.font = { ...node.font, family };
+      i.doc.nodes.push(node);
+      return node;
+    };
+    const calibri = label(first, "Calibri");
+    for (const family of ["Arial", "helvetica", "Times New Roman"]) label(first, family);
+    const courier = label(second, "Courier New");
+    i.warnings.push("Node p-zzzz: link missing, skipped");
+    const { warnings } = await pdfExporter.run(i, {});
+    expect(warnings).toEqual([
+      "Node p-zzzz: link missing, skipped",
+      `Node ${calibri.id}: font "Calibri" substituted by Times in PDF`,
+      `Node ${courier.id}: font "Courier New" substituted by Times in PDF`,
+    ]);
+  });
+
+  test("only the pages exported count, and the layered path reports them too", async () => {
+    const f = panelFigure();
+    f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(await sourcePdf([[300, 200]])));
+    const georgia = textNodeDefaults(f.first, { text: "B" }, f.i.doc.nodes.map((n) => n.id));
+    georgia.font = { ...georgia.font, family: "Georgia" };
+    const elsewhere = textNodeDefaults(f.second, { text: "C" }, [...f.i.doc.nodes.map((n) => n.id), georgia.id]);
+    elsewhere.font = { ...elsewhere.font, family: "Georgia" };
+    f.i.doc.nodes.push(georgia, elsewhere);
+    const { warnings } = await pdfExporter.run({ ...f.i, pages: [f.first] }, {});
+    expect(warnings).toEqual([`Node ${georgia.id}: font "Georgia" substituted by Times in PDF`]);
+  });
+});
+
+describe("encrypted source PDFs", () => {
+  /** `sourcePdf`, encrypted with the given passwords. */
+  async function encryptedPdf(passwords: { ownerPassword: string; userPassword?: string }): Promise<ArrayBuffer> {
+    const doc = await PDFDocument.load(await sourcePdf([[300, 200]]));
+    doc.encrypt(passwords);
+    const bytes = await doc.save();
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  }
+
+  test("a file with only an owner password is opened and embedded as vectors", async () => {
+    const source = await encryptedPdf({ ownerPassword: "owner" });
+    await expect(PDFDocument.load(source)).rejects.toThrow(/encrypted/);
+    const f = panelFigure();
+    f.panel(f.first, 0, [40, 30, 300, 200], pdfAsset(source));
+    const drawPage = spyOnDrawPage();
+    const { files } = await pdfExporter.run(f.i, {});
+    expect(drawn(drawPage)[1]).toMatchObject({ x: expect.closeTo(40), width: expect.closeTo(300), height: expect.closeTo(200) });
+    // The output is not encrypted itself, and holds the source page as a form of the page's size.
+    expect(await formBoxes(files[0].blob, 0)).toContainEqual({ x: 0, y: 0, width: 300, height: 200 });
+  });
+
+  test("a file that needs a user password still fails, naming the node and the page", async () => {
+    const source = await encryptedPdf({ ownerPassword: "owner", userPassword: "secret" });
+    const f = panelFigure();
+    const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source));
+    await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} \\("plot\\.pdf", page 1\\): could not embed the PDF page as vectors`));
+  });
+});

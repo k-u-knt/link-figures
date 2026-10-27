@@ -38,6 +38,27 @@ export function exportFolderFor(settings: LinkFiguresSettings, figurePath: strin
   return slash === -1 ? "" : figurePath.slice(0, slash);
 }
 
+/** The export folder normalised, `""` for the vault root (`normalizePath` leaves "/" as it is, which names the root). */
+export function exportDir(folder: string): string {
+  const normalized = folder ? normalizePath(folder) : "";
+  return normalized === "/" ? "" : normalized;
+}
+
+/** The vault path `writeExportFile` writes `name` to in `folder`. */
+export function exportPathFor(folder: string, name: string): string {
+  const dir = exportDir(folder);
+  const safeName = safeFileName(name);
+  return normalizePath(dir ? `${dir}/${safeName}` : safeName);
+}
+
+/**
+ * True for what an export must never write over: the figure file itself, any note, and any file a node of the figure
+ * depends on (`isDependency`). Writing goes through `modifyBinary`, which bypasses the trash.
+ */
+export function isFigureSource(path: string, figurePath: string, isDependency: (path: string) => boolean): boolean {
+  return path === figurePath || /\.md$/i.test(path) || isDependency(path);
+}
+
 /** Creates `folder` and the folders above it that are missing. */
 async function ensureFolder(app: App, folder: string): Promise<void> {
   let path = "";
@@ -60,11 +81,8 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
  * created when missing. Characters a file name cannot hold (a page called "A/B") become "-" rather than a subfolder.
  */
 export async function writeExportFile(app: App, folder: string, name: string, blob: Blob): Promise<TFile> {
-  const safeName = safeFileName(name);
-  // `normalizePath` leaves "/" as it is, which names the vault root.
-  const normalized = folder ? normalizePath(folder) : "";
-  const dir = normalized === "/" ? "" : normalized;
-  const path = normalizePath(dir ? `${dir}/${safeName}` : safeName);
+  const dir = exportDir(folder);
+  const path = exportPathFor(folder, name);
   const data = await blob.arrayBuffer();
   if (dir) await ensureFolder(app, dir);
   const existing = app.vault.getAbstractFileByPath(path);

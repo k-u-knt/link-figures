@@ -8,7 +8,7 @@ import type { LinkFiguresView } from "../view/figure-view";
 import type { AssetMap } from "./asset-types";
 import { collectAssets } from "./assets";
 import { buildPageSvg } from "./svg-builder";
-import { exportFolderFor, safeFileName, uniqueFileNames, writeExportFile } from "./write";
+import { exportDir, exportFolderFor, exportPathFor, isFigureSource, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
 /** More warnings than this are summarised in the notice; all of them go to the console. */
 const MAX_WARNINGS_SHOWN = 12;
@@ -30,11 +30,14 @@ export interface ExportDeps {
   nodeTypes: NodeTypeRegistry;
   resolved: (id: NodeId) => Resolved | undefined;
   elementFor: (id: NodeId) => HTMLElement | undefined;
+  /** True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). */
+  isProtected: (path: string) => boolean;
 }
 
 /**
  * Collects each page's assets, builds its SVG, lets the exporter turn them into files and writes those to the vault.
- * The warnings returned are everything that could not be done faithfully: assets that failed, nodes skipped, nodes rasterised.
+ * The warnings returned are everything that could not be done faithfully: assets that failed, nodes skipped, nodes rasterised,
+ * and files not written because their path is protected (`deps.isProtected`). `files` counts the files actually written.
  */
 export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ files: number; warnings: string[] }> {
   const { app } = deps;
@@ -76,8 +79,24 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
   result.files.forEach((file, i) => {
     if (names[i] !== safeFileName(file.name)) reported.push(`Page name '${file.name}' is used more than once; wrote '${names[i]}'`);
   });
-  for (const [i, file] of result.files.entries()) await writeExportFile(app, run.folder, names[i], file.blob);
-  return { files: result.files.length, warnings: reported };
+  let written = 0;
+  for (const [i, file] of result.files.entries()) {
+    // An export named like one of the figure's sources ("Figure 2.pdf" beside a plot of that name) must not replace it;
+    // writing over an earlier export is routine and stays silent.
+    const path = exportPathFor(run.folder, names[i]);
+    if (deps.isProtected(path)) {
+      reported.push(`Refused to overwrite ${path}: it is a source of this figure`);
+      continue;
+    }
+    await writeExportFile(app, run.folder, names[i], file.blob);
+    written++;
+  }
+  return { files: written, warnings: reported };
+}
+
+/** The success message: how many files were written, and to which folder. */
+export function exportSummary(files: number, folder: string): string {
+  return `Exported ${files} file(s) to ${exportDir(folder) || "the vault root"}`;
 }
 
 function warningsNotice(warnings: string[]): Notice {
@@ -192,16 +211,18 @@ export class ExportModal extends Modal {
       const doc = view.store.doc;
       const current = this.currentPage();
       const pages = this.pageChoice === "all" ? doc.pages : current ? [current] : [];
+      const folder = exportFolderFor(plugin.settings, file.path);
       const { files, warnings } = await runExport(
-        { exporter, doc, pages, baseName: view.getDisplayText(), folder: exportFolderFor(plugin.settings, file.path), dpi: Math.round(dpi) },
+        { exporter, doc, pages, baseName: view.getDisplayText(), folder, dpi: Math.round(dpi) },
         {
           app: view.app,
           nodeTypes: plugin.registries.nodeTypes,
           resolved: (id) => view.resolvedCache.get(id),
           elementFor: (id) => view.nodeHost.elementFor(id),
+          isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
         },
       );
-      new Notice(`Exported ${files} file(s)`);
+      new Notice(exportSummary(files, folder));
       if (warnings.length > 0) {
         console.warn("Link Figures: export warnings", warnings);
         warningsNotice(warnings);

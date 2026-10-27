@@ -13,6 +13,12 @@ const SVG_MIME = "image/svg+xml";
 const MAX_PARSE_ERROR_CHARS = 200;
 /** What the SVG builder says about a PDF panel it had to draw from its raster; here the panels are embedded as vectors instead. */
 const RASTERISED_PANEL_WARNING = /PDF panel rasterised/;
+/**
+ * The font families svg2pdf.js sets text in as they are, or as their metric twin: jsPDF has only the standard PDF fonts,
+ * so Arial is drawn as Helvetica and Times New Roman as Times. Any other family (Calibri, Georgia, and Courier New too)
+ * falls back to Times (`findFirstAvailableFontFamily` in svg2pdf.js), lower-cased here.
+ */
+const PDF_FONT_FAMILIES = new Set(["arial", "helvetica", "times new roman"]);
 
 type JsPdfConstructor = typeof JsPdf;
 
@@ -69,6 +75,28 @@ function pdfPanelsOf(nodes: Node[], assets: AssetMap): Map<NodeId, PdfPanel> {
 
 type PdfLib = typeof import("@cantoo/pdf-lib");
 
+/** One warning per text node whose font the PDF cannot set, naming the font it gets instead. */
+function fontWarnings(nodes: Node[]): string[] {
+  return nodes.flatMap((node) =>
+    node.type === "text" && !PDF_FONT_FAMILIES.has(node.font.family.trim().toLowerCase())
+      ? [`Node ${node.id}: font "${node.font.family}" substituted by Times in PDF`]
+      : [],
+  );
+}
+
+/**
+ * The source PDF as pdf-lib reads it. A file with only an owner password (which restricts what a reader may do) opens
+ * with the empty user password, so an encrypted file is tried with that; one that needs a real password still fails.
+ */
+async function loadSource(lib: PdfLib, bytes: ArrayBuffer): Promise<PDFDocument> {
+  try {
+    return await lib.PDFDocument.load(bytes);
+  } catch (error) {
+    if (!(error instanceof lib.EncryptedPDFError)) throw error;
+    return lib.PDFDocument.load(bytes, { password: "" });
+  }
+}
+
 /** One page to export: its built SVG, its PDF panels, and the layers its nodes fall into around them. */
 interface PagePlan {
   page: Page;
@@ -96,7 +124,7 @@ function isDrawable({ box, ...placed }: PdfPlacement): boolean {
  */
 async function drawPdfPanel(lib: PdfLib, out: PDFDocument, target: PDFPage, page: Page, { node, asset }: PdfPanel): Promise<void> {
   try {
-    const source = await lib.PDFDocument.load(asset.bytes);
+    const source = await loadSource(lib, asset.bytes);
     const sourcePage = source.getPage(asset.pageIndex);
     // pdf-lib embeds a page's content as it is stored, so a page the viewer turns would come out unturned.
     if (sourcePage.getRotation().angle % 360 !== 0) throw new Error("the page has a rotation of its own, which cannot be embedded");
@@ -178,10 +206,12 @@ export const pdfExporter: Exporter = {
     if (input.pages.length === 0) return { files: [], warnings: input.warnings };
 
     // Check every page before loading anything heavy.
+    const fonts: string[] = [];
     const plans = input.pages.map((page): PagePlan => {
       const svg = input.svgs.get(page.id);
       if (svg === undefined) throw new Error(`No SVG was built for page "${page.name}"`);
       const nodes = input.doc.nodes.filter((n) => n.page === page.id);
+      fonts.push(...fontWarnings(nodes));
       const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
       return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id)) };
     });
@@ -194,9 +224,9 @@ export const pdfExporter: Exporter = {
     const name = `${input.baseName}.pdf`;
     if (plans.every((plan) => plan.panels.size === 0)) {
       const blob = await plainPdf(jsPDF, input.pages, plans.map((plan) => plan.svg));
-      return { files: [{ name, blob }], warnings: input.warnings };
+      return { files: [{ name, blob }], warnings: [...input.warnings, ...fonts] };
     }
     const blob = await layeredPdf(jsPDF, input, plans);
-    return { files: [{ name, blob }], warnings: input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)) };
+    return { files: [{ name, blob }], warnings: [...input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)), ...fonts] };
   },
 };

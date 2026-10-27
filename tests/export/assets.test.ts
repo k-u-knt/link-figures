@@ -127,6 +127,16 @@ describe("raster sources", () => {
     expect(s.warnings).toEqual([]);
   });
 
+  test("an AVIF image is embedded, with a warning that the PDF export cannot show it", async () => {
+    const s = setup([{ resolved: image("fig/a.avif", "raster") }, { resolved: image("fig/b.webp", "raster") }]);
+    s.files["fig/a.avif"] = bytes(1, 2, 3);
+    s.files["fig/b.webp"] = bytes(1, 2, 3);
+    const assets = await s.run();
+    expect((assets.get(s.nodes[0].id) as { dataUri: string }).dataUri).toBe("data:image/avif;base64,AQID");
+    expect(assets.has(s.nodes[1].id)).toBe(true);
+    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: AVIF is not supported by the PDF export`]);
+  });
+
   test("an image that cannot be decoded, or has an unknown type, is a warning and no asset", async () => {
     const s = setup([{ resolved: image("a.png", "raster") }, { resolved: image("b.xyz", "raster") }]);
     s.files["a.png"] = bytes(255, 255, 255);

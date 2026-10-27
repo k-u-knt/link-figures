@@ -255,6 +255,19 @@ describe("replace", () => {
     expect(evs[0].label).toBe("reload");
   });
 
+  test("also names nodes that are in both documents but differ", () => {
+    const old = docWith(3);
+    const [a, b, c] = old.nodes.map(n => n.id);
+    const next = structuredClone(old);
+    (next.nodes[1] as { file: string }).file = "renamed.png";
+    next.nodes[2].x = 40;
+    const s = new DocumentStore(old);
+    const evs = record(s);
+    s.replace(next);
+    expect(ids(evs[0])).toEqual([b, c].sort());
+    expect(evs[0].changedNodeIds.has(a)).toBe(false);
+  });
+
   test("clears undo and redo, and later commits start fresh history", () => {
     const s = new DocumentStore(doc());
     s.commit("move", d => { d.nodes[0].x = 1; });
@@ -265,6 +278,60 @@ describe("replace", () => {
     s.commit("move", d => { d.nodes[0].x = 2; });
     expect(s.undo()).toBe(true);
     expect(s.doc.nodes[0].x).toBe(0);
+    expect(s.canUndo()).toBe(false);
+  });
+});
+
+describe("replace keeping history", () => {
+  /** The document with the link of its first node renamed, which is all an external Links rewrite changes. */
+  const relinked = (d: Document, file = "renamed.png"): Document => {
+    const next = structuredClone(d);
+    (next.nodes[0] as { file: string }).file = file;
+    return next;
+  };
+
+  test("undo and redo go on working across the replacement, and leave the new link alone", () => {
+    const s = new DocumentStore(docWith(2));
+    s.commit("move", d => { d.nodes[1].x = 10; });
+    s.commit("resize", d => { d.nodes[1].width = 99; });
+    s.undo();
+    s.replace(relinked(s.doc), "links", { keepHistory: true });
+    expect(s.canUndo()).toBe(true);
+    expect(s.canRedo()).toBe(true);
+    expect(s.undo()).toBe(true);
+    expect(s.doc.nodes[1].x).toBe(0);
+    expect(s.redo()).toBe(true);
+    expect(s.redo()).toBe(true);
+    expect(s.doc.nodes[1]).toMatchObject({ x: 10, width: 99 });
+    expect((s.doc.nodes[0] as { file: string }).file).toBe("renamed.png");
+  });
+
+  test("emits one replace event naming only the nodes that differ, with the label given", () => {
+    const old = docWith(3);
+    const s = new DocumentStore(old);
+    const evs = record(s);
+    s.replace(relinked(old), "links", { keepHistory: true });
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ kind: "replace", label: "links", pagesChanged: false });
+    expect(ids(evs[0])).toEqual([old.nodes[0].id]);
+  });
+
+  test("a run of commits that was under way keeps merging into its undo step", () => {
+    let t = 0;
+    const s = new DocumentStore(docWith(2), () => t);
+    s.commit("move", d => { d.nodes[1].x = 1; });
+    s.replace(relinked(s.doc), "links", { keepHistory: true });
+    t = 100;
+    s.commit("move", d => { d.nodes[1].x = 2; });
+    expect(s.undo()).toBe(true);
+    expect(s.doc.nodes[1].x).toBe(0);
+    expect(s.canUndo()).toBe(false);
+  });
+
+  test("without the option the history is still cleared", () => {
+    const s = new DocumentStore(docWith(2));
+    s.commit("move", d => { d.nodes[1].x = 1; });
+    s.replace(relinked(s.doc), "links");
     expect(s.canUndo()).toBe(false);
   });
 });

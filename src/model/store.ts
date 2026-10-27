@@ -90,17 +90,24 @@ export class DocumentStore {
     return this.redoStack.length > 0;
   }
 
-  /** Swaps in a document loaded from elsewhere. Not an edit: both history stacks are cleared. */
-  replace(doc: Document, label = "replace"): void {
+  /**
+   * Swaps in a document loaded from elsewhere. Not an edit: it leaves no history entry, and by default both history
+   * stacks are cleared. `keepHistory` is for a document that differs from the current one only in the link targets
+   * (`file`, `subpath`) of file nodes: history refers to nodes by their place in the document, which has not changed, so
+   * it stays valid. A node that undo or redo brings back comes with the link it had when it was removed.
+   */
+  replace(doc: Document, label = "replace", options: { keepHistory?: boolean } = {}): void {
     const before = this.current;
     this.current = doc;
-    this.undoStack = [];
-    this.redoStack = [];
-    this.mergeTarget = null;
+    if (!options.keepHistory) {
+      this.undoStack = [];
+      this.redoStack = [];
+      this.mergeTarget = null;
+    }
     this.emit({
       kind: "replace",
       label,
-      changedNodeIds: idsInOnlyOne(before.nodes, doc.nodes),
+      changedNodeIds: differingNodeIds(before.nodes, doc.nodes),
       pagesChanged: !deepEqual(before.pages, doc.pages),
     });
   }
@@ -168,13 +175,17 @@ function changedNodeIds(patches: readonly Patch[], before: Document, after: Docu
   return changed;
 }
 
-function idsInOnlyOne(before: readonly Node[], after: readonly Node[]): Set<NodeId> {
-  const beforeIds = new Set(before.map(n => n.id));
-  const afterIds = new Set(after.map(n => n.id));
-  const only = new Set<NodeId>();
-  for (const id of beforeIds) if (!afterIds.has(id)) only.add(id);
-  for (const id of afterIds) if (!beforeIds.has(id)) only.add(id);
-  return only;
+/** The ids of the nodes that are in only one of the lists, or are in both and differ. */
+function differingNodeIds(before: readonly Node[], after: readonly Node[]): Set<NodeId> {
+  const beforeById = indexById(before);
+  const afterById = indexById(after);
+  const differing = new Set<NodeId>();
+  for (const [id, b] of beforeById) {
+    const a = afterById.get(id);
+    if (!a || !deepEqual(a, b)) differing.add(id);
+  }
+  for (const id of afterById.keys()) if (!beforeById.has(id)) differing.add(id);
+  return differing;
 }
 
 function indexById(nodes: readonly Node[]): Map<NodeId, Node> {

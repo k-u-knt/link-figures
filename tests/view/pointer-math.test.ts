@@ -168,3 +168,32 @@ test("roundPx keeps hundredths", () => {
   expect(roundPx(-0.004)).toBe(-0);
   expect(roundPx(3)).toBe(3);
 });
+
+// A node can be dragged off its page, so a hit is looked for among the nodes of every page.
+test("hitTest finds a node that lies in the gap between two pages", () => {
+  const gap = { x: 10, y: 700, width: 50, height: 50 }; // below the first page, above the second
+  const items = [
+    { id: "on-page", rect: r, z: 0, locked: false, layer: 0 },
+    { id: "in-gap", rect: gap, z: 0, locked: false, layer: 0 },
+    { id: "other-page", rect: { x: 10, y: 800, width: 50, height: 50 }, z: 0, locked: false, layer: 1 },
+  ];
+  expect(hitTest(items, { x: 30, y: 725 })).toBe("in-gap");
+  expect(hitTest(items, { x: 30, y: 775 })).toBeNull();
+});
+
+test("hitTest prefers a later page's node over an earlier page's node with a higher z", () => {
+  const items = [
+    { id: "early-high", rect: r, z: 9, locked: false, layer: 0 },
+    { id: "late-low", rect: r, z: 0, locked: false, layer: 1 },
+  ];
+  expect(hitTest(items, { x: 20, y: 20 })).toBe("late-low");
+  expect(hitTest([...items].reverse(), { x: 20, y: 20 })).toBe("late-low");
+});
+
+test("hitTest falls through a locked node of a later page to the unlocked one below it", () => {
+  const items = [
+    { id: "early", rect: r, z: 0, locked: false, layer: 0 },
+    { id: "late-locked", rect: r, z: 0, locked: true, layer: 1 },
+  ];
+  expect(hitTest(items, { x: 20, y: 20 })).toBe("early");
+});

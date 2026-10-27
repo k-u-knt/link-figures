@@ -222,8 +222,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.toolbarEl = root.createDiv({ cls: "lf-toolbar" });
     const main = root.createDiv({ cls: "lf-main" });
     this.stageEl = main.createDiv({ cls: "lf-stage" });
-    // Focusable by click (not by tab), so the space bar reaches the stage once it has been clicked.
-    this.stageEl.tabIndex = -1;
+    // Focusable by click and by tab, so the space bar and the editing keys reach the stage.
+    this.stageEl.tabIndex = 0;
     this.viewportEl = this.stageEl.createDiv({ cls: "lf-viewport" });
     this.inspectorEl = main.createDiv({ cls: "lf-inspector" });
     this.pageLayer = new PageLayer(this.viewportEl);

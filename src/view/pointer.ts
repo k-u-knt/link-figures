@@ -154,13 +154,14 @@ export class PointerController {
       return;
     }
 
-    const page = pageAt(doc, world);
     const selectedPage = this.selectionPage(doc);
-    const samePage = page !== null && page.id === selectedPage;
-    const hit = page ? hitTest(this.itemsOn(doc, page), world) : null;
+    // Nodes are not clipped to their page, so what is under the pointer is looked for among every page's nodes.
+    const hit = hitTest(this.itemsOnAllPages(doc), world);
 
     if (hit) {
-      if (selectedPage !== null && !samePage) selection.clear();
+      // The page that counts for a selection is the node's own, wherever on the canvas it has ended up.
+      const hitPage = doc.nodes.find((n) => n.id === hit)?.page;
+      if (selectedPage !== null && selectedPage !== hitPage) selection.clear();
       if (ev.shiftKey) {
         selection.toggle(hit);
         if (selection.has(hit)) this.press(ev, world, { kind: "move" }, null);
@@ -174,7 +175,8 @@ export class PointerController {
     }
 
     // Empty paper (or no paper): shift keeps what is selected on this page, anything else starts afresh.
-    if (!ev.shiftKey || !samePage) selection.clear();
+    const page = pageAt(doc, world);
+    if (!ev.shiftKey || page === null || page.id !== selectedPage) selection.clear();
     if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids] }, null);
   }
 
@@ -489,6 +491,12 @@ export class PointerController {
       if (handle) return { id, handle };
     }
     return null;
+  }
+
+  /** Every node, each with its page's position as `layer`: later pages are drawn over earlier ones. */
+  private itemsOnAllPages(doc: Document): { id: NodeId; rect: Rect; z: number; locked: boolean; layer: number }[] {
+    const layers = new Map(doc.pages.map((page, i) => [page.id, i] as const));
+    return doc.nodes.map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), z: n.z, locked: n.locked, layer: layers.get(n.page) ?? 0 }));
   }
 
   private itemsOn(doc: Document, page: Page): { id: NodeId; rect: Rect; z: number; locked: boolean }[] {

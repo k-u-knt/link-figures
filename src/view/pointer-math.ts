@@ -76,12 +76,19 @@ export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean }
   return items.filter((item) => !item.locked && rectIntersects(item.rect, marquee)).map((item) => item.id);
 }
 
-/** The unlocked item under `p` with the highest `z`; of equal `z` the later item, which is the one drawn on top. */
-export function hitTest(items: { id: NodeId; rect: Rect; z: number; locked: boolean }[], p: Pt): NodeId | null {
-  let top: { id: NodeId; z: number } | null = null;
+/**
+ * The unlocked item under `p` that is drawn on top: the highest `layer` (the position of its page, later pages being
+ * drawn over earlier ones; 0 when not given), then the highest `z`, then the later item.
+ */
+export function hitTest(
+  items: { id: NodeId; rect: Rect; z: number; locked: boolean; layer?: number }[],
+  p: Pt,
+): NodeId | null {
+  let top: { id: NodeId; z: number; layer: number } | null = null;
   for (const item of items) {
     if (item.locked || !rectContainsPt(item.rect, p)) continue;
-    if (!top || item.z >= top.z) top = item;
+    const layer = item.layer ?? 0;
+    if (!top || layer > top.layer || (layer === top.layer && item.z >= top.z)) top = { id: item.id, z: item.z, layer };
   }
   return top ? top.id : null;
 }

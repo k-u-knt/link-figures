@@ -1,0 +1,34 @@
+{
+  "name": "link-figures",
+  "version": "0.1.0",
+  "description": "Page-based figure and slide editor where every panel is a live link to its source.",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "test": "vitest run",
+    "deploy": "node scripts/deploy.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "author": "Kenta Ninomiya",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "builtin-modules": "^5.4.0",
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.14.4",
+    "obsidian-typings": "^6.51.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@cantoo/pdf-lib": "^2.11.1",
+    "@zumer/snapdom": "^3.4.0",
+    "immer": "^11.2.9",
+    "jspdf": "^4.2.1",
+    "svg2pdf.js": "^2.8.1",
+    "utif": "^3.1.0"
+  }
+}

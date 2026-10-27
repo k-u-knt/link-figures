@@ -1,5 +1,6 @@
 import { mmToPx, pageOriginsPx, pageSizePx } from "../model/geometry";
 import type { Document, Margins, Page, PageId } from "../model/types";
+import { paperInk } from "./paper-ink";
 
 interface PageParts {
   page: HTMLElement;
@@ -94,6 +95,10 @@ export class PageLayer {
     style.width = `${size.width}px`;
     style.height = `${size.height}px`;
     style.backgroundColor = page.paper;
+    // What is drawn on the paper (rendered notes, placeholders, guides) takes its text colours from the paper, not the theme.
+    const { ink, muted } = paperInk(page.paper);
+    style.setProperty("--lf-ink", ink);
+    style.setProperty("--lf-ink-muted", muted);
     if (parts.label.textContent !== page.name) parts.label.textContent = page.name;
 
     if (!hasMargins(page.margins)) {

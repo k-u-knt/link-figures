@@ -45,7 +45,7 @@ test("svg asset is inlined with namespaced ids and the crop as viewBox", () => {
     { kind: "svg", text: '<svg viewBox="0 0 200 100"><defs><clipPath id="c1"><rect/></clipPath></defs><rect clip-path="url(#c1)"/></svg>', width: 200, height: 100 },
     c,
   ) as string;
-  expect(out).toMatch(/^<svg x="10" y="20" width="100" height="50" viewBox="100 0 100 100" preserveAspectRatio="xMidYMid slice">/);
+  expect(out).toMatch(new RegExp(`^<svg x="10" y="20" width="100" height="50" viewBox="100 0 100 100" preserveAspectRatio="xMidYMid slice" id="${n.id}-root">`));
   expect(out).toContain(`id="${n.id}-c1"`);
   expect(out).toContain(`url(#${n.id}-c1)`);
   expect(c.warnings).toEqual([]);
@@ -93,16 +93,60 @@ test("svg asset without a crop uses the whole viewBox, and contain means meet", 
     { kind: "svg", text: '<svg viewBox="10 20 200 100"><rect/></svg>', width: 200, height: 100 },
     ctx(),
   ) as string;
-  expect(out).toMatch(/^<svg x="10" y="20" width="100" height="50" viewBox="10 20 200 100" preserveAspectRatio="xMidYMid meet">/);
+  expect(out).toMatch(/^<svg x="10" y="20" width="100" height="50" viewBox="10 20 200 100" preserveAspectRatio="xMidYMid meet" id="p-[a-z0-9]{4}-root">/);
 });
 
 test("svg asset keeps the namespace prefixes its root declared, so inlined xlink:href stays well-formed", () => {
+  const n = node({ file: "plot.svg" });
   const out = fileNodeSvg(
-    node({ file: "plot.svg" }),
+    n,
     { kind: "svg", text: '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10"><use xlink:href="#a"/></svg>', width: 10, height: 10 },
     ctx(),
   ) as string;
-  expect(out).toMatch(/^<svg x="10" y="20" width="100" height="50" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid slice" xmlns:xlink="http:\/\/www\.w3\.org\/1999\/xlink">/);
+  expect(out).toMatch(new RegExp(`^<svg x="10" y="20" width="100" height="50" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid slice" id="${n.id}-root" xmlns:xlink="http:\\/\\/www\\.w3\\.org\\/1999\\/xlink">`));
+});
+
+const svglite =
+  "<svg xmlns='http://www.w3.org/2000/svg' class='svglite' width='72.00pt' height='72.00pt' viewBox='0 0 72.00 72.00'>" +
+  "<defs><style type='text/css'><![CDATA[.svglite polyline { fill: none; stroke: #000000; }]]></style></defs>" +
+  "<rect width='100%' height='100%' style='stroke: none; fill: #FFFFFF;'/><polyline points='1,1 2,2' class='line'/></svg>";
+
+test("svg asset: the root's class and scoped rules go with the panel, so an svglite line plot is not filled", () => {
+  const n = node({ file: "plot.svg" });
+  const out = fileNodeSvg(n, { kind: "svg", text: svglite, width: 96, height: 96 }, ctx()) as string;
+  // The nested element is the root: same id the rules are scoped to, and the class they select on.
+  expect(out).toContain(`id="${n.id}-root" class="${n.id}-svglite">`);
+  expect(out).toContain(`#${n.id}-root.${n.id}-svglite polyline{ fill: none; stroke: #000000; }`);
+  expect(out).toContain(`<polyline points='1,1 2,2' class='${n.id}-line'/>`);
+  expect(out).not.toMatch(/[^-]\.svglite|class='svglite'/);
+});
+
+test("svg asset: two panels that use the same class names do not restyle each other", () => {
+  const a = node({ file: "a.svg" });
+  const b = node({ file: "b.svg" });
+  const file = (colour: string) => `<svg viewBox="0 0 10 10"><style>.st0{fill:${colour}}</style><rect class="st0"/></svg>`;
+  const c = ctx();
+  const outA = fileNodeSvg(a, { kind: "svg", text: file("red"), width: 10, height: 10 }, c) as string;
+  const outB = fileNodeSvg(b, { kind: "svg", text: file("blue"), width: 10, height: 10 }, c) as string;
+  expect(outA).toContain(`#${a.id}-root .${a.id}-st0{fill:red}`);
+  expect(outA).toContain(`<rect class="${a.id}-st0"/>`);
+  expect(outB).toContain(`#${b.id}-root .${b.id}-st0{fill:blue}`);
+  expect(outA + outB).not.toMatch(/[^-]\.st0/);
+});
+
+test("svg asset: an entity-declaring DOCTYPE does not leave undeclared references, and scripts are gone", () => {
+  const text =
+    '<!DOCTYPE svg [<!ENTITY ns_x "http://ns.adobe.com/Extensibility/1.0/">]><svg xmlns="http://www.w3.org/2000/svg" xmlns:x="&ns_x;" viewBox="0 0 10 10" onload="evil()"><script>evil()</script><g x:foo="1"/></svg>';
+  const out = fileNodeSvg(node({ file: "ai.svg" }), { kind: "svg", text, width: 10, height: 10 }, ctx()) as string;
+  expect(out).toContain(' xmlns:x="http://ns.adobe.com/Extensibility/1.0/"');
+  expect(out).not.toMatch(/&ns_x;|<script|onload|DOCTYPE/);
+});
+
+test("svg asset: what inlining had to drop is warned about, with the node's id", () => {
+  const c = ctx();
+  const n = node({ file: "plot.svg" });
+  fileNodeSvg(n, { kind: "svg", text: '<svg viewBox="0 0 1 1"><style>@media print{.a{x:y}}</style></svg>', width: 1, height: 1 }, c);
+  expect(c.warnings).toEqual([`Node ${n.id}: @media rule in <style> dropped`]);
 });
 
 test("ids from uid are used for every clip path in one build", () => {

@@ -87,11 +87,20 @@
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  /* The theme's text colours, kept under other names for what is drawn on the stage and not on the paper. */
+  --lf-ui-normal: var(--text-normal);
+  --lf-ui-muted: var(--text-muted);
+  --lf-ui-faint: var(--text-faint);
 }
 
+/* A sheet of paper has its own ink: black on light paper, white on dark (set per page by `PageLayer`), whatever the theme. */
 .lf-page {
   position: absolute;
   box-shadow: var(--shadow-s);
+  color: var(--lf-ink, #000000);
+  --text-normal: var(--lf-ink, #000000);
+  --text-muted: var(--lf-ink-muted, #999999);
+  --text-faint: var(--lf-ink-muted, #999999);
 }
 
 .lf-page-nodes,
@@ -122,7 +131,7 @@
   left: 0;
   white-space: nowrap;
   font-size: var(--font-ui-small);
-  color: var(--canvas-card-label-color, var(--text-faint));
+  color: var(--canvas-card-label-color, var(--lf-ui-faint));
   pointer-events: none;
   user-select: none;
 }
@@ -158,6 +167,7 @@
   height: 100%;
   box-sizing: border-box;
   overflow: hidden;
+  color: var(--lf-ink, #000000);
 }
 
 .lf-placeholder {
@@ -187,7 +197,7 @@
   border-radius: var(--radius-s);
   background-color: var(--background-primary);
   box-shadow: var(--shadow-s);
-  color: var(--text-muted);
+  color: var(--lf-ui-muted);
   cursor: pointer;
   opacity: 0;
 }
@@ -202,7 +212,7 @@
 }
 
 .lf-badge:hover {
-  color: var(--text-normal);
+  color: var(--lf-ui-normal);
 }
 
 .lf-badge.is-missing {

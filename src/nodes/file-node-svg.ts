@@ -1,4 +1,4 @@
-import { inlineSvg, svgIntrinsicSize, svgRootNamespaces } from "../export/inline-svg";
+import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline-svg";
 import type { FileAsset } from "../export/asset-types";
 import { imagePlacement } from "../model/geometry";
 import type { FileNode } from "../model/types";
@@ -15,15 +15,23 @@ function clippedImage(node: FileNode, href: string, natural: { width: number; he
   );
 }
 
-/** The linked SVG as a nested `<svg>`: its viewBox (or the crop's part of it) fills the node's rectangle as `fit` says. */
-function nestedSvg(node: FileNode, text: string): string {
+/**
+ * The linked SVG as a nested `<svg>`: its viewBox (or the crop's part of it) fills the node's rectangle as `fit` says.
+ * It carries the file's root attributes (namespaces, `class`, `fill`…) and the id `{node.id}-root` that the file's
+ * scoped `<style>` rules start from. Things inlining had to drop are reported as warnings.
+ */
+function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   const [vx, vy, vw, vh] = svgIntrinsicSize(text).viewBox;
   const c = node.crop;
   const viewBox = c ? [vx + c.x * vw, vy + c.y * vh, c.w * vw, c.h * vh] : [vx, vy, vw, vh];
   const aspect = node.fit === "cover" ? "xMidYMid slice" : "xMidYMid meet";
+  const prefix = `${node.id}-`;
+  const dropped: string[] = [];
+  const content = inlineSvg(text, prefix, dropped);
+  for (const message of dropped) ctx.warnings.push(`Node ${node.id}: ${message}`);
   return (
     `<svg x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" viewBox="${viewBox.join(" ")}" ` +
-    `preserveAspectRatio="${aspect}"${svgRootNamespaces(text)}>${inlineSvg(text, `${node.id}-`)}</svg>`
+    `preserveAspectRatio="${aspect}" id="${prefix}root"${svgRootAttributes(text, prefix)}>${content}</svg>`
   );
 }
 
@@ -44,6 +52,6 @@ export function fileNodeSvg(node: FileNode, asset: FileAsset | undefined, ctx: S
       ctx.warnings.push(`Node ${node.id}: PDF panel rasterised`);
       return clippedImage(node, asset.raster, { width: asset.rasterWidth, height: asset.rasterHeight }, ctx);
     case "svg":
-      return nestedSvg(node, asset.text);
+      return nestedSvg(node, asset.text, ctx);
   }
 }

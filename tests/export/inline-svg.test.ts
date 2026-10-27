@@ -1,4 +1,4 @@
-import { inlineSvg, svgIntrinsicSize, svgRootNamespaces } from "../../src/export/inline-svg";
+import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../../src/export/inline-svg";
 
 test("intrinsic size from viewBox", () =>
   expect(svgIntrinsicSize('<svg viewBox="0 0 200 100" width="10mm"/>')).toEqual({ width: 200, height: 100, viewBox: [0, 0, 200, 100] }));
@@ -41,7 +41,7 @@ describe("svgIntrinsicSize", () => {
   test("text that is not an SVG file gets the default size and no inlined content", () => {
     expect(svgIntrinsicSize("<html><svg width='1'/></html>")).toMatchObject({ width: 300, height: 150 });
     expect(inlineSvg("<html><svg width='1'><g/></svg></html>", "p-")).toBe("");
-    expect(svgRootNamespaces("")).toBe("");
+    expect(svgRootAttributes("")).toBe("");
   });
   test("an attribute value containing > does not end the tag", () =>
     expect(svgIntrinsicSize('<svg data-x="a>b" width="20" height="10"/>')).toMatchObject({ width: 20, height: 10 }));
@@ -57,18 +57,140 @@ describe("inlineSvg", () => {
     expect(inlineSvg(`<svg><g id='a' fill="url( #a )" stroke='url("#a")' style="fill:url('#a')" xlink:href='#a'/></svg>`, "p-")).toBe(
       `<g id='p-a' fill="url(#p-a)" stroke='url("#p-a")' style="fill:url('#p-a')" xlink:href='#p-a'/>`,
     ));
-  test("url() inside a <style> block is rewritten too", () =>
-    expect(inlineSvg("<svg><style>.a{fill:url(#g)}</style></svg>", "p-")).toBe("<style>.a{fill:url(#p-g)}</style>"));
   test("leaves attributes that merely end in id, links to other documents and plain text alone", () =>
     expect(inlineSvg('<svg><g data-id="x" xml:id="y" href="other.svg#x"/><text>id="z" url(#q)</text></svg>', "p-")).toBe(
       '<g data-id="x" xml:id="y" href="other.svg#x"/><text>id="z" url(#p-q)</text>',
     ));
 });
 
-describe("svgRootNamespaces", () => {
-  test("lists the xmlns:prefix declarations of the root, not the default namespace", () =>
-    expect(svgRootNamespaces('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape=\'urn:i\'><g/></svg>')).toBe(
-      ' xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="urn:i"',
+describe("inlineSvg: fidelity and safety", () => {
+  const svglite =
+    "<?xml version='1.0' encoding='UTF-8' ?><svg xmlns='http://www.w3.org/2000/svg' class='svglite' width='72.00pt' height='72.00pt' viewBox='0 0 72.00 72.00'>" +
+    "<defs><style type='text/css'><![CDATA[\n    .svglite line, .svglite polyline, .svglite polygon, .svglite path, .svglite rect, .svglite circle {\n      fill: none;\n      stroke: #000000;\n    }\n  ]]></style></defs>" +
+    "<rect width='100%' height='100%' style='stroke: none; fill: #FFFFFF;'/><polyline points='1,1 2,2' class='line' style='stroke-width: 1.07;'/></svg>";
+
+  test("svglite: a rule for the root's own class still reaches the root's children, and the CDATA wrapper stays", () => {
+    const out = inlineSvg(svglite, "n1-");
+    expect(out).toContain("<style type='text/css'><![CDATA[");
+    expect(out).toContain("#n1-root .n1-svglite polyline,#n1-root.n1-svglite polyline,");
+    expect(out).toContain("#n1-root .n1-svglite circle,#n1-root.n1-svglite circle{");
+    expect(out).toContain("fill: none;");
+    expect(out).toContain("<polyline points='1,1 2,2' class='n1-line'");
+    // Hand-checked against the DOM: `#n1-root.n1-svglite` is the root element (id and class together), `polyline` its child.
+  });
+
+  test("a rule for a class the root does not have is scoped to the descendants only", () =>
+    expect(inlineSvg('<svg class="a"><style>.st0{fill:red}</style><rect class="st0 st1"/></svg>', "n1-")).toBe(
+      '<style>#n1-root .n1-st0{fill:red}</style><rect class="n1-st0 n1-st1"/>',
     ));
-  test("is empty when there are none", () => expect(svgRootNamespaces('<svg viewBox="0 0 1 1"/>')).toBe(""));
+
+  test("a rule for svg also matches the root itself", () =>
+    expect(inlineSvg("<svg><style>svg{overflow:hidden}</style></svg>", "n1-")).toBe("<style>#n1-root svg,svg#n1-root{overflow:hidden}</style>"));
+
+  test("the universal selector is scoped, not applied to the whole figure", () =>
+    expect(inlineSvg("<svg><style>*{stroke-linecap:butt;stroke-linejoin:round;}</style><g/></svg>", "n1-")).toBe(
+      "<style>#n1-root *{stroke-linecap:butt;stroke-linejoin:round;}</style><g/>",
+    ));
+
+  test("#id selectors follow the prefixed ids", () =>
+    expect(inlineSvg('<svg><style>#bg{fill:red}</style><rect id="bg"/></svg>', "n1-")).toBe(
+      '<style>#n1-root #n1-bg{fill:red}</style><rect id="n1-bg"/>',
+    ));
+
+  test("selector lists, combinators, pseudo-classes and attribute selectors", () =>
+    expect(inlineSvg('<svg><style>g.a > .b, [href$=".png"] #c:not(.d){fill:red}</style></svg>', "n1-")).toBe(
+      '<style>#n1-root g.n1-a > .n1-b,#n1-root [href$=".png"] #n1-c:not(.n1-d){fill:red}</style>',
+    ));
+
+  test("two files that both use .st0 do not collide", () => {
+    const file = (colour: string) => `<svg><style type="text/css">.st0{fill:${colour}}</style><rect class="st0"/></svg>`;
+    const a = inlineSvg(file("red"), "a-");
+    const b = inlineSvg(file("blue"), "b-");
+    expect(a).toBe('<style type="text/css">#a-root .a-st0{fill:red}</style><rect class="a-st0"/>');
+    expect(b).toBe('<style type="text/css">#b-root .b-st0{fill:blue}</style><rect class="b-st0"/>');
+    expect(a + b).not.toMatch(/[^-]\.st0/);
+  });
+
+  test("url() in a style rule is carried over too", () =>
+    expect(inlineSvg("<svg><style>.a{fill:url(#g)}</style></svg>", "p-")).toBe("<style>#p-root .p-a{fill:url(#p-g)}</style>"));
+
+  test("at-rules are dropped with one warning each kind, and the rules around them stay", () => {
+    const warnings: string[] = [];
+    const css = "@import url(x.css);.a{fill:red}@media print{.a{fill:blue}.b{fill:green}}@font-face{font-family:F;src:url(f.woff)}@media screen{.c{x:y}}.d{fill:pink}";
+    const out = inlineSvg(`<svg><style>${css}</style></svg>`, "p-", warnings);
+    expect(out).toBe("<style>#p-root .p-a{fill:red}#p-root .p-d{fill:pink}</style>");
+    expect(warnings).toEqual(["@import rule in <style> dropped", "@media rule in <style> dropped", "@font-face rule in <style> dropped"]);
+  });
+
+  test("dropping an at-rule without a warnings array is fine", () =>
+    expect(inlineSvg("<svg><style>@media print{.a{x:y}}</style></svg>", "p-")).toBe("<style></style>"));
+
+  test("comments inside a stylesheet are ignored", () =>
+    expect(inlineSvg("<svg><style>/* a { } */.a{x:y}</style></svg>", "p-")).toBe("<style>#p-root .p-a{x:y}</style>"));
+
+  test("class attributes are carried over, single- and double-quoted, and extra spaces are collapsed", () =>
+    expect(inlineSvg(`<svg><g class="a  b"/><g class='c'/><g data-class="d"/></svg>`, "p-")).toBe(
+      `<g class="p-a p-b"/><g class='p-c'/><g data-class="d"/>`,
+    ));
+
+  test("a DOCTYPE's entities are expanded, including in the root's attributes, and the DOCTYPE goes", () => {
+    const text =
+      '<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd" [' +
+      '<!ENTITY ns_extend "http://ns.adobe.com/Extensibility/1.0/"><!ENTITY ns_ai "http://ns.adobe.com/AdobeIllustrator/10.0/"><!ENTITY both "&ns_ai; and &ns_extend;">]>' +
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="&ns_extend;" xmlns:i="&ns_ai;" viewBox="0 0 10 10"><metadata title="&both; &amp; &lt;"/></svg>';
+    expect(svgRootAttributes(text)).toBe(' xmlns:x="http://ns.adobe.com/Extensibility/1.0/" xmlns:i="http://ns.adobe.com/AdobeIllustrator/10.0/"');
+    expect(inlineSvg(text, "p-")).toBe(
+      '<metadata title="http://ns.adobe.com/AdobeIllustrator/10.0/ and http://ns.adobe.com/Extensibility/1.0/ &amp; &lt;"/>',
+    );
+    expect(svgIntrinsicSize(text)).toMatchObject({ width: 10, height: 10 });
+  });
+
+  test("an entity that would grow without bound is not defined", () => {
+    const big = "x".repeat(60_000);
+    const text = `<!DOCTYPE svg [<!ENTITY a "${big}"><!ENTITY b "&a;&a;">]><svg><g id="&b;"/></svg>`;
+    // `b` is over the limit, so it stays an (undeclared) reference instead of becoming 120 kB of text.
+    expect(inlineSvg(text, "p-")).toBe('<g id="p-&b;"/>');
+  });
+
+  test("scripts, foreignObject and event attributes are removed", () => {
+    const out = inlineSvg(
+      '<svg onload="evil()"><script>alert(1)</script><g onclick="x()" ONCLICK="no" id="a"/><script href="x.js"/><rect/>' +
+        '<foreignObject width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml">hi</div></foreignObject><FOREIGNOBJECT/><circle onmouseover=\'y()\' r="1"/><script type="text/ecmascript"><![CDATA[ if (a < b) {} ]]></script></svg>',
+      "p-",
+    );
+    expect(out).toBe('<g id="p-a"/><rect/><circle r="1"/>');
+  });
+
+  test("an href with any namespace prefix is carried over", () =>
+    expect(inlineSvg('<svg><use xl:href="#g"/><use xlink:href="#g"/><image xlink:href="data:x#g"/></svg>', "p-")).toBe(
+      '<use xl:href="#p-g"/><use xlink:href="#p-g"/><image xlink:href="data:x#g"/>',
+    ));
+
+  test("every quoting of url() is carried over", () =>
+    expect(inlineSvg(`<svg><g a="url(&quot;#g&quot;)" b='url("#g")' c="url('#g')" d="url( #g )" e="url(#g)"/></svg>`, "p-")).toBe(
+      `<g a="url(&quot;#p-g&quot;)" b='url("#p-g")' c="url('#p-g')" d="url(#p-g)" e="url(#p-g)"/>`,
+    ));
+
+  test("a closing tag with space before the > ends the root", () => expect(inlineSvg("<svg><g/></svg ><!-- after -->", "p-")).toBe("<g/>"));
+});
+
+describe("svgRootAttributes", () => {
+  test("is everything the nested element does not set itself, in source order", () =>
+    expect(
+      svgRootAttributes(
+        `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="r" x="1" y="2" width="3" height="4" viewBox="0 0 1 1" preserveAspectRatio="none" version="1.1" class="svglite" fill='none' style="stroke:url(#g)" xml:space="preserve"/>`,
+        "n1-",
+      ),
+    ).toBe(' xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" class="n1-svglite" fill="none" style="stroke:url(#n1-g)" xml:space="preserve"'));
+
+  test("without a prefix class names and references stay as they are", () =>
+    expect(svgRootAttributes('<svg class="a b" style="fill:url(#g)"/>')).toBe(' class="a b" style="fill:url(#g)"'));
+
+  test("event attributes are dropped whatever their case, and quotes in values are escaped", () =>
+    expect(svgRootAttributes(`<svg onload="x()" onClick='y()' font-family='"Times New Roman"'/>`)).toBe(' font-family="&quot;Times New Roman&quot;"'));
+
+  test("is empty when there is nothing to carry", () => {
+    expect(svgRootAttributes('<svg viewBox="0 0 1 1"/>')).toBe("");
+    expect(svgRootAttributes("not svg")).toBe("");
+  });
 });

@@ -1,0 +1,452 @@
+import { loadDocument } from "../../src/format/load";
+import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
+import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import type { ChangeEvent } from "../../src/model/store";
+import type { Document, FileNode } from "../../src/model/types";
+import { LinkFiguresView } from "../../src/view/figure-view";
+
+// The view's base class and everything it draws with are stubs: what is tested is how the view takes up a changed file.
+vi.mock("obsidian", () => {
+  class TextFileView {
+    app: unknown;
+    file: { path: string } | null = null;
+    data = "";
+    registered: unknown[] = [];
+    constructor(public leaf: { app: unknown }) {
+      this.app = leaf.app;
+    }
+    registerEvent(ref: unknown): void {
+      this.registered.push(ref);
+    }
+    registerDomEvent(): void {}
+    register(): void {}
+    requestSave = vi.fn();
+  }
+  return {
+    TextFileView,
+    Notice: class {},
+    TFile: class {},
+    Component: class {},
+    Modal: class {},
+    Setting: class {},
+    PluginSettingTab: class {},
+    Keymap: {},
+    MarkdownRenderer: {},
+    setIcon: () => {},
+    normalizePath: (p: string) => p,
+  };
+});
+vi.mock("../../src/export/export-modal", () => ({ ExportModal: class {} }));
+vi.mock("../../src/links/intake", () => ({ Intake: class {} }));
+vi.mock("../../src/view/inspector", () => ({ Inspector: class {} }));
+vi.mock("../../src/view/toolbar", () => ({ Toolbar: class {} }));
+
+const FIGURE_PATH = "figs/fig.lnkfig.md";
+
+function figure(): Document {
+  const doc = createDocument("nature-double");
+  const [page] = doc.pages;
+  const a = fileNodeDefaults(page, { file: "plot.png", subpath: "", show: "image" }, []);
+  const b = fileNodeDefaults(page, { file: "analysis", subpath: "#Figure 2 legend", show: "content" }, [a.id]);
+  const label = textNodeDefaults(page, { text: "A" }, [a.id, b.id]);
+  doc.nodes.push(a, b, label);
+  return doc;
+}
+
+const textOf = (doc: Document) => serializeFigureFile(doc, { ...emptyParsed(), preamble: "Notes.\n" });
+
+/** A view as Obsidian would have built it, with the parts that need a browser replaced by recorders. */
+function setup(initial: Document = figure()) {
+  const vaultHandlers = new Map<string, ((...args: unknown[]) => void)[]>();
+  const on = (name: string, cb: (...args: unknown[]) => void) => {
+    vaultHandlers.set(name, [...(vaultHandlers.get(name) ?? []), cb]);
+    return { name, cb };
+  };
+  const disk = { text: "" };
+  const app = { vault: { on, cachedRead: vi.fn(async () => disk.text) }, metadataCache: { on } };
+  const plugin = { app, registries: { nodeTypes: {} }, access: {}, decoders: {} };
+  const view = new LinkFiguresView({ app } as never, plugin as never);
+  const internals = view as unknown as Record<string, unknown>;
+
+  const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn() };
+  const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn() };
+  const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
+  Object.assign(internals, {
+    stageEl: { clientWidth: 0, clientHeight: 0, createDiv: () => ({ createDiv: () => ({}), createEl: () => ({}), remove: () => {} }) },
+    viewportEl: { show: () => {}, hide: () => {} },
+    nodeHost,
+    pageLayer: { render: vi.fn() },
+    pointer,
+    intake: { attach: vi.fn() },
+    selection,
+    toolbar: { render: () => {} },
+    inspector: { render: () => {} },
+  });
+  view.file = { path: FIGURE_PATH } as never;
+
+  const open = (doc: Document) => {
+    const text = textOf(doc);
+    disk.text = text;
+    view.data = text;
+    view.setViewData(text, true);
+    return text;
+  };
+  const text0 = open(initial);
+  const events: ChangeEvent[] = [];
+  const watch = () => view.store.subscribe((ev) => void events.push(ev));
+  let unwatch = watch();
+
+  /** Obsidian saw the file change: it records the text in `data` and calls `setViewData`. */
+  const obsidianLoads = (text: string) => {
+    disk.text = text;
+    view.data = text;
+    view.setViewData(text, false);
+  };
+  /** The vault says the figure file was modified. */
+  const vaultModifies = async (path = FIGURE_PATH) => {
+    for (const cb of vaultHandlers.get("modify") ?? []) cb({ path });
+    await vi.waitFor(() => expect(view.app.vault.cachedRead).toHaveBeenCalled(), { timeout: 200 }).catch(() => {});
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  };
+  const resetCalls = () => {
+    for (const fn of [nodeHost.reset, nodeHost.renderAll, nodeHost.resolveStale, nodeHost.applyChange, pointer.rebind, selection.clear]) fn.mockClear();
+    (view.app.vault.cachedRead as ReturnType<typeof vi.fn>).mockClear();
+    events.length = 0;
+  };
+  return { view, nodeHost, pointer, selection, disk, text0, events, obsidianLoads, vaultModifies, resetCalls, vaultHandlers, rewatch: () => { unwatch(); unwatch = watch(); } };
+}
+
+const link = (view: LinkFiguresView, index: number) => {
+  const node = view.store.doc.nodes[index] as FileNode;
+  return `${node.file}${node.subpath}`;
+};
+
+beforeEach(() => {
+  vi.stubGlobal("window", { requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, setTimeout, clearTimeout });
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("opening", () => {
+  test("a figure that was opened is loaded, with nothing of an earlier one kept", () => {
+    const t = setup();
+    expect(t.view.store.doc.nodes).toHaveLength(3);
+    expect(t.nodeHost.reset).toHaveBeenCalled();
+    expect(t.nodeHost.renderAll).toHaveBeenCalledTimes(2); // the blank stand-in, then the figure
+    expect(t.nodeHost.resolveStale).toHaveBeenCalled();
+    expect(t.view.getViewData()).toBe(t.text0);
+  });
+});
+
+describe("a source renamed: Obsidian rewrites the Links section and hands the text to setViewData", () => {
+  test("the open figure is kept: same store, history, selection and drawing; only the renamed panel is told", () => {
+    const t = setup();
+    const store = t.view.store;
+    store.commit("move", (d) => void (d.nodes[1].x = 40));
+    const edited = serializeFigureFile(store.doc, t.view.parsed);
+    t.resetCalls();
+
+    t.obsidianLoads(edited.replace("![[plot.png]]", "![[plot2.png]]"));
+
+    expect(t.view.store).toBe(store);
+    expect(link(t.view, 0)).toBe("plot2.png");
+    expect(link(t.view, 1)).toBe("analysis#Figure 2 legend");
+    expect(t.events).toHaveLength(1);
+    expect(t.events[0]).toMatchObject({ kind: "replace", label: "links", pagesChanged: false });
+    expect([...t.events[0].changedNodeIds]).toEqual([store.doc.nodes[0].id]);
+    // Nothing was loaded anew.
+    expect(t.nodeHost.reset).not.toHaveBeenCalled();
+    expect(t.nodeHost.renderAll).not.toHaveBeenCalled();
+    expect(t.pointer.rebind).not.toHaveBeenCalled();
+    expect(t.selection.clear).not.toHaveBeenCalled();
+    // Undo still takes the move back, and leaves the link as it now is.
+    expect(store.canUndo()).toBe(true);
+    store.undo();
+    expect(store.doc.nodes[1].x).toBe(0);
+    expect(link(t.view, 0)).toBe("plot2.png");
+  });
+
+  test("it is not an edit: nothing is saved, and what is saved afterwards carries the new link", () => {
+    const t = setup();
+    const renamed = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    t.obsidianLoads(renamed);
+    expect((t.view as unknown as { requestSave: ReturnType<typeof vi.fn> }).requestSave).not.toHaveBeenCalled();
+    // Untouched, the figure goes back byte for byte as the file now is.
+    expect(t.view.getViewData()).toBe(renamed);
+    t.view.store.commit("move", (d) => void (d.nodes[1].x = 5));
+    expect(t.view.getViewData()).toContain("![[plot2.png]]");
+    expect(t.view.getViewData()).not.toContain("![[plot.png]]");
+  });
+
+  test("a heading renamed in the note, and a file moved to another folder, are handled the same way", () => {
+    const t = setup();
+    t.obsidianLoads(t.text0.replace("![[analysis#Figure 2 legend]]", "![[analysis#Legend]]").replace("![[plot.png]]", "![[plots/plot.png]]"));
+    expect(link(t.view, 0)).toBe("plots/plot.png");
+    expect(link(t.view, 1)).toBe("analysis#Legend");
+  });
+
+  test("a rename that is undone outside brings the old link back", () => {
+    const t = setup();
+    t.obsidianLoads(t.text0.replace("![[plot.png]]", "![[plot2.png]]"));
+    t.obsidianLoads(t.text0);
+    expect(link(t.view, 0)).toBe("plot.png");
+  });
+
+  test("the same text again changes nothing and draws nothing", () => {
+    const t = setup();
+    const store = t.view.store;
+    t.resetCalls();
+    t.obsidianLoads(t.text0);
+    expect(t.view.store).toBe(store);
+    expect(t.nodeHost.renderAll).not.toHaveBeenCalled();
+    expect(t.nodeHost.applyChange).not.toHaveBeenCalled();
+    expect(t.events).toEqual([]);
+  });
+
+  test("with unsaved edits in the figure, Obsidian's merged text is taken up without losing them", () => {
+    const t = setup();
+    const store = t.view.store;
+    store.commit("move", (d) => void (d.nodes[2].x = 77));
+    const merged = serializeFigureFile(store.doc, t.view.parsed).replace("![[plot.png]]", "![[plot2.png]]");
+    t.obsidianLoads(merged);
+    expect(t.view.store).toBe(store);
+    expect(store.doc.nodes[2].x).toBe(77);
+    expect(link(t.view, 0)).toBe("plot2.png");
+    expect(t.view.getViewData()).toBe(merged);
+  });
+
+  test("a file in an odd format (minified JSON) is still told apart by what it says, not how it is written", () => {
+    const t = setup();
+    const store = t.view.store;
+    const written = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    const json = /```lnkfig\n([\s\S]*?)\n```/.exec(written)![1];
+    t.obsidianLoads(written.replace(json, JSON.stringify(JSON.parse(json))));
+    expect(t.view.store).toBe(store);
+    expect(link(t.view, 0)).toBe("plot2.png");
+  });
+});
+
+describe("any other change to the file is loaded anew", () => {
+  test("a figure that differs in more than its links gets a new store, and keeps what is still valid of what was resolved", () => {
+    const t = setup();
+    const store = t.view.store;
+    store.commit("move", (d) => void (d.nodes[1].x = 1));
+    t.resetCalls();
+    const other = structuredClone(figure());
+    other.nodes = structuredClone(t.view.store.doc.nodes);
+    other.pages = structuredClone(t.view.store.doc.pages);
+    (other.nodes[2] as { text: string }).text = "B";
+
+    t.obsidianLoads(textOf(other).replace("![[plot.png]]", "![[plot2.png]]"));
+
+    expect(t.view.store).not.toBe(store);
+    expect(t.view.store.canUndo()).toBe(false);
+    expect(link(t.view, 0)).toBe("plot2.png");
+    expect(t.pointer.rebind).toHaveBeenCalled();
+    expect(t.selection.clear).toHaveBeenCalled();
+    expect(t.nodeHost.renderAll).toHaveBeenCalledTimes(1);
+    // The same file read again: resolutions of unchanged links are kept for `renderAll` to find.
+    expect(t.nodeHost.reset).not.toHaveBeenCalled();
+    expect(t.nodeHost.resolveStale).toHaveBeenCalledTimes(1);
+  });
+
+  test("a different file (clear) forgets every resolution", () => {
+    const t = setup();
+    t.resetCalls();
+    t.view.setViewData(textOf(figure()), true);
+    expect(t.nodeHost.reset).toHaveBeenCalled();
+  });
+
+  test("a file that cannot be read is shown as it is, and not touched", () => {
+    const t = setup();
+    t.obsidianLoads("---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{ not json\n```\n");
+    expect(t.view.readOnly).toBe(true);
+    expect(t.view.getViewData()).toContain("{ not json");
+  });
+});
+
+describe("reloadLinks", () => {
+  test("does nothing before a figure is loaded, and for a file that could not be read", () => {
+    const t = setup();
+    t.obsidianLoads("---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{ not json\n```\n");
+    t.resetCalls();
+    t.view.reloadLinks(t.text0.replace("![[plot.png]]", "![[plot2.png]]"));
+    expect(t.events).toEqual([]);
+  });
+
+  test("ignores text that is not a figure file, or whose code block is open", () => {
+    const t = setup();
+    t.resetCalls();
+    t.view.reloadLinks("just a note\n");
+    t.view.reloadLinks("---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{");
+    expect(link(t.view, 0)).toBe("plot.png");
+    expect(t.events).toEqual([]);
+  });
+
+  test("a Links section with the same targets is no event at all", () => {
+    const t = setup();
+    t.resetCalls();
+    t.view.reloadLinks(t.text0);
+    expect(t.events).toEqual([]);
+  });
+
+  test("reads the Links section only: the rest of the text is not applied", () => {
+    const t = setup();
+    const moved = figure();
+    moved.nodes = structuredClone(t.view.store.doc.nodes);
+    moved.pages = structuredClone(t.view.store.doc.pages);
+    moved.nodes[0].x = 999;
+    t.view.reloadLinks(textOf(moved).replace("![[plot.png]]", "![[plot2.png]]"));
+    expect(link(t.view, 0)).toBe("plot2.png");
+    expect(t.view.store.doc.nodes[0].x).toBe(0);
+  });
+});
+
+describe("the figure file modified (the fallback for a change setViewData is not told of)", () => {
+  async function opened() {
+    const t = setup();
+    await t.view.onOpen();
+    t.resetCalls();
+    return t;
+  }
+
+  test("onOpen listens for modifications of the file", async () => {
+    const t = await opened();
+    expect(t.vaultHandlers.get("modify")?.length).toBe(2); // the link watcher, and the view's own
+  });
+
+  test("a rewritten Links section is applied when setViewData never hears of it", async () => {
+    const t = await opened();
+    const reload = vi.spyOn(t.view, "reloadLinks");
+    t.disk.text = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    await t.vaultModifies();
+    expect(reload).toHaveBeenCalledWith(t.disk.text);
+    expect(link(t.view, 0)).toBe("plot2.png");
+  });
+
+  test("keeps the history and the figure it had", async () => {
+    const t = await opened();
+    const store = t.view.store;
+    store.commit("move", (d) => void (d.nodes[1].x = 3));
+    t.disk.text = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    await t.vaultModifies();
+    expect(t.view.store).toBe(store);
+    expect(store.canUndo()).toBe(true);
+    expect(store.doc.nodes[1].x).toBe(3);
+    expect(link(t.view, 0)).toBe("plot2.png");
+  });
+
+  test("the view's own save is left alone, whether Obsidian has recorded it in data or it is what the view would write", async () => {
+    const t = await opened();
+    const store = t.view.store;
+    store.commit("move", (d) => void (d.nodes[1].x = 3));
+    const reload = vi.spyOn(t.view, "reloadLinks");
+    const saved = t.view.getViewData();
+    t.disk.text = saved;
+    t.view.data = saved;
+    await t.vaultModifies();
+    // And the case where an edit came in between the save and the event.
+    store.commit("move", (d) => void (d.nodes[1].x = 4));
+    await t.vaultModifies();
+    expect(reload).not.toHaveBeenCalled();
+    // What the view would write as it stands is no news either, whatever `data` holds.
+    t.view.data = "";
+    t.disk.text = t.view.getViewData();
+    await t.vaultModifies();
+    expect(reload).not.toHaveBeenCalled();
+    expect(link(t.view, 0)).toBe("plot.png");
+    expect(store.doc.nodes[1].x).toBe(4);
+    expect(t.view.getViewData()).toContain('"x": 4');
+  });
+
+  test("a change setViewData already took up is not applied twice", async () => {
+    const t = await opened();
+    t.rewatch();
+    const renamed = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    t.obsidianLoads(renamed);
+    expect(t.events).toHaveLength(1);
+    const reload = vi.spyOn(t.view, "reloadLinks");
+    await t.vaultModifies();
+    expect(reload).not.toHaveBeenCalled();
+    expect(t.events).toHaveLength(1);
+  });
+
+  test("and when the fallback gets there first, setViewData finds nothing left to do", async () => {
+    const t = await opened();
+    t.rewatch();
+    const renamed = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    t.disk.text = renamed;
+    await t.vaultModifies();
+    expect(t.events).toHaveLength(1);
+    t.obsidianLoads(renamed);
+    expect(t.events).toHaveLength(1);
+    expect(t.nodeHost.renderAll).not.toHaveBeenCalled();
+    expect(t.view.getViewData()).toBe(renamed);
+  });
+
+  test("another file's modification is not ours", async () => {
+    const t = await opened();
+    t.disk.text = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    await t.vaultModifies("figs/other.lnkfig.md");
+    expect(t.view.app.vault.cachedRead).not.toHaveBeenCalled();
+    expect(link(t.view, 0)).toBe("plot.png");
+  });
+
+  test("follows the figure file when it is renamed", async () => {
+    const t = await opened();
+    t.view.file = { path: "moved/fig.lnkfig.md" } as never;
+    t.disk.text = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    await t.vaultModifies(FIGURE_PATH);
+    expect(link(t.view, 0)).toBe("plot.png");
+    await t.vaultModifies("moved/fig.lnkfig.md");
+    expect(link(t.view, 0)).toBe("plot2.png");
+  });
+
+  test("a figure that has since been switched to another file is left alone", async () => {
+    const t = await opened();
+    t.disk.text = t.text0.replace("![[plot.png]]", "![[plot2.png]]");
+    const read = t.view.app.vault.cachedRead as ReturnType<typeof vi.fn>;
+    read.mockImplementationOnce(async () => {
+      t.view.file = { path: "figs/another.lnkfig.md" } as never;
+      return t.disk.text;
+    });
+    await t.vaultModifies();
+    expect(link(t.view, 0)).toBe("plot.png");
+  });
+
+  test("a failing read, and a file that could not be read as a figure, are left alone", async () => {
+    const t = await opened();
+    (t.view.app.vault.cachedRead as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
+    await t.vaultModifies();
+    expect(link(t.view, 0)).toBe("plot.png");
+    t.disk.text = "no longer a figure";
+    await t.vaultModifies();
+    expect(link(t.view, 0)).toBe("plot.png");
+  });
+});
+
+describe("the nodes the watcher is told are missing", () => {
+  test("are the file nodes whose resolution says the file, or the image in the note, was not found", () => {
+    const t = setup();
+    const [a, b] = t.view.store.doc.nodes;
+    t.view.resolvedCache.set(a.id, { kind: "missing", reason: "file", deps: [] });
+    t.view.resolvedCache.set(b.id, { kind: "missing", reason: "subpath", deps: [] });
+    // The watcher's provider is the last constructor argument; what it asks is answered from the view's own state.
+    const watcher = t.view.watcher as unknown as { missingIds: () => string[] };
+    expect(watcher.missingIds()).toEqual([a.id]);
+    t.view.resolvedCache.set(b.id, { kind: "missing", reason: "no-image", deps: [] });
+    expect(watcher.missingIds()).toEqual([a.id, b.id]);
+  });
+});
+
+test("the node a text label stands for is never reloaded as a file", () => {
+  const t = setup();
+  const label = t.view.store.doc.nodes[2];
+  t.obsidianLoads(t.text0.replace("![[plot.png]]", "![[plot2.png]]"));
+  expect(t.view.store.doc.nodes[2]).toBe(label);
+  expect(loadDocument(t.view.getViewData()).doc.nodes[2]).toEqual(label);
+});

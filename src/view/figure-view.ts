@@ -3,11 +3,12 @@ import type { EditorView } from "../commands/builtin";
 import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FormatError, NotFigureError } from "../format/errors";
+import { applyLinkEntries, classifyReload } from "../format/links-reload";
 import { loadDocument } from "../format/load";
-import type { ParsedFigureFile } from "../format/parse";
+import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
-import { InvalidationIndex } from "../links/invalidation";
+import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
 import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
@@ -82,9 +83,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   constructor(leaf: WorkspaceLeaf, readonly plugin: LinkFiguresPlugin) {
     super(leaf);
-    this.watcher = new LinkWatcher(plugin.app, this.index, (ids) => {
-      void this.nodeHost.resolve(ids);
-    });
+    this.watcher = new LinkWatcher(
+      plugin.app,
+      this.index,
+      (ids) => {
+        void this.nodeHost.resolve(ids);
+      },
+      () => missingNodeIds(this.store.doc.nodes, this.resolvedCache),
+    );
   }
 
   getViewType(): string {
@@ -110,6 +116,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.resizeObserver = new ResizeObserver(() => this.fitWhenSized());
     this.resizeObserver.observe(this.stageEl);
     this.watcher.start(this);
+    // Obsidian rewrites the Links section of a figure file when a source is renamed. `TextFileView` hands such a change
+    // to `setViewData`, but this does not depend on that: whichever of the two sees it first applies it, the other finds nothing left to do.
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file.path === this.file?.path) void this.onExternalModify();
+      }),
+    );
   }
 
   async onClose(): Promise<void> {
@@ -141,13 +154,66 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.showError(describeLoadError(error), data);
       return;
     }
+    // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
+    const reload = !clear && this.loaded && !this.readOnly;
+    if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
-    this.setDocument(loaded.doc, loaded.parsed);
+    this.setDocument(loaded.doc, loaded.parsed, reload);
     this.rawText = data;
     this.serializedAtLoad = serializeFigureFile(loaded.doc, loaded.parsed);
     this.loaded = true;
     this.scheduleFit();
+  }
+
+  /**
+   * Takes up `data`, the text the file now has, without loading it anew when the open figure already is that figure,
+   * or differs only in the link targets of its panels: selection, history and what is drawn stay. False when it is
+   * anything else, which the caller loads.
+   */
+  private adoptReload(data: string, loaded: ReturnType<typeof loadDocument>): boolean {
+    const kind = classifyReload({ doc: this.store.doc, parsed: this.parsed }, loaded);
+    if (kind === "other") return false;
+    if (kind === "links") this.reloadLinks(data);
+    // The file is what the figure is now, so an untouched figure goes back byte for byte as it was read.
+    this.rawText = data;
+    this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
+    return true;
+  }
+
+  /**
+   * Applies the link targets in the Links section of `text` to the open figure, for the nodes whose target differs: Obsidian
+   * rewrites that section when a source file is renamed. Nothing else in `text` is read, and nothing else changes, so the
+   * selection, the drawn panels and the undo history stay; a panel keeps showing what it showed until its new target is resolved.
+   */
+  reloadLinks(text: string): void {
+    if (!this.loaded || this.readOnly) return;
+    let links: ParsedFigureFile["links"];
+    try {
+      links = parseFigureFile(text).links;
+    } catch {
+      return; // Not a figure file that can be read: what is open stays, and `setViewData` is where that is reported.
+    }
+    this.parsed = { ...this.parsed, links };
+    const { doc, changedIds } = applyLinkEntries(this.store.doc, links);
+    // The store tells the node host, which resolves just these nodes, and the view does not save: the file already says this.
+    if (changedIds.length > 0) this.store.replace(doc, "links", { keepHistory: true });
+  }
+
+  /** The figure file was modified. Whoever wrote it, if it was not this view, its Links section may have been rewritten. */
+  private async onExternalModify(): Promise<void> {
+    const file = this.file;
+    if (!file || !this.loaded || this.readOnly) return;
+    let text: string;
+    try {
+      text = await this.app.vault.cachedRead(file);
+    } catch {
+      return;
+    }
+    if (this.file !== file) return;
+    // This view's own save (Obsidian has recorded what it wrote in `data` by now), or a change that `setViewData` already took up.
+    if (text === this.data || text === this.getViewData()) return;
+    this.reloadLinks(text);
   }
 
   clear(): void {
@@ -409,12 +475,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.viewportEl.show();
   }
 
-  /** Swaps in a fresh store and drops everything derived from the previous document. */
-  private setDocument(doc: Document, parsed: ParsedFigureFile): void {
+  /**
+   * Swaps in a fresh store and drops everything derived from the previous document. With `keepResolutions` (the same
+   * file read again) what was resolved for a node whose link is the same is kept, and only the rest is resolved.
+   */
+  private setDocument(doc: Document, parsed: ParsedFigureFile, keepResolutions = false): void {
     this.ensureDom();
     this.unsubscribe?.();
-    for (const node of this.store.doc.nodes) this.index.untrack(node.id);
-    this.resolvedCache.clear();
+    if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;
     const store = new DocumentStore(doc, () => this.pointer.commitTime());
     this.store = store;
@@ -423,16 +491,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.pointer.rebind();
     this.pageLayer.render(doc);
     this.nodeHost.renderAll(doc);
-    void this.nodeHost.resolve(doc.nodes.map((n) => n.id));
+    void this.nodeHost.resolveStale();
     this.unsubscribe = store.subscribe((ev) => {
       if (ev.pagesChanged) this.pageLayer.render(store.doc);
-      if (ev.kind === "replace") {
-        // Same page ids and node ids can survive a reload, so nothing already drawn is trusted.
-        this.nodeHost.renderAll(store.doc);
-        void this.nodeHost.resolve(store.doc.nodes.map((n) => n.id));
-      } else {
-        this.nodeHost.applyChange(store.doc, ev.changedNodeIds);
-      }
+      // A `replace` names the nodes that differ, like an edit does; the node host resolves again only those whose link changed.
+      this.nodeHost.applyChange(store.doc, ev.changedNodeIds);
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
       if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") this.requestSave();
       this.renderChrome();

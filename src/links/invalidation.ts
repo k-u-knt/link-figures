@@ -1,4 +1,5 @@
-import type { NodeId } from "../model/types";
+import type { Node, NodeId } from "../model/types";
+import type { Resolved } from "./types";
 
 /** Which nodes depend on which vault paths, so a changed file maps back to the nodes to re-resolve. */
 export class InvalidationIndex {
@@ -47,4 +48,18 @@ export class InvalidationIndex {
     if (nodes) nodes.add(nodeId);
     else this.nodesByPath.set(path, new Set([nodeId]));
   }
+}
+
+/**
+ * The file nodes, in document order, whose link led nowhere because there was no file, or no image in the note, to follow
+ * it to: a file that appears may mend them. A node that is not resolved yet is not missing, and one that failed on a
+ * heading or on decoding is not helped by a new file.
+ */
+export function missingNodeIds(nodes: readonly Node[], resolved: ReadonlyMap<NodeId, Resolved>): NodeId[] {
+  return nodes
+    .filter((node) => {
+      const result = node.type === "file" ? resolved.get(node.id) : undefined;
+      return result?.kind === "missing" && (result.reason === "file" || result.reason === "no-image");
+    })
+    .map((node) => node.id);
 }

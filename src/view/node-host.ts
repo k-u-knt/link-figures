@@ -57,18 +57,34 @@ export class NodeHost {
     };
   }
 
-  /** Draws every node afresh: unmounts what is drawn, clears the pages' node hosts, mounts `doc`'s nodes. Resolving is the caller's. */
+  /**
+   * Draws every node afresh: unmounts what is drawn, clears the pages' node hosts, mounts `doc`'s nodes. What was
+   * resolved is kept for each file node whose link is still the one it was resolved for (a resolution still under way
+   * included), so a node drawn again shows its image at once; the rest is forgotten. Resolving what is left is `resolveStale`.
+   */
   renderAll(doc: Document): void {
     for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
     this.entries.clear();
-    this.resolvedKeys.clear();
-    this.tokens.clear();
     // The same page ids survive an external reload, so what the old nodes left in their hosts is cleared explicitly.
     for (const page of doc.pages) this.hostFor(page.id)?.replaceChildren();
 
-    const ids = new Set(doc.nodes.map((n) => n.id));
-    for (const id of [...this.view.resolvedCache.keys()]) if (!ids.has(id)) this.forgetResolution(id);
+    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+    for (const id of this.knownIds()) {
+      const node = byId.get(id);
+      if (node?.type !== "file" || this.resolvedKeys.get(id) !== linkKey(node)) this.forgetResolution(id);
+    }
     for (const node of doc.nodes) this.mountNode(node);
+  }
+
+  /** Forgets every resolution: for a document that has nothing to do with the one before it. Draws nothing. */
+  reset(): void {
+    for (const id of this.knownIds()) this.forgetResolution(id);
+  }
+
+  /** Resolves the file nodes of the view's document whose link has not been resolved yet, or has changed since. */
+  resolveStale(): Promise<void> {
+    const stale = this.view.store.doc.nodes.filter((n) => n.type === "file" && this.resolvedKeys.get(n.id) !== linkKey(n));
+    return this.resolve(stale.map((n) => n.id));
   }
 
   /** Brings the drawn nodes in line with `doc` after `changed` nodes were added, removed or edited. Pages are already rendered. */
@@ -197,6 +213,11 @@ export class NodeHost {
     if (entry) this.unmountEntry(id, entry);
     this.entries.delete(id);
     this.forgetResolution(id);
+  }
+
+  /** Every node that has a resolution, or one under way. */
+  private knownIds(): Set<NodeId> {
+    return new Set([...this.resolvedKeys.keys(), ...this.tokens.keys(), ...this.view.resolvedCache.keys()]);
   }
 
   private forgetResolution(id: NodeId): void {

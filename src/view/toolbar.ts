@@ -1,0 +1,53 @@
+import { setIcon } from "obsidian";
+import type { Command, CommandContext } from "../registry/command";
+import type { LinkFiguresView } from "./figure-view";
+
+/** The toolbar from the command registry: one icon button per command, a separator between groups. Buttons are disabled when their command does not apply. */
+export class Toolbar {
+  private readonly buttons = new Map<string, HTMLButtonElement>();
+  /** What the buttons were built from, so that a change in the registry (and only that) rebuilds them. */
+  private built = "";
+
+  constructor(private readonly view: LinkFiguresView, private readonly el: HTMLElement) {}
+
+  render(): void {
+    const commands = this.view.plugin.registries.commands.all();
+    const signature = commands.map((c) => `${c.group}/${c.id}/${c.icon ?? ""}/${c.name}`).join("|");
+    // The buttons outlive a change in the document, so a button that has the focus keeps it.
+    if (signature !== this.built) this.build(commands, signature);
+    const ctx = this.view.commandContext();
+    for (const command of commands) {
+      const button = this.buttons.get(command.id);
+      if (button) button.disabled = this.view.readOnly || !applies(command, ctx);
+    }
+  }
+
+  private build(commands: Command[], signature: string): void {
+    this.built = signature;
+    this.el.empty();
+    this.buttons.clear();
+    let group: string | null = null;
+    for (const command of commands) {
+      if (group !== null && command.group !== group) this.el.createDiv({ cls: "lf-sep" });
+      group = command.group;
+      const button = this.el.createEl("button", { cls: "clickable-icon", attr: { type: "button", "aria-label": command.name } });
+      setIcon(button, command.icon ?? "square");
+      button.addEventListener("click", () => {
+        // Keys (Delete, Cmd+Z) belong to the stage, and the button has just taken the focus from it. It also commits an inspector field being typed in.
+        this.view.stageEl.focus({ preventScroll: true });
+        this.view.runCommand(command);
+      });
+      this.buttons.set(command.id, button);
+    }
+  }
+}
+
+/** A command that cannot tell whether it applies does not. */
+function applies(command: Command, ctx: CommandContext): boolean {
+  try {
+    return command.applies(ctx);
+  } catch (error) {
+    console.error(`Link Figures: could not tell whether "${command.name}" applies`, error);
+    return false;
+  }
+}

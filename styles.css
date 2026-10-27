@@ -6,11 +6,15 @@
   height: 100%;
 }
 
+/* The toolbar is generated from the command registry: icon buttons, a separator between groups. */
 .lf-toolbar {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--size-4-1);
+  padding: var(--size-4-1) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .lf-toolbar:empty,
@@ -18,8 +22,81 @@
   display: none;
 }
 
+.lf-toolbar .clickable-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.lf-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: var(--size-4-1) var(--size-4-1);
+  background-color: var(--background-modifier-border);
+}
+
+/* The inspector is generated from fields: a column of label and control rows. */
 .lf-inspector {
   flex: none;
+  box-sizing: border-box;
+  width: 240px;
+  overflow-y: auto;
+  padding: var(--size-4-3);
+  border-left: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.lf-inspector-title {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.lf-inspector-sub {
+  margin-bottom: var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.lf-field {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-2);
+}
+
+.lf-field-label {
+  flex: 0 0 84px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.lf-field-control {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.lf-field-control input[type="number"],
+.lf-field-control input[type="text"],
+.lf-field-control select {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.lf-field-control input[type="color"] {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.lf-unit {
+  flex: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
 }
 
 /* The stage with the inspector beside it. */

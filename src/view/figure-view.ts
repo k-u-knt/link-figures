@@ -1,4 +1,5 @@
-import { TextFileView, type WorkspaceLeaf } from "obsidian";
+import { Notice, TextFileView, type PaneType, type WorkspaceLeaf } from "obsidian";
+import type { EditorView } from "../commands/builtin";
 import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { FormatError, NotFigureError } from "../format/errors";
 import { loadDocument } from "../format/load";
@@ -13,12 +14,14 @@ import { createDocument } from "../model/defaults";
 import type { Pt, Rect } from "../model/geometry";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
-import type { FigureViewLike } from "../registry/command";
+import type { Command, CommandContext } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
+import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
 import { isEditable, PointerController } from "./pointer";
 import { SelectionState } from "./selection";
+import { Toolbar } from "./toolbar";
 import { nearestPage, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
@@ -34,7 +37,7 @@ function describeLoadError(error: unknown): string {
 }
 
 /** The figure view's lifecycle: build the DOM, load a figure file into a store, save it back. Rendering lives elsewhere. */
-export class LinkFiguresView extends TextFileView implements FigureViewLike {
+export class LinkFiguresView extends TextFileView implements EditorView {
   store: DocumentStore = new DocumentStore(blankDocument());
   parsed: ParsedFigureFile = emptyParsed();
   readonly index = new InvalidationIndex();
@@ -54,6 +57,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   selection!: SelectionState;
   private pointer!: PointerController;
   private intake!: Intake;
+  private toolbar!: Toolbar;
+  private inspector!: Inspector;
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
@@ -153,6 +158,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     // A file is about to be loaded (or none): whichever comes next starts from a fitted page, an edit reload of the same file does not.
     this.needsFit = true;
     this.clearError();
+    this.renderChrome();
   }
 
   /** Replaces the stage content with a banner and the raw text, and makes the view read-only. */
@@ -170,6 +176,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     });
     box.createEl("pre", { cls: "lf-error-raw", text: raw });
     this.errorEl = box;
+    this.renderChrome();
   }
 
   // FigureViewLike. Stubs until the tasks named beside each one.
@@ -217,6 +224,37 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     // Task 14 opens the export modal
   }
 
+  // What the commands, the toolbar and the inspector use.
+
+  commandContext(): CommandContext {
+    return { app: this.app, view: this, store: this.store, selection: this.selectedIds(), page: this.currentPage() };
+  }
+
+  /** Runs `command` on the current context, if it applies; a failure is shown to the user rather than lost. */
+  runCommand(command: Command): void {
+    const ctx = this.commandContext();
+    if (this.readOnly || !command.applies(ctx)) return;
+    const fail = (error: unknown): void => {
+      console.error(`Link Figures: "${command.name}" failed`, error);
+      new Notice(`Link Figures: "${command.name}" failed. ${error instanceof Error ? error.message : String(error)}`);
+    };
+    try {
+      void Promise.resolve(command.run(ctx)).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  /** The Delete key's own action: the selected nodes that are not locked are removed, and their links forgotten. */
+  deleteSelection(): boolean {
+    return this.pointer.deleteSelected();
+  }
+
+  /** Opens a link target from this figure's place in the vault, in a new tab when asked to (the badge on a node, and the Open source command). */
+  openLink(linktext: string, newLeaf: PaneType | boolean = false): void {
+    void this.app.workspace.openLinkText(linktext, this.file?.path ?? "", newLeaf);
+  }
+
   /** Builds `.lf-view` once; `onOpen`, `showError` and `setDocument` all call it because `setViewData` may run before `onOpen`. */
   private ensureDom(): void {
     if (this.stageEl) return;
@@ -235,7 +273,21 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.selection = new SelectionState();
     this.pointer = new PointerController(this);
     this.intake = new Intake(this);
+    // Once per view: they read `store` when they render, so a new store needs nothing from them (`setDocument` re-renders).
+    this.toolbar = new Toolbar(this, this.toolbarEl);
+    this.inspector = new Inspector(this, this.inspectorEl);
+    this.selection.onChange(() => this.renderChrome());
     this.applyViewport();
+  }
+
+  /** Brings the toolbar and the inspector in line with the document and the selection. An edit must never fail because a panel could not draw. */
+  private renderChrome(): void {
+    try {
+      this.toolbar.render();
+      this.inspector.render();
+    } catch (error) {
+      console.error("Link Figures: could not draw the toolbar or the inspector", error);
+    }
   }
 
   /** Wheel zoom and pan, and drag-to-pan with the middle button or the space bar. */
@@ -371,6 +423,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
       }
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
       if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") this.requestSave();
+      this.renderChrome();
     });
+    this.renderChrome();
   }
 }

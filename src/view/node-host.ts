@@ -52,9 +52,7 @@ export class NodeHost {
         return view.file?.path ?? "";
       },
       resolved: (id) => view.resolvedCache.get(id),
-      openLink: (linktext, evt) => {
-        void view.app.workspace.openLinkText(linktext, view.file?.path ?? "", Keymap.isModEvent(evt));
-      },
+      openLink: (linktext, evt) => view.openLink(linktext, Keymap.isModEvent(evt)),
       component: view,
     };
   }

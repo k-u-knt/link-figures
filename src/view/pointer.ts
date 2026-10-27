@@ -376,7 +376,8 @@ export class PointerController {
     return true;
   }
 
-  private deleteSelected(): boolean {
+  /** Deletes the selected nodes that are not locked (the Delete key, and the Delete command). Whether there were any. */
+  deleteSelected(): boolean {
     const ids = this.editableSelection(this.store.doc);
     if (ids.size === 0) return false;
     this.store.commit("delete", (draft) => {

@@ -1,4 +1,5 @@
 import { MarkdownView, Notice, Plugin, type TFile, type WorkspaceLeaf } from "obsidian";
+import { registerBuiltinCommands } from "./commands/builtin";
 import { VIEW_TYPE } from "./constants";
 import { createDecoders } from "./links/decoders";
 import { ObsidianVaultAccess } from "./links/obsidian-access";
@@ -24,6 +25,7 @@ export default class LinkFiguresPlugin extends Plugin {
     await this.loadSettings();
 
     this.registries.nodeTypes.register(fileNodeType);
+    registerBuiltinCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     installOpenHook(this);
 
@@ -57,6 +59,11 @@ export default class LinkFiguresPlugin extends Plugin {
 
     this.addRibbonIcon("image", "New figure", () => void this.attempt("create the figure", () => this.newFigure()));
     this.addSettingTab(new LinkFiguresSettingTab(this.app, this));
+  }
+
+  /** The figure view that has the focus, for the palette commands. */
+  activeFigureView(): LinkFiguresView | null {
+    return this.app.workspace.getActiveViewOfType(LinkFiguresView);
   }
 
   async loadSettings(): Promise<void> {

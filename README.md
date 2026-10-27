@@ -40,6 +40,10 @@ PDF export sets text in the built-in Helvetica for Arial and Helvetica, and in T
 | Export folder | empty | Folder for exported files. Empty saves them next to the figure. |
 | Export resolution | 300 dpi | Dots per inch for what is drawn as pixels, from 72 to 1200. |
 
+## Security
+
+An SVG panel is inlined into the figure's document on export, so the linked file's markup is cleaned first. The sanitiser removes `<script>` and `<foreignObject>` elements (under any namespace prefix) with everything they hold, every `on…` event attribute, every `href` (under any prefix) that does not point into the document (`#id`) or carry inline data (`data:`), `javascript:` links included, and every `url()` in an attribute or a `<style>` rule that does not; `<style>` at-rules (`@import`, `@font-face`, `@media`) go too, and the remaining rules are scoped to the panel. Each reference removed is reported in the export's warnings. The markup is read with a tokenizer rather than regular expressions, so that a stray quote cannot hide an attribute, every tag is written again from the attributes it keeps, and the cleaning is repeated until nothing changes, so that removing one thing cannot leave another behind. This matters for the PDF export, which fetches what `<image>` points at and turns `<a>` into link annotations, and for the SVG export when a browser opens it.
+
 ## Spike results
 
 Milestone 1 also settles three things the design leaves open. Run each check in Obsidian (with the test vault, below) and fill in the result.

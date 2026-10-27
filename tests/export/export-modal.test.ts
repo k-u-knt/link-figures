@@ -149,3 +149,55 @@ test("a figure with an empty page exports a sheet of paper", async () => {
   expect(out).toEqual({ files: 1, warnings: [] });
   expect(text(vault.content.get("Blank - Page 1.svg"))).toContain('<rect width="793.7007874015749" height="1122.5196850393702" fill="#ffffff"/>');
 });
+
+/** A figure of pages with the given names, each a different size so that their files can be told apart. */
+function namedPages(...names: string[]) {
+  const doc = createDocument("nature-double");
+  doc.pages[0].name = names[0];
+  for (const name of names.slice(1)) doc.pages.push({ ...createPage("a4-portrait", doc.pages.map((p) => p.id), name), width: 100 + doc.pages.length });
+  return doc;
+}
+
+test("two pages with the same name are written to two files, and the rename is a warning", async () => {
+  const doc = namedPages("Page 2", "Page 2");
+  const { vault, app } = world();
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+  );
+  expect(out.files).toBe(2);
+  expect(vault.calls).toEqual(["createBinary Fig - Page 2.svg", "createBinary Fig - Page 2 (2).svg"]);
+  expect(text(vault.content.get("Fig - Page 2.svg"))).toContain('width="183mm"');
+  expect(text(vault.content.get("Fig - Page 2 (2).svg"))).toContain('width="101mm"');
+  expect(out.warnings).toEqual(["Page name 'Fig - Page 2.svg' is used more than once; wrote 'Fig - Page 2 (2).svg'"]);
+});
+
+test("names that only become the same once unsafe characters are replaced do not overwrite each other", async () => {
+  const doc = namedPages("A/B", "A:B", "A?B");
+  const { vault, app } = world();
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300 },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+  );
+  expect(out.files).toBe(3);
+  expect(vault.calls).toEqual([
+    "createFolder out",
+    "createBinary out/Fig - A-B.svg",
+    "createBinary out/Fig - A-B (2).svg",
+    "createBinary out/Fig - A-B (3).svg",
+  ]);
+  expect(out.warnings).toEqual([
+    "Page name 'Fig - A:B.svg' is used more than once; wrote 'Fig - A-B (2).svg'",
+    "Page name 'Fig - A?B.svg' is used more than once; wrote 'Fig - A-B (3).svg'",
+  ]);
+});
+
+test("pages with different names produce no rename warning, and the exporter's own warnings are kept once", async () => {
+  const doc = namedPages("One", "Two");
+  const { app } = world();
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
+    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined },
+  );
+  expect(out.warnings).toEqual([]);
+});

@@ -8,7 +8,7 @@ import type { LinkFiguresView } from "../view/figure-view";
 import type { AssetMap } from "./asset-types";
 import { collectAssets } from "./assets";
 import { buildPageSvg } from "./svg-builder";
-import { exportFolderFor, writeExportFile } from "./write";
+import { exportFolderFor, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
 /** More warnings than this are summarised in the notice; all of them go to the console. */
 const MAX_WARNINGS_SHOWN = 12;
@@ -68,8 +68,16 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
     { doc: run.doc, pages: run.pages, svgs, assets, warnings, baseName: run.baseName, dpi: run.dpi },
     {},
   );
-  for (const file of result.files) await writeExportFile(app, run.folder, file.name, file.blob);
-  return { files: result.files.length, warnings: result.warnings };
+
+  // Two files of one run with the same name (two pages called "Page 2", or "A/B" and "A:B") would be one file on disk,
+  // the second written over the first: they are told apart here, whichever exporter made them.
+  const names = uniqueFileNames(result.files.map((file) => file.name));
+  const reported = [...result.warnings];
+  result.files.forEach((file, i) => {
+    if (names[i] !== safeFileName(file.name)) reported.push(`Page name '${file.name}' is used more than once; wrote '${names[i]}'`);
+  });
+  for (const [i, file] of result.files.entries()) await writeExportFile(app, run.folder, names[i], file.blob);
+  return { files: result.files.length, warnings: reported };
 }
 
 function warningsNotice(warnings: string[]): Notice {

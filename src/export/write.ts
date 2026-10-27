@@ -4,6 +4,33 @@ import type { LinkFiguresSettings } from "../settings/settings";
 /** What a file name may not contain on one of the systems a vault can be synced to. */
 const UNSAFE_NAME_CHARS = /[\\/:*?"<>|\u0000-\u001f]/g;
 
+/** The name with each character a file name cannot hold replaced by "-" (a page called "A/B" must not make a subfolder). */
+export function safeFileName(name: string): string {
+  return name.replace(UNSAFE_NAME_CHARS, "-");
+}
+
+/** `name` with `" (n)"` before its extension (or at its end when it has none). */
+function numbered(name: string, n: number): string {
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? `${name} (${n})` : `${name.slice(0, dot)} (${n})${name.slice(dot)}`;
+}
+
+/**
+ * The names made safe (see `safeFileName`) and distinct from each other, in the same order: the first of a repeated
+ * name keeps it and the others become `name (2).ext`, `name (3).ext`... Names are compared as a file system that
+ * ignores case would, and a number added here never collides with a name that comes later.
+ */
+export function uniqueFileNames(names: string[]): string[] {
+  const used = new Set<string>();
+  return names.map((name) => {
+    const safe = safeFileName(name);
+    let unique = safe;
+    for (let n = 2; used.has(unique.toLowerCase()); n++) unique = numbered(safe, n);
+    used.add(unique.toLowerCase());
+    return unique;
+  });
+}
+
 /** The folder exports go to: the setting, or else the figure's own folder (`""` for the vault root). */
 export function exportFolderFor(settings: LinkFiguresSettings, figurePath: string): string {
   if (settings.exportFolder) return settings.exportFolder;
@@ -33,7 +60,7 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
  * created when missing. Characters a file name cannot hold (a page called "A/B") become "-" rather than a subfolder.
  */
 export async function writeExportFile(app: App, folder: string, name: string, blob: Blob): Promise<TFile> {
-  const safeName = name.replace(UNSAFE_NAME_CHARS, "-");
+  const safeName = safeFileName(name);
   // `normalizePath` leaves "/" as it is, which names the vault root.
   const normalized = folder ? normalizePath(folder) : "";
   const dir = normalized === "/" ? "" : normalized;

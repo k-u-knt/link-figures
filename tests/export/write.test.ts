@@ -5,7 +5,7 @@ vi.mock("obsidian", async () => {
   const fake = await import("./fake-vault");
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile };
 });
-const { exportFolderFor, writeExportFile } = await import("../../src/export/write");
+const { exportFolderFor, safeFileName, uniqueFileNames, writeExportFile } = await import("../../src/export/write");
 
 const settings = (exportFolder: string): LinkFiguresSettings => ({
   attachmentFolder: "",
@@ -83,4 +83,40 @@ test("characters a file name cannot hold do not make subfolders", async () => {
   const vault = fakeVault();
   await writeExportFile(asApp(vault), "out", "Fig - A/B: ../c.svg", blob("x"));
   expect(vault.calls).toEqual(["createFolder out", "createBinary out/Fig - A-B- ..-c.svg"]);
+});
+
+test("safeFileName replaces what a file name cannot hold and leaves the rest alone", () => {
+  expect(safeFileName("Fig - A/B: c?.svg")).toBe("Fig - A-B- c-.svg");
+  expect(safeFileName("Fig - Page 1.svg")).toBe("Fig - Page 1.svg");
+});
+
+describe("uniqueFileNames", () => {
+  test("names that are already different come back as they are (made safe)", () => {
+    expect(uniqueFileNames(["a.svg", "b.svg", "c/d.svg"])).toEqual(["a.svg", "b.svg", "c-d.svg"]);
+  });
+
+  test("a repeat gets (2), (3)... before the extension, the first keeping its name", () => {
+    expect(uniqueFileNames(["a.svg", "a.svg", "a.svg"])).toEqual(["a.svg", "a (2).svg", "a (3).svg"]);
+  });
+
+  test("names are compared after the unsafe characters are replaced", () => {
+    expect(uniqueFileNames(["A/B.svg", "A:B.svg"])).toEqual(["A-B.svg", "A-B (2).svg"]);
+  });
+
+  test("a file system that ignores case would treat these as one file, so they are told apart", () => {
+    expect(uniqueFileNames(["Page A.svg", "page a.svg"])).toEqual(["Page A.svg", "page a (2).svg"]);
+  });
+
+  test("a made-up name never collides with a name that follows it", () => {
+    expect(uniqueFileNames(["a.svg", "a.svg", "a (2).svg"])).toEqual(["a.svg", "a (2).svg", "a (2) (2).svg"]);
+  });
+
+  test("a name without an extension, or with a leading dot only, gets the number at its end", () => {
+    expect(uniqueFileNames(["notes", "notes"])).toEqual(["notes", "notes (2)"]);
+    expect(uniqueFileNames([".hidden", ".hidden"])).toEqual([".hidden", ".hidden (2)"]);
+  });
+
+  test("only the last dot starts the extension", () => {
+    expect(uniqueFileNames(["v1.2 fig.svg", "v1.2 fig.svg"])).toEqual(["v1.2 fig.svg", "v1.2 fig (2).svg"]);
+  });
 });

@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, type TFile, type WorkspaceLeaf } from "obsidian";
 import { registerBuiltinCommands } from "./commands/builtin";
+import { registerDevCommands } from "./commands/dev";
 import { VIEW_TYPE } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
 import { svgExporter } from "./export/exporters/svg";
@@ -32,6 +33,7 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
     registerBuiltinCommands(this);
+    registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     installOpenHook(this);
 

@@ -28,7 +28,7 @@ Status: milestone 1, the walking skeleton. Desktop only.
 
 **Export.** "Export" in the toolbar opens a dialog: choose SVG or PDF (vector), the current page or all pages, and the resolution used for what has to be drawn as pixels. An SVG export is one file per page, and an SVG panel stays editable in Inkscape. A PDF export is one file with a page for each page exported, and a PDF panel is embedded in it as a vector. Files are written next to the figure, or into the export folder below.
 
-PDF export sets text in the built-in Helvetica for Arial and Helvetica, and substitutes other families until TrueType embedding lands in M2.
+PDF export sets text in the built-in Helvetica for Arial and Helvetica, and in Times for Times New Roman; every other family (Calibri, Georgia, Courier New) falls back to Times, with a warning, until TrueType embedding lands in M2.
 
 ## Settings
 

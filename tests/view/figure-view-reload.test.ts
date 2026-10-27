@@ -170,6 +170,30 @@ describe("a source renamed: Obsidian rewrites the Links section and hands the te
     expect(link(t.view, 0)).toBe("plot2.png");
   });
 
+  test("delete, then a rename, then undo: the panel that was never deleted keeps the new link, in the figure and in what is saved", () => {
+    const t = setup();
+    const store = t.view.store;
+    const [, legend] = store.doc.nodes;
+    // What the Delete key does (`deleteSelected`): the nodes filtered out in one commit.
+    store.commit("delete", (d) => void (d.nodes = d.nodes.filter((n) => n.id !== legend.id)));
+    t.obsidianLoads(serializeFigureFile(store.doc, t.view.parsed).replace("![[plot.png]]", "![[plot2.png]]"));
+    expect(link(t.view, 0)).toBe("plot2.png");
+
+    store.undo();
+    expect(store.doc.nodes.map((n) => n.id)).toContain(legend.id);
+    expect(link(t.view, 0)).toBe("plot2.png");
+    const saved = t.view.getViewData();
+    expect(saved).toContain("![[plot2.png]]");
+    expect(saved).not.toContain("![[plot.png]]");
+    expect(saved).toContain("![[analysis#Figure 2 legend]]");
+
+    store.redo();
+    expect(store.doc.nodes.map((n) => n.id)).not.toContain(legend.id);
+    expect(link(t.view, 0)).toBe("plot2.png");
+    expect(t.view.getViewData()).toContain("![[plot2.png]]");
+    expect(t.view.getViewData()).not.toContain("![[plot.png]]");
+  });
+
   test("it is not an edit: nothing is saved, and what is saved afterwards carries the new link", () => {
     const t = setup();
     const renamed = t.text0.replace("![[plot.png]]", "![[plot2.png]]");

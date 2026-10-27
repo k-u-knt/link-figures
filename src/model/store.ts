@@ -93,13 +93,20 @@ export class DocumentStore {
   /**
    * Swaps in a document loaded from elsewhere. Not an edit: it leaves no history entry, and by default both history
    * stacks are cleared. `keepHistory` is for a document that differs from the current one only in the link targets
-   * (`file`, `subpath`) of file nodes: history refers to nodes by their place in the document, which has not changed, so
-   * it stays valid. A node that undo or redo brings back comes with the link it had when it was removed.
+   * (`file`, `subpath`) of file nodes: the nodes keep their places, so what history says of other fields stays valid,
+   * and the targets it holds for those nodes are rebased onto the new ones (see `rebaseHistory`), so that undo and redo
+   * of a delete, an insertion or a page removal do not bring an old target back.
    */
   replace(doc: Document, label = "replace", options: { keepHistory?: boolean } = {}): void {
     const before = this.current;
     this.current = doc;
-    if (!options.keepHistory) {
+    if (options.keepHistory) {
+      const links = changedLinks(before.nodes, doc.nodes);
+      if (links.size > 0) {
+        for (const entry of this.undoStack) rebaseHistory(entry, links);
+        for (const entry of this.redoStack) rebaseHistory(entry, links);
+      }
+    } else {
       this.undoStack = [];
       this.redoStack = [];
       this.mergeTarget = null;
@@ -173,6 +180,50 @@ function changedNodeIds(patches: readonly Patch[], before: Document, after: Docu
     if (!a || !b || !deepEqual(a, b)) changed.add(id);
   }
   return changed;
+}
+
+type Link = { file: string; subpath: string };
+
+/** The new link of each file node that is in both lists with a different one. */
+function changedLinks(before: readonly Node[], after: readonly Node[]): Map<NodeId, Link> {
+  const beforeById = indexById(before);
+  const links = new Map<NodeId, Link>();
+  for (const node of after) {
+    const old = beforeById.get(node.id);
+    if (node.type === "file" && old?.type === "file" && (old.file !== node.file || old.subpath !== node.subpath)) {
+      links.set(node.id, { file: node.file, subpath: node.subpath });
+    }
+  }
+  return links;
+}
+
+/**
+ * Brings the link targets that an entry's patches carry up to date. A patch that adds or replaces `["nodes"]` (a delete
+ * written as a filter, which holds the whole old list) or `["nodes", i]` (a splice, which holds each node it shifts, and an
+ * insertion) has nodes as its value, with the targets they had then; those of the nodes in `links` are set to the new ones.
+ * Nodes that are not in `links`, such as one that was deleted and so is in no file for Obsidian to rewrite, keep what they
+ * have. Patches deeper in a node (a move) carry no link, and the patches' own structure is left as it is.
+ */
+function rebaseHistory(entry: HistoryEntry, links: ReadonlyMap<NodeId, Link>): void {
+  const rebase = (patches: Patch[]): Patch[] =>
+    patches.map(patch => {
+      if (patch.path[0] !== "nodes" || patch.path.length > 2 || !("value" in patch)) return patch;
+      const value = relinkValue(patch.value, links);
+      return value === patch.value ? patch : { ...patch, value };
+    });
+  entry.patches = rebase(entry.patches);
+  entry.inversePatches = rebase(entry.inversePatches);
+}
+
+/** `value` (a node, or a list of nodes) with the links of the nodes in `links` replaced; the same object when none is. */
+function relinkValue(value: unknown, links: ReadonlyMap<NodeId, Link>): unknown {
+  if (Array.isArray(value)) {
+    const relinked = value.map(item => relinkValue(item, links));
+    return relinked.some((item, i) => item !== value[i]) ? relinked : value;
+  }
+  const id = typeof value === "object" && value !== null ? (value as { id?: unknown }).id : undefined;
+  const link = typeof id === "string" ? links.get(id) : undefined;
+  return link ? { ...(value as object), ...link } : value;
 }
 
 /** The ids of the nodes that are in only one of the lists, or are in both and differ. */

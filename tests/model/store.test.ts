@@ -335,3 +335,133 @@ describe("replace keeping history", () => {
     expect(s.canUndo()).toBe(false);
   });
 });
+
+describe("replace keeping history: what history holds of a node follows the node's new link", () => {
+  type Linked = { file: string; subpath: string };
+  const linkOf = (d: Document, id: string): string => {
+    const n = d.nodes.find(x => x.id === id) as unknown as Linked | undefined;
+    return n ? `${n.file}${n.subpath}` : "(absent)";
+  };
+  /** `d` with the links of some nodes changed: all an external Links rewrite does. */
+  const relinkedTo = (d: Document, links: Record<string, Linked>): Document => {
+    const next = structuredClone(d);
+    for (const n of next.nodes) if (links[n.id]) Object.assign(n, links[n.id]);
+    return next;
+  };
+
+  test("a delete written as a filter: undo and redo give the survivor its new link", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" } }), "links", { keepHistory: true });
+
+    expect(s.undo()).toBe(true);
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b]);
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+    // The node that was deleted is not in the file, so nobody renamed it.
+    expect(linkOf(s.doc, b)).toBe("1.png");
+
+    expect(s.redo()).toBe(true);
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a]);
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+  });
+
+  test("a delete written as a splice, which shifts the nodes after it", () => {
+    const s = new DocumentStore(docWith(3));
+    const [a, b, c] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes.splice(0, 1); });
+    s.replace(relinkedTo(s.doc, { [c]: { file: "renamed.png", subpath: "#Legend" } }), "links", { keepHistory: true });
+
+    s.undo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b, c]);
+    expect(linkOf(s.doc, c)).toBe("renamed.png#Legend");
+    expect(linkOf(s.doc, b)).toBe("1.png");
+    s.redo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([b, c]);
+    expect(linkOf(s.doc, c)).toBe("renamed.png#Legend");
+    expect(linkOf(s.doc, b)).toBe("1.png");
+  });
+
+  test("an insertion: undo and redo bring back the inserted node with the link it has now", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    const copy = { ...structuredClone(s.doc.nodes[0]), id: "p-copy" };
+    s.commit("duplicate", d => { d.nodes.push(copy); });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" }, "p-copy": { file: "renamed.png", subpath: "" } }), "links", { keepHistory: true });
+
+    s.undo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b]);
+    s.redo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b, "p-copy"]);
+    expect(linkOf(s.doc, "p-copy")).toBe("renamed.png");
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+  });
+
+  test("the redo stack is rebased too", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    s.undo();
+    s.replace(relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" } }), "links", { keepHistory: true });
+
+    s.redo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a]);
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+    s.undo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b]);
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+  });
+
+  test("a delete page (nodes and pages replaced in one commit) is rebased as well", () => {
+    const d0 = docWith(2);
+    const s = new DocumentStore(d0);
+    const [a] = s.doc.nodes.map(n => n.id);
+    s.commit("delete-page", d => { d.nodes = d.nodes.filter(n => n.id !== d.nodes[1].id); d.pages = d.pages.slice(); });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" } }), "links", { keepHistory: true });
+    s.undo();
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+  });
+
+  test("two renames in a row: the second is rebased on the first", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "one.png", subpath: "" } }), "links", { keepHistory: true });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "two.png", subpath: "" } }), "links", { keepHistory: true });
+    s.undo();
+    expect(linkOf(s.doc, a)).toBe("two.png");
+  });
+
+  test("edits of other fields are untouched, and undoing them leaves the link as it is", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("move", d => { d.nodes[0].x = 10; });
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    s.replace(relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" } }), "links", { keepHistory: true });
+    s.undo();
+    s.undo();
+    expect(s.doc.nodes[0].x).toBe(0);
+    expect(linkOf(s.doc, a)).toBe("renamed.png");
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a, b]);
+  });
+
+  test("a replacement that changes no link leaves history as it was", () => {
+    const s = new DocumentStore(docWith(2));
+    const [, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    s.replace(structuredClone(s.doc), "links", { keepHistory: true });
+    s.undo();
+    expect(s.doc.nodes.map(n => linkOf(s.doc, n.id))).toEqual(["0.png", "1.png"]);
+  });
+
+  test("the document handed in is not touched by the rebase, nor the one before it", () => {
+    const s = new DocumentStore(docWith(2));
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    const next = relinkedTo(s.doc, { [a]: { file: "renamed.png", subpath: "" } });
+    const snapshot = structuredClone(next);
+    s.replace(next, "links", { keepHistory: true });
+    s.undo();
+    expect(next).toEqual(snapshot);
+  });
+});

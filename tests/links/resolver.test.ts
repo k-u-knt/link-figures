@@ -35,6 +35,8 @@ const extra = new FakeAccess({
     "Notes/Scan.TIFF": "BINARY",
     "Notes/Paper.PDF": "BINARY",
     "Notes/data.csv": "a,b\n1,2\n",
+    "Notes/board.canvas": "{}",
+    "Notes/Upper.MD": "# Upper\n",
   },
   headings: { "Notes/analysis.md": { "Sec": { start: 0, end: null } } },
   blocks: { "Notes/analysis.md": { "all": { start: 0, end: null } } },
@@ -75,4 +77,20 @@ test("only decoder errors become missing:decode", async () => {
   class FailingRead extends FakeAccess { override async readBinary(): Promise<ArrayBuffer> { throw new Error("io"); } }
   const broken = new FailingRead({ files: { "Notes/plot.pdf": "BINARY" } });
   await expect(resolveFileNode(node({ file: "plot.pdf" }), "f.lnkfig.md", broken, decoders)).rejects.toThrow("io");
+});
+test("a target that is neither a panel file nor markdown is missing:file and is never read", async () => {
+  const readText = vi.spyOn(extra, "readText"), sectionRange = vi.spyOn(extra, "sectionRange");
+  for (const over of [{ file: "board.canvas" }, { file: "board.canvas", subpath: "#Sec", show: "content" as const }, { file: "data.csv", show: "content" as const }]) expect(await resolveFileNode(node(over), "f.lnkfig.md", extra, decoders)).toEqual({ kind: "missing", reason: "file", deps: [] });
+  expect(readText).not.toHaveBeenCalled();
+  expect(sectionRange).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+});
+test("the md extension is matched case-insensitively", async () => { expect(await resolveFileNode(node({ file: "Upper.MD", show: "content" }), "f.lnkfig.md", extra, decoders)).toMatchObject({ kind: "content", markdown: "# Upper\n", deps: ["Notes/Upper.MD"] }); });
+test("whitespace around the link and before the alias is trimmed", async () => {
+  expect(await resolveFileNode(node({ file: "plot.png |300" }), "f.lnkfig.md", access, decoders)).toEqual(await resolveFileNode(node({ file: "plot.png" }), "f.lnkfig.md", access, decoders));
+  expect(await resolveFileNode(node({ file: "plot.png |300" }), "f.lnkfig.md", access, decoders)).toMatchObject({ kind: "image", src: "app://Notes/plot.png" });
+  const trimmed = await resolveFileNode(node({ file: " analysis", subpath: "#Results " }), "f.lnkfig.md", access, decoders);
+  expect(trimmed).toEqual(await resolveFileNode(node({ file: "analysis", subpath: "#Results" }), "f.lnkfig.md", access, decoders));
+  expect(trimmed).toMatchObject({ kind: "image", deps: ["Notes/analysis.md", "Notes/plot.png"] });
+  expect(await resolveFileNode(node({ file: "analysis", subpath: "#^fig2b |label" }), "f.lnkfig.md", access, decoders)).toMatchObject({ kind: "image" });
 });

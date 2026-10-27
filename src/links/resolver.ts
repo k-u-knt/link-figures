@@ -21,10 +21,10 @@ export function sourceKindOf(ext: string): SourceKind {
   }
 }
 
-/** Drops an alias or size suffix (`|300`, `|label`) from a linktext, then splits it into file and subpath. */
+/** Drops an alias or size suffix (`|300`, `|label`) and surrounding whitespace from a linktext, then splits it into file and subpath. */
 function splitWithoutAlias(linktext: string): { file: string; subpath: string } {
   const bar = linktext.indexOf("|");
-  return splitLinktext(bar === -1 ? linktext : linktext.slice(0, bar));
+  return splitLinktext((bar === -1 ? linktext : linktext.slice(0, bar)).trim());
 }
 
 function missing(reason: "file" | "subpath" | "no-image" | "decode", deps: string[]): Resolved {
@@ -67,6 +67,8 @@ export async function resolveFileNode(
   const target = access.resolveLink(linkPath, figurePath);
   if (!target) return missing("file", []);
   if (isPanelExtension(target.extension)) return resolvePanel(target, node, access, decoders, [target.path]);
+
+  if (target.extension.toLowerCase() !== "md") return missing("file", []);
 
   const deps = [target.path];
   const range = access.sectionRange(target, subpath);

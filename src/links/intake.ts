@@ -119,7 +119,8 @@ export class Intake {
   /**
    * Makes a node for each action, from the left: saves what has to be saved, resolves each link and measures the image
    * it shows, then adds all the nodes to the page in one commit (`"insert"`, so one undo takes them all out and leaves
-   * any saved file alone), selects them and has them drawn. An item that cannot be saved or decoded is reported in a
+   * any saved file alone) and selects them. The view draws and resolves new nodes on that commit (`NodeHost.applyChange`),
+   * so they are not resolved again here. An item that cannot be saved or decoded is reported in a
    * Notice and left out; the others go in. `files` are indexed as the actions' `index` fields are, and may have gaps.
    * Resolves to the ids of the new nodes.
    */
@@ -243,13 +244,22 @@ export class Intake {
       }
       case "link-text": {
         const { file, subpath } = splitLinktext(action.linktext);
-        const target = this.view.plugin.access.resolveLink(file, figurePath);
+        // A link dragged out of a note is relative to that note; one that was pasted or dropped as text, to the figure.
+        const target = this.view.plugin.access.resolveLink(file, action.sourcePath ?? figurePath);
         // A link that resolves is judged by what it resolves to; one that does not, by how it is written (a note's name has no extension).
         const extension = target ? target.extension.toLowerCase() : extensionOf(file);
-        if (isPanelExtension(extension)) return { file, subpath, show: "image" };
-        if (!target || extension === "md") return { file, subpath, show: "content" };
-        skipped.push(action.linktext);
-        return null;
+        const show = isPanelExtension(extension) ? "image" : !target || extension === "md" ? "content" : null;
+        if (show === null) {
+          skipped.push(action.linktext);
+          return null;
+        }
+        // Written relative to the note it came from, a link would resolve to something else from here: link the file it led to.
+        if (target && action.sourcePath !== undefined) {
+          return show === "image"
+            ? { file: target.path, subpath: "", show }
+            : { file: target.path.replace(/\.md$/i, ""), subpath, show };
+        }
+        return { file, subpath, show };
       }
       case "save-file":
       case "save-image-blob": {
@@ -332,7 +342,7 @@ export class Intake {
   }
 
   /** The one commit. Everything awaited so far may have outlived the document, so the page and the store are looked up afresh. */
-  private async insert(items: Measured[], at: IntakeTarget): Promise<NodeId[]> {
+  private insert(items: Measured[], at: IntakeTarget): NodeId[] {
     const view = this.view;
     const store = view.store;
     const doc = store.doc;
@@ -361,7 +371,6 @@ export class Intake {
     });
     const ids = nodes.map((n) => n.id);
     view.setSelection(ids);
-    await view.nodeHost.resolve(ids);
     return ids;
   }
 }

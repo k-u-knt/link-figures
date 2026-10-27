@@ -14,8 +14,11 @@ export interface DropData {
 export type IntakeAction =
   /** A vault file by path: shown as an image or as note content, by its extension. */
   | { kind: "link-file"; path: string }
-  /** A pasted or dropped `![[…]]` or `[[…]]`, without its alias. */
-  | { kind: "link-text"; linktext: string }
+  /**
+   * A pasted or dropped `![[…]]` or `[[…]]`, without its alias. A link dragged out of a note carries that note's path
+   * as `sourcePath`: the linktext is relative to it, not to the figure.
+   */
+  | { kind: "link-text"; linktext: string; sourcePath?: string }
   /** The OS file at `osFiles[index]`, to be copied into the vault. */
   | { kind: "save-file"; index: number; name: string }
   /** The clipboard image at item `index`, to be saved under `name`. */
@@ -49,7 +52,9 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>): IntakeAct
     case "link": {
       // A link that names no file (`#Heading`, inside the note it was dragged from) has nothing to link to here.
       const linktext = draggable.linktext?.trim() ?? "";
-      return splitLinktext(linktext).file.trim() === "" ? [] : [{ kind: "link-text", linktext }];
+      if (splitLinktext(linktext).file.trim() === "") return [];
+      const { sourcePath } = draggable;
+      return [sourcePath === undefined ? { kind: "link-text", linktext } : { kind: "link-text", linktext, sourcePath }];
     }
     default:
       return [];

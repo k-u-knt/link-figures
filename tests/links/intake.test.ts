@@ -178,7 +178,8 @@ describe("a file dragged from Obsidian", () => {
     expect(node.width).toBeCloseTo(NODE_WIDTH_PX, 6);
     expect(node.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
     expect(s.view.setSelection).toHaveBeenCalledWith([node.id]);
-    expect(s.view.nodeHost.resolve).toHaveBeenCalledWith([node.id]);
+    // The view draws and resolves a new node when the commit lands (`NodeHost.applyChange`); the intake does not resolve it again.
+    expect(s.view.nodeHost.resolve).not.toHaveBeenCalled();
     expect(s.view.stageEl.focus).toHaveBeenCalled();
   });
 
@@ -311,19 +312,91 @@ describe("a file dragged from Obsidian", () => {
     expect(fileNodes(s)).toHaveLength(0);
     expect(notices).toEqual([]);
   });
+});
 
-  test("a link drag is linked as written, a note by what it resolves to", async () => {
-    const s = setup();
-    s.view.app.dragManager = { draggable: { type: "link", linktext: "analysis#^fig2b", sourcePath: "Notes/x.md" } };
-    s.handlers.drop(dropEvent({ y: 100 }));
+/** Resolves a linkpath from its source: a full vault path as it is, else beside the source (a note may leave off `.md`), nowhere else. */
+function resolveBesideSource(s: Setup): void {
+  s.view.plugin.access.resolveLink = (path, from) => {
+    const dir = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+    for (const candidate of [path, `${path}.md`, `${dir}/${path}`, `${dir}/${path}.md`]) {
+      if (candidate in s.files) return { path: candidate, extension: candidate.slice(candidate.lastIndexOf(".") + 1) };
+    }
+    return null;
+  };
+}
+
+describe("a link dragged out of a note is relative to that note", () => {
+  const withSiblings = () => {
+    const s = setup({ files: { "A/plot.png": "BINARY", "A/analysis.md": "text", "B/plot.png": "BINARY", "Figures/plot.png": "BINARY" } });
+    s.images["app://A/plot.png"] = { width: 400, height: 200 };
+    s.images["app://B/plot.png"] = { width: 100, height: 400 };
+    s.images["app://Figures/plot.png"] = { width: 100, height: 100 };
+    resolveBesideSource(s);
+    return s;
+  };
+  const dragLink = (s: Setup, linktext: string, sourcePath: string, y: number) => {
+    s.view.app.dragManager = { draggable: { type: "link", linktext, sourcePath } };
+    s.handlers.drop(dropEvent({ y }));
+  };
+
+  test("the same linktext from two notes links the two different files, by full path", async () => {
+    const s = withSiblings();
+    dragLink(s, "plot.png", "A/note.md", 100);
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
-    s.view.app.dragManager = { draggable: { type: "link", linktext: "plot.png", sourcePath: "Notes/x.md" } };
-    s.handlers.drop(dropEvent({ y: 700 }));
+    dragLink(s, "plot.png", "B/note.md", 700);
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
-    const [note, image] = fileNodes(s);
-    expect([note.file, note.subpath, note.show]).toEqual(["analysis", "#^fig2b", "content"]);
-    expect([image.file, image.subpath, image.show]).toEqual(["plot.png", "", "image"]);
-    expect(image.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    const [fromA, fromB] = fileNodes(s);
+    expect([fromA.file, fromA.subpath, fromA.show]).toEqual(["A/plot.png", "", "image"]);
+    expect([fromB.file, fromB.subpath, fromB.show]).toEqual(["B/plot.png", "", "image"]);
+    // Each is measured from the file it resolved to.
+    expect(fromA.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    expect(fromB.height).toBeCloseTo(NODE_WIDTH_PX * 4, 1);
+  });
+
+  test("a note is linked by its path without .md, and keeps its subpath", async () => {
+    const s = withSiblings();
+    dragLink(s, "analysis#^fig2b", "A/note.md", 100);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [note] = fileNodes(s);
+    expect([note.file, note.subpath, note.show]).toEqual(["A/analysis", "#^fig2b", "content"]);
+  });
+
+  test("a subpath on a picture's link is not kept", async () => {
+    const s = withSiblings();
+    dragLink(s, "plot.png#page=2", "A/note.md", 100);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath]).toEqual(["A/plot.png", ""]);
+  });
+
+  test("a link that does not resolve from its note stays as written and shows as missing, at the default size", async () => {
+    const s = withSiblings();
+    dragLink(s, "ghost.png", "A/note.md", 100);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    dragLink(s, "Nowhere#Heading", "A/note.md", 700);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect(fileNodes(s).map((n) => [n.file, n.subpath, n.show])).toEqual([
+      ["ghost.png", "", "image"],
+      ["Nowhere", "#Heading", "content"],
+    ]);
+    for (const node of fileNodes(s)) expect(node.height).toBeCloseTo(0.25 * mmToPx(297), 6);
+  });
+
+  test("a link that resolves to another kind of file is skipped and named", async () => {
+    const s = withSiblings();
+    s.files["A/data.csv"] = "x";
+    dragLink(s, "data.csv", "A/note.md", 100);
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices).toEqual(["Link Figures: skipped data.csv: not an image, PDF or TIFF file."]);
+    expect(fileNodes(s)).toHaveLength(0);
+  });
+
+  test("a link in pasted or dropped text has no note to be relative to: it is linked as written", async () => {
+    const s = withSiblings();
+    // From the figure (in Figures/), `plot.png` is Figures/plot.png; the text is kept, not rewritten to that path.
+    s.handlers.drop(dropEvent({ text: "[[plot.png]]" }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath, fileNodes(s)[0].show]).toEqual(["plot.png", "", "image"]);
+    expect(fileNodes(s)[0].height).toBeCloseTo(NODE_WIDTH_PX, 1);
   });
 });
 

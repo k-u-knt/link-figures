@@ -14,9 +14,16 @@ describe("classifyDrop: Obsidian drags", () => {
     expect(out).toEqual([{ kind: "link-file", path: "a/one.png" }, { kind: "link-file", path: "b/two.md" }]);
   });
 
-  test("a link drag gives its linktext", () => {
+  test("a link drag gives its linktext and the note it came from", () => {
     const out = classifyDrop({ draggable: { type: "link", linktext: "analysis#Figure 2 legend", sourcePath: "Notes/a.md" } });
-    expect(out).toEqual([{ kind: "link-text", linktext: "analysis#Figure 2 legend" }]);
+    expect(out).toEqual([{ kind: "link-text", linktext: "analysis#Figure 2 legend", sourcePath: "Notes/a.md" }]);
+  });
+
+  test("a link drag without a source note has no sourcePath on its action; text links never have one", () => {
+    const [drag] = classifyDrop({ draggable: { type: "link", linktext: "a.png" } });
+    expect("sourcePath" in drag).toBe(false);
+    const [text] = classifyDrop({ text: "[[a.png]]" });
+    expect("sourcePath" in text).toBe(false);
   });
 
   test("a link drag without a linktext, a file drag without paths and a folder drag give nothing", () => {

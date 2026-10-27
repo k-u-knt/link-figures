@@ -1,3 +1,5 @@
+import type { Font } from "./model/types";
+
 export const PLUGIN_ID = "link-figures";
 export const VIEW_TYPE = "link-figures";
 export const FRONTMATTER_KEY = "link-figures";
@@ -18,17 +20,6 @@ export const PANEL_EXTENSIONS = [...IMAGE_EXTENSIONS, "pdf", "tif", "tiff"];
 export const PDF_SCREEN_DPI = 150;
 export const PT_TO_PX = 96 / 72;
 export const PX_TO_PT = 72 / 96;
-
-// Task 2 moves this type to src/model/types.ts.
-type Font = {
-  family: string;
-  size: number;
-  weight: "normal" | "bold";
-  italic: boolean;
-  color: string;
-  align: "left" | "center" | "right";
-  lineHeight: number;
-};
 
 export const CURATED_FONTS = ["Arial", "Helvetica", "Times New Roman", "Calibri", "Georgia", "Courier New"];
 

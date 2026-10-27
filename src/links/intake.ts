@@ -7,7 +7,7 @@ import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
 import { isEditable } from "../view/pointer";
 import { roundPx } from "../view/pointer-math";
-import { classifyDrop, classifyPaste, dedupeName, extensionOf, type DropData, type IntakeAction } from "./intake-classify";
+import { classifyDrop, classifyPaste, dedupeName, extensionOf, linkSafeName, type DropData, type IntakeAction } from "./intake-classify";
 import { isPanelExtension, resolveFileNode } from "./resolver";
 import type { Resolved } from "./types";
 
@@ -226,7 +226,10 @@ export class Intake {
     };
   }
 
-  /** What `action` is to link to, saving the file first if it has to be saved. Null: skipped (named in `skipped`) or failed (a Notice). */
+  /**
+   * What `action` is to link to, saving the file first if it has to be saved. Null: skipped (named in `skipped`), failed
+   * (a Notice), or dropped text that names no vault file (nothing to say).
+   */
   private async plan(
     action: IntakeAction,
     figurePath: string,
@@ -261,6 +264,11 @@ export class Intake {
         }
         return { file, subpath, show };
       }
+      case "maybe-path": {
+        // Text that names a vault file stands for that file; any other text is not for the figure and is let go quietly.
+        const target = this.view.plugin.access.resolveLink(action.text, figurePath);
+        return target ? this.plan({ kind: "link-file", path: target.path }, figurePath, files, skipped) : null;
+      }
       case "save-file":
       case "save-image-blob": {
         const source = files[action.index];
@@ -281,11 +289,12 @@ export class Intake {
   }
 
   /**
-   * Writes the bytes into the vault under a name that is not taken, and returns the path. Obsidian's own attachment
-   * setting decides where unless this plugin's folder setting is filled in, which then does.
+   * Writes the bytes into the vault under a name that is not taken and that a link can hold (`linkSafeName`), and returns
+   * the path. Obsidian's own attachment setting decides where unless this plugin's folder setting is filled in, which then does.
    */
-  private async saveAttachment(name: string, data: ArrayBuffer, figurePath: string): Promise<string> {
+  private async saveAttachment(given: string, data: ArrayBuffer, figurePath: string): Promise<string> {
     const { vault, fileManager } = this.view.app;
+    const name = linkSafeName(given);
     const folder = this.view.plugin.settings.attachmentFolder.trim();
     let path: string;
     if (folder === "") {
@@ -315,8 +324,8 @@ export class Intake {
   private async measure(planned: Planned, figurePath: string, page: Page): Promise<Measured | null> {
     const { access, decoders } = this.view.plugin;
     const label = planned.file + planned.subpath;
-    const failed = (): null => {
-      new Notice(`Link Figures: ${label} could not be decoded, so it was not added.`);
+    const failed = (reason?: string): null => {
+      new Notice(`Link Figures: ${label} could not be decoded, so it was not added.${reason ? ` ${reason}` : ""}`);
       return null;
     };
 
@@ -327,7 +336,8 @@ export class Intake {
       console.error(`Link Figures: could not resolve ${label}`, error);
       return failed();
     }
-    if (resolved.kind === "missing" && resolved.reason === "decode") return failed();
+    // The decoder's reason (a page over the size limit names its size) is worth reading.
+    if (resolved.kind === "missing" && resolved.reason === "decode") return failed(resolved.message);
     // A note section, or a link that leads nowhere (yet): the node is made at its default size and shows the problem.
     if (resolved.kind !== "image") return { ...planned, size: null };
 

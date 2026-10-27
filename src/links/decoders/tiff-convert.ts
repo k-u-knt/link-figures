@@ -40,12 +40,12 @@ function lookupTable(bitsPerSample: 8 | 16, range: Range16): Uint8ClampedArray {
 /**
  * Maps the grey or R, G, B samples linearly from `range` to 0..255 and returns the range used. Grey (1 sample) is
  * replicated to RGB with alpha 255, and inverted first when `plane.whiteIsZero`. Alpha (4 samples) ignores `range`:
- * 8-bit alpha is copied, 16-bit alpha is scaled by 1/257. `"auto"` stretches to the colour samples' own min and max,
- * except 8-bit RGB(A), which passes through unchanged (range 0..255).
+ * 8-bit alpha is copied, 16-bit alpha is scaled by 1/257. `"auto"` stretches 16-bit data to the colour samples' own min
+ * and max; 8-bit data (grey or RGB(A)) is already scaled for display and passes through unchanged (range 0..255).
  */
 export function planeToRgba(plane: Plane, range: Range16 | "auto"): { rgba: Uint8ClampedArray<ArrayBuffer>; range: Range16 } {
   const { width, height, bitsPerSample, samplesPerPixel, data } = plane;
-  const used = range !== "auto" ? range : bitsPerSample === 8 && samplesPerPixel > 1 ? { min: 0, max: 255 } : autoRange(data, samplesPerPixel);
+  const used = range !== "auto" ? range : bitsPerSample === 8 ? { min: 0, max: 255 } : autoRange(data, samplesPerPixel);
   const table = lookupTable(bitsPerSample, used);
   const pixels = width * height;
   const rgba = new Uint8ClampedArray(pixels * 4);

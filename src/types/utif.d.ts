@@ -7,6 +7,9 @@ declare module "utif" {
     data: Uint8Array;
     /** Byte order of the file, set by `decodeImage`. */
     isLE: boolean;
+    /** ImageWidth and ImageLength, read by `decode` (before `decodeImage` sets `width` and `height`). */
+    t256?: number[];
+    t257?: number[];
     /** BitsPerSample. */
     t258?: number[];
     /** PhotometricInterpretation. */

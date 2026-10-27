@@ -1,4 +1,6 @@
 import type { App } from "obsidian";
+import { MAX_DECODE_MEGAPIXELS } from "../constants";
+import { DecodeLimitError } from "../links/decoders/budget";
 import { decodePdf, pdfPageSizePt } from "../links/decoders/pdf";
 import { decodeTiff } from "../links/decoders/tiff";
 import type { Resolved } from "../links/types";
@@ -23,6 +25,9 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   avif: "image/avif",
   svg: "image/svg+xml",
 };
+
+/** How far below the decode budget a PDF page is drawn when it does not fit at the export's resolution (whole pixels round up). */
+const BUDGET_MARGIN = 0.99;
 
 /** A multiple of 3, so that each chunk encodes to base64 without padding and the pieces concatenate. */
 const BASE64_CHUNK_BYTES = 3 * 10_000;
@@ -80,6 +85,24 @@ async function snapshotBody(el: HTMLElement | undefined, dpi: number): Promise<R
   return { kind: "raster", dataUri: image.src };
 }
 
+/**
+ * The PDF page drawn at the export's resolution or, when that is over the decode budget, at the highest resolution
+ * within it (with a warning, worded so that the PDF exporter drops it with the other "PDF panel rasterised" ones): the
+ * PDF export embeds the page as vectors whatever its raster, so it must not lose the panel.
+ */
+async function decodePdfWithinBudget(node: FileNode, bytes: ArrayBuffer, deps: AssetDeps): ReturnType<typeof decodePdf> {
+  const scale = deps.dpi / PT_DPI;
+  try {
+    return await decodePdf(bytes, node.pageIndex, scale);
+  } catch (error) {
+    if (!(error instanceof DecodeLimitError)) throw error;
+    const fit = scale * Math.sqrt((MAX_DECODE_MEGAPIXELS * 1e6) / (error.width * error.height)) * BUDGET_MARGIN;
+    const raster = await decodePdf(bytes, node.pageIndex, fit);
+    deps.warnings.push(`Node ${node.id}: PDF panel rasterised at ${Math.floor(fit * PT_DPI)} dpi, not ${deps.dpi}: ${error.message}`);
+    return raster;
+  }
+}
+
 async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "image" }>, deps: AssetDeps): Promise<FileAsset> {
   const path = resolved.file.path;
   switch (resolved.source) {
@@ -99,7 +122,7 @@ async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "i
     }
     case "pdf": {
       const bytes = await deps.readBinary(path);
-      const raster = await decodePdf(bytes, node.pageIndex, deps.dpi / PT_DPI);
+      const raster = await decodePdfWithinBudget(node, bytes, deps);
       // The page decodePdf drew: an out-of-range index is clamped, and the asset says which page it holds.
       const pageIndex = Math.min(Math.max(Math.trunc(node.pageIndex) || 0, 0), raster.pageCount - 1);
       const size = await pdfPageSizePt(bytes, pageIndex);

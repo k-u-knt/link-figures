@@ -42,4 +42,5 @@ export interface Decoders {
 export type Resolved =
   | { kind: "image"; file: FileRef; src: string; source: SourceKind; pageCount: number; deps: string[] }
   | { kind: "content"; file: FileRef; markdown: string; deps: string[] }
-  | { kind: "missing"; reason: "file" | "subpath" | "no-image" | "decode"; deps: string[] };
+  /** `message` is the decoder's own reason, for `"decode"`. */
+  | { kind: "missing"; reason: "file" | "subpath" | "no-image" | "decode"; deps: string[]; message?: string };

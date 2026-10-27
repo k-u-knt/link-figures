@@ -22,7 +22,12 @@ export type IntakeAction =
   /** The OS file at `osFiles[index]`, to be copied into the vault. */
   | { kind: "save-file"; index: number; name: string }
   /** The clipboard image at item `index`, to be saved under `name`. */
-  | { kind: "save-image-blob"; index: number; name: string };
+  | { kind: "save-image-blob"; index: number; name: string }
+  /**
+   * One line of dropped text with no wikilink in it: a vault file if it resolves as a path, else nothing. Without
+   * Obsidian's drag object (`app.dragManager` is unofficial) a file dragged from the vault arrives as such text.
+   */
+  | { kind: "maybe-path"; text: string };
 
 /** Lower-case extension after the last dot; none for a name without a dot or one that only starts with it (`.png`). */
 export function extensionOf(name: string): string {
@@ -75,7 +80,11 @@ export function classifyDrop(d: DropData): IntakeAction[] {
     });
     return out;
   }
-  return wikilinksIn(d.text ?? "").map((linktext) => ({ kind: "link-text", linktext }));
+  const text = d.text ?? "";
+  // Text with a wikilink in it is read for its links only, even when none of them names a file.
+  if (text.match(WIKILINK)) return wikilinksIn(text).map((linktext) => ({ kind: "link-text", linktext }));
+  const line = text.trim();
+  return line !== "" && !/[\r\n]/.test(line) ? [{ kind: "maybe-path", text: line }] : [];
 }
 
 const IMAGE_TYPE_EXTENSIONS: Record<string, string> = {
@@ -110,6 +119,17 @@ export function classifyPaste(items: { type: string; text?: string }[], now: Dat
     else if (type === "text/plain" && item.text) for (const linktext of wikilinksIn(item.text)) out.push({ kind: "link-text", linktext });
   });
   return out;
+}
+
+/** What a link cannot hold in a file name: `#` and `^` start a subpath, `[` `]` end the link, `|` starts its alias. */
+const LINK_BREAKING = /-*[#^[\]|][#^[\]|-]*/g;
+
+/**
+ * `name` with each run of `#`, `^`, `[`, `]` and `|` (and the dashes next to it) replaced by one "-", as Obsidian's own
+ * paste handler does: a saved file must be linkable, and a link to `plot #3.png` would read as `plot ` and a heading.
+ */
+export function linkSafeName(name: string): string {
+  return name.replace(LINK_BREAKING, "-");
 }
 
 /** `name` if no file has it, else `name 1`, `name 2`… (before the extension) until one is free. `exists` is asked about bare names. */

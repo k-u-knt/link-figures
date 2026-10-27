@@ -49,8 +49,8 @@ async function resolvePanel(
         ? await decoders.pdf(bytes, node.pageIndex, PDF_SCREEN_DPI / 72)
         : await decoders.tiff(bytes, node.pageIndex, node.range);
     return { kind: "image", file, src: decoded.dataUrl, source, pageCount: decoded.pageCount, deps };
-  } catch {
-    return missing("decode", deps);
+  } catch (error) {
+    return { kind: "missing", reason: "decode", deps, message: error instanceof Error ? error.message : String(error) };
   }
 }
 

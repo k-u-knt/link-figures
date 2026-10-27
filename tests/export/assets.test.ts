@@ -13,6 +13,7 @@ vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: mocks.decodePdf, pdf
 vi.mock("../../src/links/decoders/tiff", () => ({ decodeTiff: mocks.decodeTiff }));
 vi.mock("@zumer/snapdom", () => ({ snapdom: mocks.snapdom }));
 const { bytesToDataUri, collectAssets } = await import("../../src/export/assets");
+const { DecodeLimitError } = await import("../../src/links/decoders/budget");
 
 /** An image decoder that reports 640 x 480 for any data URI, and fails for the bytes 0xff 0xff 0xff. */
 class FakeImage {
@@ -178,6 +179,32 @@ describe("pdf sources", () => {
     });
     expect(mocks.decodePdf).toHaveBeenCalledWith(pdf, 1, 300 / 72);
     expect(mocks.pdfPageSizePt).toHaveBeenCalledWith(pdf, 1);
+  });
+
+  test("a page over the decode budget at the export's dpi is drawn at the most that fits, with a warning; the asset is kept", async () => {
+    const s = setup([{ resolved: image("doc.pdf", "pdf") }]);
+    const pdf = bytes(1);
+    s.files["doc.pdf"] = pdf;
+    const message = "PDF page at 1200 dpi is 9921×14031 px (139.2 MP); the limit is 50 MP";
+    mocks.decodePdf
+      .mockRejectedValueOnce(new DecodeLimitError(message, 9921, 14031))
+      .mockResolvedValueOnce({ dataUrl: "data:,r", width: 5900, height: 8344, pageCount: 1 });
+    mocks.pdfPageSizePt.mockResolvedValue({ width: 595, height: 842 });
+    const asset = (await s.run(1200)).get(s.nodes[0].id);
+    expect(asset).toMatchObject({ kind: "pdf", bytes: pdf, raster: "data:,r", rasterWidth: 5900 });
+    const fit = mocks.decodePdf.mock.calls[1][2] as number;
+    expect(Math.ceil(9921 * (fit * 72) / 1200) * Math.ceil(14031 * (fit * 72) / 1200)).toBeLessThanOrEqual(50e6);
+    expect(fit).toBeGreaterThan((0.98 * 1200 * Math.sqrt(50e6 / (9921 * 14031))) / 72);
+    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: PDF panel rasterised at ${Math.floor(fit * 72)} dpi, not 1200: ${message}`]);
+  });
+
+  test("any other decoding failure is still the node's warning, with no asset", async () => {
+    const s = setup([{ resolved: image("doc.pdf", "pdf") }]);
+    s.files["doc.pdf"] = bytes(1);
+    mocks.decodePdf.mockRejectedValue(new Error("bad xref"));
+    expect((await s.run()).size).toBe(0);
+    expect(mocks.decodePdf).toHaveBeenCalledTimes(1);
+    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: bad xref`]);
   });
 
   test("a page index beyond the file is recorded as the page that was drawn", async () => {

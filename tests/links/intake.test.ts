@@ -17,6 +17,7 @@ vi.mock("obsidian", () => ({
   normalizePath: (p: string) => p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "") || "/",
 }));
 const { Intake } = await import("../../src/links/intake");
+const { DecodeLimitError } = await import("../../src/links/decoders/budget");
 type IntakeInstance = InstanceType<typeof Intake>;
 type ViewArg = ConstructorParameters<typeof Intake>[0];
 
@@ -280,7 +281,19 @@ describe("a file dragged from Obsidian", () => {
     s.handlers.drop(dropEvent());
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
     expect(fileNodes(s)[0].file).toBe("Notes/plot.png");
-    expect(notices).toEqual(["Link Figures: Notes/bad.pdf could not be decoded, so it was not added."]);
+    expect(notices).toEqual(["Link Figures: Notes/bad.pdf could not be decoded, so it was not added. corrupt"]);
+  });
+
+  test("a page over the size limit is left out with a Notice that names its size", async () => {
+    const s = setup({ files: { "Notes/huge.pdf": "BINARY" } });
+    s.pdf.mockRejectedValue(new DecodeLimitError("PDF page at 150 dpi is 9000×9000 px (81 MP); the limit is 50 MP", 9000, 9000));
+    s.view.app.dragManager = { draggable: { type: "file", file: { path: "Notes/huge.pdf" } } };
+    s.handlers.drop(dropEvent());
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices).toEqual([
+      "Link Figures: Notes/huge.pdf could not be decoded, so it was not added. PDF page at 150 dpi is 9000×9000 px (81 MP); the limit is 50 MP",
+    ]);
+    expect(fileNodes(s)).toHaveLength(0);
   });
 
   test("an image that will not load is reported and left out", async () => {
@@ -420,12 +433,33 @@ describe("text dropped or pasted", () => {
     expect(notices).toEqual(["Link Figures: skipped data.csv: not an image, PDF or TIFF file."]);
   });
 
-  test("text with nothing to link is ignored", () => {
+  test("text with nothing to link is ignored", async () => {
     const s = setup();
     const ev = dropEvent({ text: "some words" });
     s.handlers.drop(ev);
+    // A line of text is tried as a vault path first; it names no file, so nothing comes of it, quietly.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fileNodes(s)).toHaveLength(0);
     expect(notices).toEqual([]);
+  });
+
+  test("without Obsidian's drag object, a vault path dropped as text links that file", async () => {
+    const s = setup({ files: { "Notes/data.csv": "x" } });
+    s.view.app.dragManager = undefined;
+    s.handlers.drop(dropEvent({ text: "  Notes/plot.png \n" }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].show]).toEqual(["Notes/plot.png", "image"]);
+    expect(fileNodes(s)[0].height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+
+    // A path that resolves to a note is a content card; one to another kind of file is named as skipped.
+    const ids = await s.intake.execute(
+      [{ kind: "maybe-path", text: "Notes/analysis.md" }, { kind: "maybe-path", text: "Notes/data.csv" }, { kind: "maybe-path", text: "Nowhere/at all.png" }],
+      { page: s.store.doc.pages[0], x: 0, y: 0 },
+      [],
+    );
+    expect(ids).toHaveLength(1);
+    expect([fileNodes(s)[1].file, fileNodes(s)[1].show]).toEqual(["Notes/analysis", "content"]);
+    expect(notices).toEqual(["Link Figures: skipped data.csv: not an image, PDF or TIFF file."]);
   });
 
   test("pasting links makes one node each, at the middle of the stage on the current page", async () => {
@@ -507,6 +541,25 @@ describe("files from the OS", () => {
     }
     expect(fileNodes(s).map((n) => n.file)).toEqual(["assets/cell.png", "assets/cell 1.png", "assets/cell 2.png"]);
     expect(s.view.app.vault.createFolder).toHaveBeenCalledTimes(1);
+  });
+
+  test("a name with characters a link cannot hold is saved under a link-safe name, which resolves", async () => {
+    const s = setup();
+    s.settings.attachmentFolder = "assets";
+    s.images["app://assets/plot -3.png"] = { width: 10, height: 10 };
+    s.images["app://assets/a -b-.png"] = { width: 10, height: 10 };
+    s.handlers.drop(dropEvent({ files: [osFile("plot #3.png"), osFile("a [b].png")] }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect([...s.written.keys()]).toEqual(["assets/plot -3.png", "assets/a -b-.png"]);
+    expect(fileNodes(s).map((n) => n.file)).toEqual(["assets/plot -3.png", "assets/a -b-.png"]);
+  });
+
+  test("Obsidian's attachment path is asked for the link-safe name", async () => {
+    const s = setup();
+    s.images["app://attachments/fig-1-.png"] = { width: 10, height: 10 };
+    s.handlers.drop(dropEvent({ files: [osFile("fig|1^.png")] }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(s.view.app.fileManager.getAvailablePathForAttachment).toHaveBeenCalledWith("fig-1-.png", FIGURE);
   });
 
   test("two files of the same name in one drop do not collide", async () => {

@@ -1,3 +1,4 @@
+import { DecodeLimitError } from "../../src/links/decoders/budget";
 import { decodeTiffPage } from "../../src/links/decoders/tiff";
 
 /** A TIFF of 16-bit greyscale pages, one row of `values.length` pixels each, in the given byte order. */
@@ -51,4 +52,14 @@ test("photometric interpretation reaches the plane: 0 is WhiteIsZero, 3 (palette
   expect(decodeTiffPage(buildTiff([[1, 2]], true, 0), 0).plane.whiteIsZero).toBe(true);
   expect(decodeTiffPage(buildTiff([[1, 2]], false, 1), 0).plane.whiteIsZero).toBe(false);
   expect(() => decodeTiffPage(buildTiff([[1, 2]], true, 3), 0)).toThrow(/photometric interpretation 3/);
+});
+
+test("a page over the decode budget is refused before its pixels are decoded, naming its size", () => {
+  // A two-pixel page whose header claims 8000 x 8000: the width and height tags are the first two entries, value at +8.
+  const bytes = buildTiff([[1, 2]], true);
+  const view = new DataView(bytes);
+  view.setUint16(8 + 2 + 8, 8000, true);
+  view.setUint16(8 + 2 + 12 + 8, 8000, true);
+  expect(() => decodeTiffPage(bytes, 0)).toThrow(DecodeLimitError);
+  expect(() => decodeTiffPage(bytes, 0)).toThrow("TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP");
 });

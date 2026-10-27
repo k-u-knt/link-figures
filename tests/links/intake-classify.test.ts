@@ -1,4 +1,4 @@
-import { classifyDrop, classifyPaste, dedupeName } from "../../src/links/intake-classify";
+import { classifyDrop, classifyPaste, dedupeName, linkSafeName } from "../../src/links/intake-classify";
 
 // The brief's six cases, verbatim.
 test("explorer file drag", () => expect(classifyDrop({ draggable: { type: "file", paths: ["Notes/plot.png"] } })).toEqual([{ kind: "link-file", path: "Notes/plot.png" }]));
@@ -90,10 +90,20 @@ describe("wikilinks in text", () => {
     expect(classifyDrop({ text: "[[#Heading]] [[|alias]] [[]]" })).toEqual([]);
   });
 
-  test("text without wikilinks, or none at all, gives nothing", () => {
-    expect(classifyDrop({ text: "just some words [not a link] [[unclosed" })).toEqual([]);
+  test("one line without wikilinks may be a vault path (the fallback when Obsidian's drag object is absent), trimmed", () => {
+    expect(classifyDrop({ text: "  Notes/plot.png\n" })).toEqual([{ kind: "maybe-path", text: "Notes/plot.png" }]);
+    expect(classifyDrop({ text: "just some words [not a link] [[unclosed" })).toEqual([{ kind: "maybe-path", text: "just some words [not a link] [[unclosed" }]);
+  });
+
+  test("text of several lines without wikilinks, blank text or none at all gives nothing", () => {
+    expect(classifyDrop({ text: "Notes/a.png\nNotes/b.png" })).toEqual([]);
+    expect(classifyDrop({ text: " \n " })).toEqual([]);
     expect(classifyDrop({ text: "" })).toEqual([]);
     expect(classifyDrop({})).toEqual([]);
+  });
+
+  test("text with a wikilink is read for its links only, never as a path", () => {
+    expect(classifyDrop({ text: "see [[a.png]]" })).toEqual([{ kind: "link-text", linktext: "a.png" }]);
   });
 
   test("a link does not run across lines", () => {
@@ -148,4 +158,21 @@ describe("dedupeName", () => {
     expect(dedupeName("a.png", (n) => (asked.push(n), n !== "a 2.png"))).toBe("a 2.png");
     expect(asked).toEqual(["a.png", "a 1.png", "a 2.png"]);
   });
+});
+
+describe("linkSafeName", () => {
+  test("each character a link cannot hold becomes '-'", () => {
+    expect(linkSafeName("plot #3.png")).toBe("plot -3.png");
+    expect(linkSafeName("a [b].png")).toBe("a -b-.png");
+    expect(linkSafeName("x^y|z.png")).toBe("x-y-z.png");
+  });
+
+  test("a run of them, with the dashes beside it, becomes one '-'; other dashes stay", () => {
+    expect(linkSafeName("a [[b]] c.png")).toBe("a -b- c.png");
+    expect(linkSafeName("a-#-b.png")).toBe("a-b.png");
+    expect(linkSafeName("plot--v2.png")).toBe("plot--v2.png");
+  });
+
+  test("a name with nothing to replace, a pasted image's, is left alone", () =>
+    expect(linkSafeName("Pasted image 20261027140509.png")).toBe("Pasted image 20261027140509.png"));
 });

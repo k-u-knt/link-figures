@@ -94,3 +94,14 @@ test("whitespace around the link and before the alias is trimmed", async () => {
   expect(trimmed).toMatchObject({ kind: "image", deps: ["Notes/analysis.md", "Notes/plot.png"] });
   expect(await resolveFileNode(node({ file: "analysis", subpath: "#^fig2b |label" }), "f.lnkfig.md", access, decoders)).toMatchObject({ kind: "image" });
 });
+
+test("a page over the decode budget is missing:decode, and the decoder's message comes along", async () => {
+  const { DecodeLimitError } = await import("../../src/links/decoders/budget");
+  const big = { ...decoders, tiff: vi.fn(async (): Promise<DecodedImage> => { throw new DecodeLimitError("TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP", 8000, 8000); }) };
+  expect(await resolveFileNode(node({ file: "cells.tif" }), "f.lnkfig.md", access, big)).toEqual({
+    kind: "missing",
+    reason: "decode",
+    deps: ["Notes/cells.tif"],
+    message: "TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP",
+  });
+});

@@ -1,5 +1,6 @@
 import { loadPdfJs } from "obsidian";
 import type { DecodedImage } from "../types";
+import { checkDecodeBudget } from "./budget";
 
 // The few pdf.js members used here; `loadPdfJs` is typed `any` or `unknown` depending on which typings win.
 interface PdfViewport {
@@ -37,13 +38,19 @@ async function withPage<T>(bytes: ArrayBuffer, pageIndex: number, use: (page: Pd
   }
 }
 
-/** One PDF page as a PNG data URL. `scale` 1 is 72 dpi; `width` and `height` are the canvas's whole pixels. */
+/**
+ * One PDF page as a PNG data URL. `scale` 1 is 72 dpi; `width` and `height` are the canvas's whole pixels. A page that
+ * would be over the decode budget at this scale is refused (`DecodeLimitError`) before anything is drawn.
+ */
 export async function decodePdf(bytes: ArrayBuffer, pageIndex: number, scale: number): Promise<DecodedImage> {
   return withPage(bytes, pageIndex, async (page, pageCount) => {
     const viewport = page.getViewport({ scale });
+    const width = Math.ceil(viewport.width);
+    const height = Math.ceil(viewport.height);
+    checkDecodeBudget(width, height, `PDF page at ${Math.round(scale * 72)} dpi`);
     const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
+    canvas.width = width;
+    canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D context unavailable");
     await page.render({ canvasContext: context, viewport }).promise;

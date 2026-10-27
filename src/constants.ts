@@ -18,6 +18,8 @@ export const RESOLVE_DEBOUNCE_MS = 300;
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
 export const PANEL_EXTENSIONS = [...IMAGE_EXTENSIONS, "pdf", "tif", "tiff"];
 export const PDF_SCREEN_DPI = 150;
+/** The largest image a decoder makes (a TIFF plane, a PDF page drawn at a resolution), in millions of pixels. */
+export const MAX_DECODE_MEGAPIXELS = 50;
 /** The range of the export resolution (dpi). */
 export const MIN_DPI = 72;
 export const MAX_DPI = 1200;

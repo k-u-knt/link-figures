@@ -403,3 +403,15 @@ describe("page-level commands with a selection on a page the stage is not centre
     expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-on-1"]);
   });
 });
+
+test("a text inserted right after a drop is an undo step of its own, not merged with the drop's insert", () => {
+  const { command, ctx, store } = setup();
+  // What a drop commits (`Intake`), a moment before the toolbar's Text.
+  store.commit("insert", (draft) => {
+    draft.nodes.push(fileNodeDefaults(draft.pages[0], { file: "plot.png", subpath: "", show: "image" }, []));
+  });
+  command("insert-text").run(ctx());
+  expect(store.doc.nodes.map((n) => n.type)).toEqual(["file", "text"]);
+  store.undo();
+  expect(store.doc.nodes.map((n) => n.type)).toEqual(["file"]);
+});

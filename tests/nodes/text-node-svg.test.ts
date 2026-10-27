@@ -47,6 +47,13 @@ test("right align anchors at the right edge of the box, and every tspan starts t
   expect(out.match(/x="110"/g)).toHaveLength(3);
 });
 
+test("spaces are kept as typed: the <text> preserves white space", () => {
+  const out = textNodeSvg(node({ text: "a  b\n  c" }), ctx());
+  expect(out).toMatch(/^<text [^>]* xml:space="preserve">/);
+  expect(out).toContain(">a  b</tspan>");
+  expect(out).toContain(">  c</tspan>");
+});
+
 test("empty text is an empty <text> element", () => {
   const out = textNodeSvg(node({ text: "" }), ctx());
   expect(out).toMatch(/^<text [^>]*><\/text>$/);

@@ -72,7 +72,8 @@ function splitFrontmatter(text: string): { frontmatter: string; rest: string } |
   return null;
 }
 
-const normalise = (text: string): string => text.replace(/\r\n/g, "\n");
+/** `\n` line endings, and no byte order mark (a file saved by another editor may start with one, before its `---`). */
+const normalise = (text: string): string => text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
 
 export function isFigureText(text: string): boolean {
   const split = splitFrontmatter(normalise(text));

@@ -16,6 +16,7 @@ test("corrupt JSON throws FormatError", () => expect(() => loadDocument(FILE.rep
 test("marker but no body gives a default document", () => { const { doc } = loadDocument("---\nlink-figures: 1\n---\n"); expect(doc.pages).toHaveLength(1); expect(doc.nodes).toEqual([]); });
 test("orphan link entry is dropped and node without entry gets empty file", () => { const text = FILE.replace("- p-8c21: ![[plots/plot.png]] ^p-8c21", "- p-zzzz: ![[ghost.png]] ^p-zzzz"); const { doc } = loadDocument(text); expect(doc.nodes).toHaveLength(2); expect((doc.nodes[1] as FileNode).file).toBe(""); });
 test("CRLF input is normalised", () => { const p = parseFigureFile(FILE.replace(/\n/g, "\r\n")); expect(p.links).toHaveLength(2); });
+test("a leading byte order mark is dropped: the file is still a figure, and parses as without it", () => { const withBom = "\uFEFF" + FILE; expect(isFigureText(withBom)).toBe(true); expect(parseFigureFile(withBom)).toEqual(parseFigureFile(FILE)); expect(parseFigureFile("\uFEFF" + FILE.replace(/\n/g, "\r\n")).frontmatter).toBe("---\nlink-figures: 1\ntitle: Fig 2\n---\n"); });
 
 // --- detection, structure edge cases
 test("isFigureText detects the frontmatter key only", () => {

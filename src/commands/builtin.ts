@@ -150,7 +150,8 @@ function insertText(ctx: CommandContext): void {
   node.x = roundPx((size.width - node.width) / 2);
   node.y = roundPx((size.height - node.height) / 2);
   node.z = nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1) + 1;
-  ctx.store.commit("insert", (draft) => {
+  // Not "insert": a drop's commit just before must stay an undo step of its own.
+  ctx.store.commit("insert-text", (draft) => {
     draft.nodes.push(node);
   });
   ctx.view.setSelection([node.id]);

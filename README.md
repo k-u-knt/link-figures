@@ -42,7 +42,7 @@ PDF export sets text in the built-in Helvetica for Arial and Helvetica, and subs
 
 ## Spike results
 
-Milestone 1 also settles two things the design leaves open. Run each check in Obsidian (with the test vault, below) and fill in the result.
+Milestone 1 also settles three things the design leaves open. Run each check in Obsidian (with the test vault, below) and fill in the result.
 
 **Local fonts.** Run "Link Figures: Check local font access" from the command palette. It reports whether `window.queryLocalFonts` exists in Obsidian's Electron and how many fonts it returns, or the name of the error. This decides how M2 finds TrueType files for PDF embedding.
 
@@ -56,7 +56,10 @@ Milestone 1 also settles two things the design leaves open. Run each check in Ob
 - Restored on startup: _to be filled in_
 - Verdict: _to be filled in_
 
-**External changes to a figure file.** Obsidian's text file view re-reads a file that is modified from outside the view (a link update after a rename, a sync, another editor) and hands the text to the plugin's `setViewData(text, false)`; this was read from Obsidian 1.14.5. The plugin takes the call up without reloading the figure when only link targets differ, and listens to the file's own modify event as well in case a version does not make the call.
+**External changes to a figure file.** A claim to confirm, not yet seen in Obsidian: reading Obsidian 1.14.5's `app.js` during M1, the implementer found that the text file view re-reads a file that is modified from outside the view (a link update after a rename, a sync, another editor) and hands the text to the plugin's `setViewData(text, false)`, merging three ways when the view has unsaved changes. The plugin takes that call up without reloading the figure when only link targets differ, and listens to the file's own modify event as well in case a version does not make the call, so it works either way. With a figure open, rename one of its sources in the file explorer and edit the figure file in another editor; note whether `setViewData` is called (a breakpoint or a `console.log` in it) and whether the figure keeps its selection and undo history.
+
+- Obsidian version and platform: _to be filled in_
+- Confirmed or struck: _to be filled in_
 
 ## Roadmap
 

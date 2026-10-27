@@ -5,6 +5,12 @@ import type { SvgContext } from "../registry/node-type";
 
 const ANCHOR = { left: "start", center: "middle", right: "end" } as const;
 
+/**
+ * What a blank line holds. A `<tspan>` with no characters in it is not placed, so its `dy` is lost and the lines after
+ * it move up; a non-breaking space is a character, which is. (A line of only spaces collapses to nothing in SVG, so it is blank too.)
+ */
+const BLANK_LINE = "&#160;";
+
 /** For text between tags. (A quote needs no escape there.) */
 function escapeText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -15,6 +21,7 @@ function escapeText(s: string): string {
  * font size below the top of the box, and one `<tspan>` per line of the text, each starting at the same `x` and a line
  * height below the one before. `x` is the box's left, centre or right edge, as the alignment says, with the anchor to
  * match. The text is written as it is: not wrapped to the box (only the lines the text itself has), and not clipped.
+ * A blank line is a `<tspan>` holding a non-breaking space.
  * Numbers are written as they are, unrounded.
  */
 export function textNodeSvg(node: TextNode, _ctx: SvgContext): string {
@@ -33,6 +40,6 @@ export function textNodeSvg(node: TextNode, _ctx: SvgContext): string {
   attrs.push(`fill="${escapeAttr(font.color)}"`, `text-anchor="${ANCHOR[font.align]}"`);
 
   const lines = node.text === "" ? [] : node.text.split(/\r\n|\r|\n/);
-  const spans = lines.map((line, i) => `<tspan x="${x}" dy="${i === 0 ? 0 : font.lineHeight * sizePx}">${escapeText(line)}</tspan>`);
+  const spans = lines.map((line, i) => `<tspan x="${x}" dy="${i === 0 ? 0 : font.lineHeight * sizePx}">${line.trim() === "" ? BLANK_LINE : escapeText(line)}</tspan>`);
   return `<text ${attrs.join(" ")}>${spans.join("")}</text>`;
 }

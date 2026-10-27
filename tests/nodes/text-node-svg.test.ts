@@ -53,11 +53,36 @@ test("empty text is an empty <text> element", () => {
   expect(out).not.toContain("<tspan");
 });
 
-test("blank lines are kept, and any line ending is a line break", () => {
-  const out = textNodeSvg(node({ text: "a\r\n\nb" }), ctx());
-  expect(out.match(/<tspan/g)).toHaveLength(3);
+test("any line ending is a line break", () => {
+  const out = textNodeSvg(node({ text: "a\r\n\nb\rc" }), ctx());
+  expect(out.match(/<tspan/g)).toHaveLength(4);
   expect(out).toContain('dy="0">a</tspan>');
-  expect(out).toContain("></tspan>");
+  expect(out).toContain(">c</tspan>");
+});
+
+// An empty <tspan> does not apply its dy in renderers (checked in headless Chrome: the line after a blank one came out one
+// line below the one before it, not two), so a blank line carries a non-breaking space to have something to place.
+test("a blank line is a tspan holding a non-breaking space, so the lines after it keep their place", () => {
+  const sizePx = 7 * PT_TO_PX;
+  const out = textNodeSvg(node({ text: "a\n\nb" }), ctx());
+  expect(out.match(/<tspan/g)).toHaveLength(3);
+  expect(out).not.toContain("></tspan>");
+  expect(out).toContain('<tspan x="10" dy="0">a</tspan>');
+  expect(out).toContain(`<tspan x="10" dy="${1.2 * sizePx}">&#160;</tspan>`);
+  expect(out).toContain(`<tspan x="10" dy="${1.2 * sizePx}">b</tspan>`);
+});
+
+test("a first or last blank line, and a line of only spaces (which SVG collapses to nothing), are held the same way", () => {
+  expect(textNodeSvg(node({ text: "\nb" }), ctx())).toContain('<tspan x="10" dy="0">&#160;</tspan>');
+  expect(textNodeSvg(node({ text: "a\n" }), ctx())).toMatch(/>a<\/tspan><tspan [^>]*>&#160;<\/tspan>/);
+  const spaces = textNodeSvg(node({ text: "a\n  \t\nb" }), ctx());
+  expect(spaces.match(/&#160;/g)).toHaveLength(1);
+  expect(spaces).not.toContain("></tspan>");
+});
+
+test("a line with text keeps its spaces, and only empty text has no tspans at all", () => {
+  expect(textNodeSvg(node({ text: " a b " }), ctx())).toContain('dy="0"> a b </tspan>');
+  expect(textNodeSvg(node({ text: "" }), ctx())).not.toContain("<tspan");
 });
 
 test("escapes &, < and > in text, and quotes in attributes", () => {

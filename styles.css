@@ -1,1 +1,61 @@
 /* Link Figures */
+
+.lf-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.lf-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.lf-toolbar:empty,
+.lf-inspector:empty {
+  display: none;
+}
+
+.lf-inspector {
+  flex: none;
+}
+
+/* The pan/zoom surface, dotted like Obsidian's Canvas. */
+.lf-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--canvas-background, var(--background-primary));
+  background-image: radial-gradient(circle, var(--canvas-dot-pattern, var(--background-modifier-border)) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* A file that could not be read: the banner, then its text exactly as it is on disk. */
+.lf-error {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: var(--size-4-4);
+  background-color: var(--background-primary);
+}
+
+.lf-error-banner {
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-error);
+  color: var(--text-on-accent);
+}
+
+.lf-error-raw {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  user-select: text;
+  cursor: text;
+}

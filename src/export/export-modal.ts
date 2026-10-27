@@ -65,7 +65,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
   }
 
   const result = await run.exporter.run(
-    { doc: run.doc, pages: run.pages, svgs, assets, warnings, baseName: run.baseName, dpi: run.dpi },
+    { doc: run.doc, pages: run.pages, svgs, assets, nodeTypes: deps.nodeTypes, warnings, baseName: run.baseName, dpi: run.dpi },
     {},
   );
 

@@ -1,12 +1,15 @@
 import type { AssetMap } from "../export/asset-types";
 import type { Document, Page, PageId } from "../model/types";
 import type { Field } from "./fields";
+import type { NodeTypeRegistry } from "./node-type";
 
 export interface ExportInput {
   doc: Document;
   pages: Page[];
   svgs: Map<PageId, string>;
   assets: Map<PageId, AssetMap>;
+  /** For an exporter that has to build SVG again, a part of a page at a time (the PDF exporter's layers). */
+  nodeTypes: NodeTypeRegistry;
   /** The SVG builder's warnings; exporters pass these through in their result. */
   warnings: string[];
   baseName: string;

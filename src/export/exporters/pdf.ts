@@ -1,9 +1,20 @@
-import type { Page } from "../../model/types";
-import type { Exporter } from "../../registry/exporter";
+import type { PDFDocument, PDFPage } from "@cantoo/pdf-lib";
+import type { jsPDF as JsPdf } from "jspdf";
+import type { FileNode, Node, NodeId, Page } from "../../model/types";
+import { pageSizePx } from "../../model/geometry";
+import { PX_TO_PT } from "../../constants";
+import type { Exporter, ExportInput } from "../../registry/exporter";
+import type { AssetMap, PdfAsset } from "../asset-types";
+import { pdfPanelPlacement, splitLayers, type Layer, type PdfPlacement } from "../pdf-layers";
+import { buildPageSvg } from "../svg-builder";
 
 const PDF_MIME = "application/pdf";
 const SVG_MIME = "image/svg+xml";
 const MAX_PARSE_ERROR_CHARS = 200;
+/** What the SVG builder says about a PDF panel it had to draw from its raster; here the panels are embedded as vectors instead. */
+const RASTERISED_PANEL_WARNING = /PDF panel rasterised/;
+
+type JsPdfConstructor = typeof JsPdf;
 
 const orientationOf = (page: Page) => (page.width > page.height ? "landscape" : "portrait");
 
@@ -19,9 +30,142 @@ function parseSvg(svg: string, page: Page): Element {
   return parsed.documentElement;
 }
 
+/** A jsPDF document whose first page has the figure page's size. */
+function createPdf(jsPDF: JsPdfConstructor, page: Page): JsPdf {
+  // Fonts: nothing to embed yet. Text nodes (Task 16) register their font files on the document here, before any page is drawn.
+  return new jsPDF({ unit: "mm", format: [page.width, page.height], orientation: orientationOf(page), compress: true });
+}
+
+/** The page's SVG drawn as vectors, over the whole of jsPDF's current page. */
+async function drawSvg(pdf: JsPdf, svg: string, page: Page): Promise<void> {
+  await pdf.svg(parseSvg(svg, page), { x: 0, y: 0, width: page.width, height: page.height });
+}
+
+/** One PDF holding a page per figure page, each drawn from its own SVG. */
+async function plainPdf(jsPDF: JsPdfConstructor, pages: Page[], svgs: string[]): Promise<Blob> {
+  // jsPDF starts with one page, so the first page sets the document up and the rest are added.
+  const pdf = createPdf(jsPDF, pages[0]);
+  for (const [i, page] of pages.entries()) {
+    if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
+    await drawSvg(pdf, svgs[i], page);
+  }
+  return pdf.output("blob");
+}
+
+interface PdfPanel {
+  node: FileNode;
+  asset: PdfAsset;
+}
+
+/** The page's PDF panels, each with the PDF page it shows: the file nodes whose asset is a PDF page. */
+function pdfPanelsOf(nodes: Node[], assets: AssetMap): Map<NodeId, PdfPanel> {
+  const panels = new Map<NodeId, PdfPanel>();
+  for (const node of nodes) {
+    const asset = assets.get(node.id);
+    if (node.type === "file" && asset?.kind === "pdf") panels.set(node.id, { node, asset });
+  }
+  return panels;
+}
+
+type PdfLib = typeof import("@cantoo/pdf-lib");
+
+/** One page to export: its built SVG, its PDF panels, and the layers its nodes fall into around them. */
+interface PagePlan {
+  page: Page;
+  svg: string;
+  panels: Map<NodeId, PdfPanel>;
+  layers: Layer[];
+}
+
+/** The layer's SVG drawn by svg2pdf.js on a jsPDF page of its own, as the bytes of that one-page PDF. */
+async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, page: Page): Promise<ArrayBuffer> {
+  const pdf = createPdf(jsPDF, page);
+  await drawSvg(pdf, svg, page);
+  return pdf.output("arraybuffer");
+}
+
+/** True when the placement can be drawn: finite numbers, and a part of the source page that has an area. */
+function isDrawable({ box, ...placed }: PdfPlacement): boolean {
+  const numbers = [box.left, box.bottom, box.right, box.top, placed.x, placed.y, placed.width, placed.height];
+  return numbers.every(Number.isFinite) && box.right > box.left && box.top > box.bottom;
+}
+
+/**
+ * One panel's page of its source PDF, drawn on `target` at the panel's rectangle as vectors: the source page's own content
+ * is embedded in the output, clipped to the part that shows. Anything that goes wrong names the node and the page.
+ */
+async function drawPdfPanel(lib: PdfLib, out: PDFDocument, target: PDFPage, page: Page, { node, asset }: PdfPanel): Promise<void> {
+  try {
+    const source = await lib.PDFDocument.load(asset.bytes);
+    const sourcePage = source.getPage(asset.pageIndex);
+    // pdf-lib embeds a page's content as it is stored, so a page the viewer turns would come out unturned.
+    if (sourcePage.getRotation().angle % 360 !== 0) throw new Error("the page has a rotation of its own, which cannot be embedded");
+
+    const placement = pdfPanelPlacement(node, page, asset);
+    if (!isDrawable(placement)) throw new Error("the part of the page that shows has no area");
+    // The placement measures from the page's own corner, which is not the origin when the page's box starts elsewhere.
+    const origin = sourcePage.getCropBox();
+    const { box } = placement;
+    const embedded = await out.embedPage(sourcePage, {
+      left: box.left + origin.x,
+      bottom: box.bottom + origin.y,
+      right: box.right + origin.x,
+      top: box.top + origin.y,
+    });
+    target.drawPage(embedded, {
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+      rotate: lib.degrees(placement.rotate),
+      ...(node.opacity < 1 ? { opacity: node.opacity } : {}),
+    });
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`Node ${node.id} ("${node.file}", page ${asset.pageIndex + 1}): could not embed the PDF page as vectors: ${reason}`, { cause });
+  }
+}
+
+/**
+ * The same document for figures with PDF panels. svg2pdf.js can only draw a PDF panel from its raster, so the page is
+ * composed in layers instead: each run of other nodes is drawn on its own as vectors and embedded as a page, and each PDF
+ * panel's source page is embedded as a page of its own, all stacked on one output page in z order.
+ */
+async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: PagePlan[]): Promise<Blob> {
+  const lib = await import("@cantoo/pdf-lib");
+  const out = await lib.PDFDocument.create();
+  for (const { page, svg: pageSvg, panels, layers } of plans) {
+    const size = pageSizePx(page);
+    const [width, height] = [size.width * PX_TO_PT, size.height * PX_TO_PT];
+    const target = out.addPage([width, height]);
+    for (const [index, layer] of layers.entries()) {
+      if (layer.kind === "pdf") {
+        const panel = panels.get(layer.nodeId);
+        if (!panel) throw new Error(`Node ${layer.nodeId} is not a PDF panel`);
+        await drawPdfPanel(lib, out, target, page, panel);
+        continue;
+      }
+      // Only the first layer has the paper; a layer with no nodes (the first, below a panel) is just that.
+      if (layer.nodeIds.length === 0 && index > 0) continue;
+      // A page without PDF panels is one layer of everything, which is the SVG already built.
+      const svg =
+        panels.size === 0
+          ? pageSvg
+          : buildPageSvg(input.doc, page, input.nodeTypes, input.assets.get(page.id) ?? new Map(), {
+              only: new Set(layer.nodeIds),
+              paper: index === 0,
+            }).svg;
+      const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, page));
+      target.drawPage(embedded, { x: 0, y: 0, width, height });
+    }
+  }
+  return new Blob([await out.save()], { type: PDF_MIME });
+}
+
 /**
  * One PDF with a page per figure page, each page's SVG drawn as vectors by svg2pdf.js. Paper, shapes and clip paths stay
- * vector; the raster assets (`<image>`) become image objects, clipped where the SVG clips them.
+ * vector; the raster assets (`<image>`) become image objects, clipped where the SVG clips them. A page with PDF panels is
+ * composed in layers by pdf-lib so that the panels stay vectors too.
  */
 export const pdfExporter: Exporter = {
   id: "pdf",
@@ -34,27 +178,25 @@ export const pdfExporter: Exporter = {
     if (input.pages.length === 0) return { files: [], warnings: input.warnings };
 
     // Check every page before loading anything heavy.
-    const svgs = input.pages.map((page) => {
+    const plans = input.pages.map((page): PagePlan => {
       const svg = input.svgs.get(page.id);
       if (svg === undefined) throw new Error(`No SVG was built for page "${page.name}"`);
-      return svg;
+      const nodes = input.doc.nodes.filter((n) => n.page === page.id);
+      const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
+      return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id)) };
     });
 
-    // Loaded here, not at the top, so the editor does not pay for either library until someone exports a PDF.
+    // Loaded here, not at the top, so the editor does not pay for any of the libraries until someone exports a PDF.
     // Importing svg2pdf.js is what adds `svg()` to jsPDF's prototype.
     const { jsPDF } = await import("jspdf");
     await import("svg2pdf.js");
-    // Fonts: nothing to embed yet. Text nodes (Task 16) register their font files on the document here, before any page is drawn.
 
-    // jsPDF starts with one page, so the first page sets the document up and the rest are added.
-    const first = input.pages[0];
-    const pdf = new jsPDF({ unit: "mm", format: [first.width, first.height], orientation: orientationOf(first), compress: true });
-    for (const [i, page] of input.pages.entries()) {
-      const element = parseSvg(svgs[i], page);
-      if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
-      await pdf.svg(element, { x: 0, y: 0, width: page.width, height: page.height });
+    const name = `${input.baseName}.pdf`;
+    if (plans.every((plan) => plan.panels.size === 0)) {
+      const blob = await plainPdf(jsPDF, input.pages, plans.map((plan) => plan.svg));
+      return { files: [{ name, blob }], warnings: input.warnings };
     }
-
-    return { files: [{ name: `${input.baseName}.pdf`, blob: pdf.output("blob") }], warnings: input.warnings };
+    const blob = await layeredPdf(jsPDF, input, plans);
+    return { files: [{ name, blob }], warnings: input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)) };
   },
 };

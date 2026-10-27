@@ -89,9 +89,10 @@ test("each page gets its own assets and SVG, and the files are written to the fo
   expect(second).not.toContain("<image");
 });
 
-test("the exporter is given the pages asked for, with their SVGs, their assets, the dpi and the base name", async () => {
+test("the exporter is given the pages asked for, with their SVGs, their assets, the node types, the dpi and the base name", async () => {
   const { doc, png, resolved } = figure();
   const { app } = world();
+  const types = nodeTypes();
   let seen: Parameters<Exporter["run"]>[0] | undefined;
   const spy: Exporter = {
     ...svgExporter,
@@ -102,9 +103,10 @@ test("the exporter is given the pages asked for, with their SVGs, their assets, 
   };
   await runExport(
     { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 150 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined },
+    { app, nodeTypes: types, resolved: (id) => resolved.get(id), elementFor: () => undefined },
   );
   expect(seen?.pages).toEqual([doc.pages[0]]);
+  expect(seen?.nodeTypes).toBe(types);
   expect([...(seen?.svgs.keys() ?? [])]).toEqual([doc.pages[0].id]);
   expect(seen?.assets.get(doc.pages[0].id)?.get(png.id)?.kind).toBe("image");
   expect(seen).toMatchObject({ baseName: "Fig", dpi: 150, doc });

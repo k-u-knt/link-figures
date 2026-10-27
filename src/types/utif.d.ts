@@ -9,8 +9,12 @@ declare module "utif" {
     isLE: boolean;
     /** BitsPerSample. */
     t258?: number[];
+    /** PhotometricInterpretation. */
+    t262?: number[];
     /** SamplesPerPixel. */
     t277?: number[];
+    /** PlanarConfiguration. */
+    t284?: number[];
     [tag: string]: unknown;
   }
 

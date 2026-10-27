@@ -16,6 +16,8 @@ import type { FigureViewLike } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
+import { isEditable, PointerController } from "./pointer";
+import { SelectionState } from "./selection";
 import { nearestPage, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
@@ -23,12 +25,6 @@ const blankDocument = (): Document => createDocument(DEFAULT_SETTINGS.defaultPre
 
 /** Wheel zoom: one unit of `deltaY` scales the zoom by `exp(-0.01)`, which suits a trackpad pinch (a ctrl+wheel). */
 const WHEEL_ZOOM_RATE = 0.01;
-
-/** Text being typed into must keep its space bar. */
-function isEditable(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
-}
 
 function describeLoadError(error: unknown): string {
   if (error instanceof FormatError || error instanceof NotFigureError) return error.message;
@@ -53,6 +49,9 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   readonly viewport = new Viewport();
   pageLayer!: PageLayer;
   nodeHost!: NodeHost;
+  /** Which nodes are selected; emptied whenever a document is loaded. */
+  selection!: SelectionState;
+  private pointer!: PointerController;
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
@@ -97,6 +96,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   async onOpen(): Promise<void> {
     this.ensureDom();
     this.wireStageInput();
+    this.pointer.attach(this.stageEl);
     // A stage that was hidden or not yet laid out when the document loaded is fitted once it has a size.
     this.resizeObserver = new ResizeObserver(() => this.fitWhenSized());
     this.resizeObserver.observe(this.stageEl);
@@ -104,6 +104,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   }
 
   async onClose(): Promise<void> {
+    this.pointer?.detach();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     if (this.fitFrame !== null) window.cancelAnimationFrame(this.fitFrame);
@@ -171,7 +172,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   // FigureViewLike. Stubs until the tasks named beside each one.
 
   selectedIds(): NodeId[] {
-    return []; // Task 11 reads the selection state
+    return [...this.selection.ids];
   }
 
   /** The page whose centre is nearest the middle of the stage. */
@@ -181,8 +182,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     return nearestPage(this.store.doc, middle) ?? this.store.doc.pages[0];
   }
 
-  setSelection(_ids: NodeId[]): void {
-    // Task 11 writes the selection state
+  setSelection(ids: NodeId[]): void {
+    this.pointer.select(ids);
   }
 
   fitPage(): void {
@@ -200,6 +201,13 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
 
   applyViewport(): void {
     this.viewportEl.style.transform = this.viewport.cssTransform();
+    // For what is drawn on the pages but is sized in screen pixels (handles, outlines): see the selection rules in styles.css.
+    this.viewportEl.style.setProperty("--lf-zoom", String(this.viewport.zoom));
+  }
+
+  /** A pointerdown that pans the canvas (middle button, or the left with the space bar held), which the pointer controller leaves alone. */
+  isPanGesture(ev: PointerEvent): boolean {
+    return ev.button === 1 || (ev.button === 0 && this.spaceHeld);
   }
 
   requestExport(): void {
@@ -221,6 +229,8 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.pageLayer = new PageLayer(this.viewportEl);
     // Made here, not in `onOpen`, because this is what makes sure a page layer exists whichever of the two runs first.
     this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries.nodeTypes);
+    this.selection = new SelectionState();
+    this.pointer = new PointerController(this);
     this.applyViewport();
   }
 
@@ -248,7 +258,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
 
   private onPointerDown(ev: PointerEvent): void {
     if (this.errorEl || this.panning) return;
-    if (ev.button !== 1 && !(ev.button === 0 && this.spaceHeld)) return;
+    if (!this.isPanGesture(ev)) return;
     ev.preventDefault();
     this.panning = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
     this.stageEl.setPointerCapture(ev.pointerId);
@@ -285,7 +295,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   }
 
   /** A pointer position in stage pixels, which is what the viewport maps to and from. */
-  private stagePoint(ev: { clientX: number; clientY: number }): Pt {
+  stagePoint(ev: { clientX: number; clientY: number }): Pt {
     const box = this.stageEl.getBoundingClientRect();
     return { x: ev.clientX - box.left, y: ev.clientY - box.top };
   }
@@ -338,8 +348,11 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     for (const node of this.store.doc.nodes) this.index.untrack(node.id);
     this.resolvedCache.clear();
     this.parsed = parsed;
-    const store = new DocumentStore(doc);
+    const store = new DocumentStore(doc, () => this.pointer.commitTime());
     this.store = store;
+    // Nothing selected, in progress or drawn belongs to the document that was just replaced.
+    this.selection.clear();
+    this.pointer.rebind();
     this.pageLayer.render(doc);
     this.nodeHost.renderAll(doc);
     void this.nodeHost.resolve(doc.nodes.map((n) => n.id));

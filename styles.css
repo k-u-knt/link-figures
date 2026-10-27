@@ -219,3 +219,47 @@
   opacity: 1;
   color: var(--text-error);
 }
+
+/*
+ * Selection: an outlined box with eight handles for each selected node, and the marquee, all drawn in the page's
+ * overlay. The overlay is inside the zoomed viewport, so sizes in screen pixels are divided by --lf-zoom (set on
+ * the viewport by the view) to stay the same on screen whatever the zoom.
+ */
+.lf-selection {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.lf-selected {
+  outline: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+}
+
+/* Handles opt back in to pointer events (for their cursor); the pointer controller finds them in the model. */
+.lf-handle {
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(8px / var(--lf-zoom, 1));
+  height: calc(8px / var(--lf-zoom, 1));
+  transform: translate(-50%, -50%);
+  background-color: var(--background-primary);
+  border: calc(1px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+  pointer-events: auto;
+}
+
+.lf-handle[data-handle="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.lf-handle[data-handle="n"] { left: 50%; top: 0; cursor: ns-resize; }
+.lf-handle[data-handle="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.lf-handle[data-handle="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+.lf-handle[data-handle="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.lf-handle[data-handle="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+.lf-handle[data-handle="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.lf-handle[data-handle="w"] { left: 0; top: 50%; cursor: ew-resize; }
+
+.lf-marquee {
+  position: absolute;
+  box-sizing: border-box;
+  border: calc(1px / var(--lf-zoom, 1)) dashed var(--interactive-accent);
+  background-color: rgba(var(--interactive-accent-rgb), 0.1);
+  pointer-events: none;
+}

@@ -48,7 +48,7 @@ export const pdfExporter: Exporter = {
 
     // jsPDF starts with one page, so the first page sets the document up and the rest are added.
     const first = input.pages[0];
-    const pdf = new jsPDF({ unit: "mm", format: [first.width, first.height], orientation: orientationOf(first) });
+    const pdf = new jsPDF({ unit: "mm", format: [first.width, first.height], orientation: orientationOf(first), compress: true });
     for (const [i, page] of input.pages.entries()) {
       const element = parseSvg(svgs[i], page);
       if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));

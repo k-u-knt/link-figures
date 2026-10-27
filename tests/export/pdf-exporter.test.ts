@@ -64,7 +64,7 @@ test("it describes itself as a vector PDF, with no options", () => {
 test("one PDF: the first page sets the document up, later pages are added, each is drawn at its own size", async () => {
   const { files } = await pdfExporter.run(input(), {});
   expect(calls).toEqual([
-    ["new", { unit: "mm", format: [183, 170], orientation: "landscape" }],
+    ["new", { unit: "mm", format: [183, 170], orientation: "landscape", compress: true }],
     ["svg", "<svg>Page 1</svg>", { x: 0, y: 0, width: 183, height: 170 }],
     ["addPage", [210, 297], "portrait"],
     ["svg", "<svg>Page 2</svg>", { x: 0, y: 0, width: 210, height: 297 }],

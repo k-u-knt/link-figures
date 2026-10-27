@@ -54,6 +54,7 @@ test("the built-in commands, in toolbar order, with the icons and groups of the 
     "edit/delete/trash",
     "edit/duplicate/copy",
     "edit/open-source/link",
+    "insert/insert-text/type",
     "arrange/bring-forward/arrow-up",
     "arrange/send-backward/arrow-down",
     "page/add-page/file-plus",
@@ -167,6 +168,60 @@ test("duplicate keeps a text node's font, and copies do not share objects with t
   const [original, copy] = store.doc.nodes as any[];
   expect(copy.font).toEqual(original.font);
   expect(copy.font).not.toBe(original.font);
+});
+
+describe("insert-text", () => {
+  test("adds a text node centred on the current page, selects it, and is one undo step", () => {
+    const { command, ctx, view, store } = setup();
+    expect(command("insert-text").applies(ctx())).toBe(true);
+    command("insert-text").run(ctx());
+
+    const [node] = store.doc.nodes;
+    expect(store.doc.nodes).toHaveLength(1);
+    expect(node).toMatchObject({ type: "text", text: "Text", page: store.doc.pages[0].id, z: 0, rotation: 0, locked: false });
+    const page = store.doc.pages[0];
+    expect(node.x + node.width / 2).toBeCloseTo(mmToPx(page.width) / 2, 1);
+    expect(node.y + node.height / 2).toBeCloseTo(mmToPx(page.height) / 2, 1);
+    expect(view.selection).toEqual([node.id]);
+
+    store.undo();
+    expect(store.doc.nodes).toEqual([]);
+  });
+
+  test("goes on top of the nodes of the page it is for, whatever other pages hold", () => {
+    const { command, ctx, view, store } = setup((d) => {
+      d.pages.push(createPage("a4-landscape", d.pages.map((p) => p.id)));
+      fileNode(d, { id: "p-low", z: 2, page: d.pages[0].id });
+      fileNode(d, { id: "p-high", z: 7, page: d.pages[0].id });
+      fileNode(d, { id: "p-other", z: 40, page: d.pages[1].id });
+    });
+    command("insert-text").run(ctx());
+    expect(store.doc.nodes.at(-1)!.z).toBe(8);
+
+    // Nothing selected, the stage centred on the second page: it gets the node, centred on its own size.
+    view.selection = [];
+    view.pageIndex = 1;
+    command("insert-text").run(ctx());
+    const second = store.doc.nodes.at(-1)!;
+    expect(second).toMatchObject({ page: store.doc.pages[1].id, z: 41 });
+    expect(second.x + second.width / 2).toBeCloseTo(mmToPx(store.doc.pages[1].width) / 2, 1);
+    expect(second.y + second.height / 2).toBeCloseTo(mmToPx(store.doc.pages[1].height) / 2, 1);
+  });
+
+  test("a second one gets its own id", () => {
+    const { command, ctx, store } = setup();
+    command("insert-text").run(ctx());
+    command("insert-text").run(ctx());
+    expect(new Set(store.doc.nodes.map((n) => n.id)).size).toBe(2);
+    expect(store.doc.nodes.map((n) => n.z)).toEqual([0, 1]);
+  });
+
+  test("is in the palette, and the toolbar's insert group", () => {
+    const { plugin } = setup();
+    expect(plugin.commands.find((c) => c.id === "lf-insert-text").name).toBe("Text");
+    expect(plugin.registries.commands.get("insert-text")).toMatchObject({ group: "insert", icon: "type" });
+    expect(plugin.registries.commands.get("insert-text")!.hotkeys).toBeUndefined();
+  });
 });
 
 describe("restack", () => {

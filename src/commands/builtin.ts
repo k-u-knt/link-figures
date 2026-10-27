@@ -1,6 +1,6 @@
 import { joinLinktext } from "../format/links-section";
-import { createPage, newId } from "../model/defaults";
-import { mmToPx } from "../model/geometry";
+import { createPage, newId, textNodeDefaults } from "../model/defaults";
+import { mmToPx, pageSizePx } from "../model/geometry";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import type { Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
@@ -140,6 +140,22 @@ function deletePage(ctx: CommandContext): void {
   });
 }
 
+/** A new text node in the middle of the page, above everything on it, and selected. */
+function insertText(ctx: CommandContext): void {
+  const page = ctx.page;
+  if (!page) return;
+  const { nodes } = ctx.store.doc;
+  const node = textNodeDefaults(page, {}, nodes.map((n) => n.id));
+  const size = pageSizePx(page);
+  node.x = roundPx((size.width - node.width) / 2);
+  node.y = roundPx((size.height - node.height) / 2);
+  node.z = nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1) + 1;
+  ctx.store.commit("insert", (draft) => {
+    draft.nodes.push(node);
+  });
+  ctx.view.setSelection([node.id]);
+}
+
 /** The one file node with a link that is selected, if that is what is selected. */
 function linkedFileNode(ctx: CommandContext): Extract<Node, { type: "file" }> | undefined {
   if (ctx.selection.length !== 1) return undefined;
@@ -161,6 +177,7 @@ function builtinCommands(): Command[] {
       run: (ctx) => void editor(ctx).deleteSelection(),
     },
     { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", applies: (ctx) => ctx.selection.length > 0, run: duplicate },
+    { id: "insert-text", name: "Text", icon: "type", group: "insert", applies: (ctx) => !!ctx.page, run: insertText },
     stackCommand("bring-forward", "Bring forward", "arrow-up", "forward"),
     stackCommand("send-backward", "Send backward", "arrow-down", "backward"),
     { id: "add-page", name: "Add page", icon: "file-plus", group: "page", applies: () => true, run: addPage },

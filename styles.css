@@ -261,6 +261,21 @@
   text-align: center;
 }
 
+/* A text node: its text fills the box and is clipped to it. Double-click edits it in place (see `text-node.ts`). */
+.lf-text {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: default;
+}
+
+/* Inside the box (the offset), since the body clips what is drawn outside it. */
+.lf-text[contenteditable] {
+  outline: 1px solid var(--interactive-accent);
+  outline-offset: -1px;
+  cursor: text;
+}
+
 /* Opens the link; shown on hover, and always when the link is broken. */
 .lf-badge {
   position: absolute;

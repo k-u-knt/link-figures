@@ -4,6 +4,7 @@ import { FormatError, NotFigureError } from "../format/errors";
 import { loadDocument } from "../format/load";
 import type { ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
+import { Intake } from "../links/intake";
 import { InvalidationIndex } from "../links/invalidation";
 import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
@@ -52,6 +53,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
   /** Which nodes are selected; emptied whenever a document is loaded. */
   selection!: SelectionState;
   private pointer!: PointerController;
+  private intake!: Intake;
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
@@ -97,6 +99,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.ensureDom();
     this.wireStageInput();
     this.pointer.attach(this.stageEl);
+    this.intake.attach(this.stageEl);
     // A stage that was hidden or not yet laid out when the document loaded is fitted once it has a size.
     this.resizeObserver = new ResizeObserver(() => this.fitWhenSized());
     this.resizeObserver.observe(this.stageEl);
@@ -231,6 +234,7 @@ export class LinkFiguresView extends TextFileView implements FigureViewLike {
     this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries.nodeTypes);
     this.selection = new SelectionState();
     this.pointer = new PointerController(this);
+    this.intake = new Intake(this);
     this.applyViewport();
   }
 

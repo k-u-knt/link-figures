@@ -12,7 +12,12 @@ export interface PixelRect {
 /** How close (relative to the source's size) a visible edge must be to the source's to count as reaching it. */
 const WHOLE_TOLERANCE = 1e-9;
 
-/** How close (in pixels) an edge must be to a whole pixel to be taken as on it, so that rounding noise does not add a pixel. */
+/**
+ * How close (in pixels) an edge must be to a whole pixel to be taken as on it, so that rounding noise does not add a
+ * pixel. It leans inward: an edge up to 1e-6 px past a whole pixel is rounded in, so at most a millionth of a pixel of
+ * what shows can be cut. That is far below anything a pixel can draw (and below the rounding of the crop that put the
+ * edge there), so it does not go against "when unsure, keep".
+ */
 const PIXEL_SNAP = 1e-6;
 
 /**

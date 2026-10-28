@@ -17,7 +17,7 @@ export function isEditable(target: EventTarget | null): boolean {
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
 
-/** What a press turns into once it has travelled far enough. */
+/** What a press turns into once it has travelled far enough. A `move` that has nothing to move becomes a marquee: see `begin`. */
 type Intent =
   | { kind: "move" }
   | { kind: "resize"; id: NodeId; handle: Handle }
@@ -169,6 +169,7 @@ export class PointerController {
         return;
       }
       // A press on a node of a larger selection moves them all; a click that goes nowhere narrows it to that node.
+      // A press on a locked node selects it like any other, but there is nothing to move: a drag from it sweeps a marquee (see `begin`).
       const collapseTo = selection.has(hit) ? hit : null;
       if (!selection.has(hit)) selection.set([hit]);
       this.press(ev, world, { kind: "move" }, collapseTo);
@@ -212,7 +213,13 @@ export class PointerController {
     else if (g.kind === "marquee") this.sweep(g, now);
   }
 
-  /** The gesture a press becomes once it is a drag, or null when what it was going to act on is gone. */
+  /**
+   * The gesture a press becomes once it is a drag, or null when what it was going to act on is gone. A press on a node
+   * moves the selected nodes that are not locked; when none is (the press was on a locked node, which can be selected
+   * but not moved) the drag sweeps a marquee on that node's page instead, so that a locked node, a full-page
+   * background say, does not keep what lies over it from being selected by a sweep. That marquee starts afresh, as
+   * one from bare paper does without shift: the locked node leaves the selection as the sweep begins.
+   */
   private begin(g: Pressed): Moving | Resizing | Marquee | null {
     const doc = this.store.doc;
     const { intent } = g;
@@ -220,7 +227,9 @@ export class PointerController {
       const editable = this.editableSelection(doc);
       const origins = new Map<NodeId, Pt>();
       for (const node of doc.nodes) if (editable.has(node.id)) origins.set(node.id, { x: node.x, y: node.y });
-      return origins.size > 0 ? { kind: "moving", pointerId: g.pointerId, world: g.world, origins } : null;
+      if (origins.size > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, origins };
+      const page = this.selectionPage(doc);
+      return page === null ? null : this.beginMarquee(g, page, []);
     }
     if (intent.kind === "resize") {
       const node = doc.nodes.find((n) => n.id === intent.id);
@@ -228,12 +237,17 @@ export class PointerController {
       const start = { x: node.x, y: node.y, width: node.width, height: node.height };
       return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start };
     }
-    const host = this.overlayOf(intent.pageId);
+    return this.beginMarquee(g, intent.pageId, intent.base);
+  }
+
+  /** A marquee on a page that keeps `base` selected; null when the page is not drawn. */
+  private beginMarquee(g: Pressed, pageId: PageId, base: NodeId[]): Marquee | null {
+    const host = this.overlayOf(pageId);
     if (!host) return null;
     const el = host.ownerDocument.createElement("div");
     el.className = "lf-marquee";
     host.appendChild(el);
-    return { kind: "marquee", pointerId: g.pointerId, world: g.world, pageId: intent.pageId, base: intent.base, el };
+    return { kind: "marquee", pointerId: g.pointerId, world: g.world, pageId, base, el };
   }
 
   private moveBy(g: Moving, dx: number, dy: number): void {

@@ -69,10 +69,12 @@ function setup(build: (doc: Document) => void = () => {}) {
     stage.fire("keydown", ev);
     return ev;
   };
+  /** The marquees drawn in the page's overlay: one while a marquee is being swept, none otherwise. */
+  const marquees = () => overlay.children.filter((c) => c.classes.includes("lf-marquee"));
   /** The selection boxes drawn in the page's overlay. */
   const boxes = () => overlay.children.filter((c) => c.classes.includes("lf-selection"));
   const nodeOf = (id: string) => view.store.doc.nodes.find((n) => n.id === id)!;
-  return { doc, view, stage, controller, pointer, key, boxes, nodeOf };
+  return { doc, view, stage, controller, pointer, key, boxes, marquees, nodeOf };
 }
 
 /** A file node at (x, y), 100 × 40 px, unless said otherwise. */
@@ -88,15 +90,64 @@ test("a press on a locked node selects it, and a drag past the threshold moves n
 
   pointer("pointerdown", 50, 30);
   expect(view.selection.ids).toEqual(["p-lock"]);
+  // A click that goes nowhere leaves it selected.
+  pointer("pointerup", 50, 30);
+  expect(view.selection.ids).toEqual(["p-lock"]);
 
+  pointer("pointerdown", 50, 30);
   pointer("pointermove", 90, 70);
   pointer("pointermove", 200, 200);
   pointer("pointerup", 200, 200);
-  expect(view.selection.ids).toEqual(["p-lock"]);
   expect(nodeOf("p-lock")).toMatchObject({ x: 10, y: 20, width: 100, height: 40 });
   // Not even an undo step was made.
   expect(view.store.doc).toBe(before);
   expect(view.store.canUndo()).toBe(false);
+});
+
+test("a drag from a locked node sweeps a marquee on its page, which starts afresh: the locked node drops out and the unlocked nodes it touches are selected", () => {
+  const { view, pointer, marquees, nodeOf } = setup((d) => {
+    file(d, { id: "p-lock", locked: true });
+    file(d, { id: "p-free", x: 200, y: 20 });
+    file(d, { id: "p-far", x: 200, y: 400 });
+  });
+  pointer("pointerdown", 50, 30);
+  expect(view.selection.ids).toEqual(["p-lock"]);
+  expect(marquees()).toHaveLength(0);
+
+  // Past the threshold: a marquee, which has not touched an unlocked node yet, so nothing is selected.
+  pointer("pointermove", 60, 40);
+  expect(marquees()).toHaveLength(1);
+  expect(marquees()[0].style).toMatchObject({ left: "50px", top: "30px", width: "10px", height: "10px" });
+  expect(view.selection.ids).toEqual([]);
+
+  // Over the unlocked node it selects that node, and still not the locked one the sweep began on.
+  pointer("pointermove", 250, 50);
+  expect(marquees()).toHaveLength(1);
+  expect(view.selection.ids).toEqual(["p-free"]);
+
+  pointer("pointerup", 250, 50);
+  expect(marquees()).toHaveLength(0);
+  expect(view.selection.ids).toEqual(["p-free"]);
+  expect(nodeOf("p-lock")).toMatchObject({ x: 10, y: 20 });
+  expect(nodeOf("p-free")).toMatchObject({ x: 200, y: 20 });
+  expect(view.store.canUndo()).toBe(false);
+});
+
+test("a marquee from a locked full-page background still selects what lies over it", () => {
+  const { doc, view, pointer } = setup((d) => {
+    file(d, { id: "p-bg", x: 0, y: 0, width: 400, height: 400, z: 0, locked: true });
+    file(d, { id: "p-a", x: 20, y: 20, width: 50, height: 50, z: 1 });
+    file(d, { id: "p-b", x: 120, y: 20, width: 50, height: 50, z: 1 });
+  });
+  expect(doc.nodes).toHaveLength(3);
+  pointer("pointerdown", 5, 5);
+  expect(view.selection.ids).toEqual(["p-bg"]);
+  pointer("pointermove", 100, 100);
+  expect(view.selection.ids).toEqual(["p-a"]);
+  pointer("pointermove", 150, 100);
+  expect(view.selection.ids).toEqual(["p-a", "p-b"]);
+  pointer("pointerup", 150, 100);
+  expect(view.selection.ids).toEqual(["p-a", "p-b"]);
 });
 
 test("a press where a handle would be, on a locked node, resizes nothing either", () => {

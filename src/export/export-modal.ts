@@ -73,7 +73,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       dpi: run.dpi,
       warnings,
     });
-    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, warnings);
+    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, warnings, run.exporter.pdfPanels);
     const built = buildPageSvg(run.doc, page, deps.nodeTypes, pageAssets);
     warnings.push(...built.warnings);
     assets.set(page.id, pageAssets);

@@ -26,6 +26,11 @@ export interface Exporter {
   name: string;
   ext: string;
   mime: string;
+  /**
+   * What the exporter embeds of a PDF panel: its page as vectors, or its raster. Trimming (see `trimAssets`) trims and
+   * reports only that one.
+   */
+  pdfPanels: "vector" | "raster";
   options(): Field[];
   run(input: ExportInput, opts: Record<string, unknown>): Promise<ExportResult>;
 }

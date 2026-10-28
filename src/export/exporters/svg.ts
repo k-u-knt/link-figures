@@ -8,6 +8,7 @@ export const svgExporter: Exporter = {
   name: "SVG",
   ext: "svg",
   mime: SVG_MIME,
+  pdfPanels: "raster",
   options: () => [],
   async run(input) {
     const files = input.pages.map((page) => {

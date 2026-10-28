@@ -50,7 +50,7 @@ test("an uncropped, wholly visible panel keeps its asset object and gets no repo
   const asset = png();
   const { deps, cuts } = fakeDeps();
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report);
+  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster");
   expect(out.get(node.id)).toBe(asset);
   expect(cuts).toEqual([]);
   expect(report).toEqual([]);
@@ -61,10 +61,10 @@ test("a cropped raster is cut to its crop, and the report says how much is left"
   const assets: AssetMap = new Map([[node.id, png()]]);
   const { deps, cuts } = fakeDeps();
   const report: string[] = [];
-  const out = await trimAssets(doc, page, assets, deps, report);
+  const out = await trimAssets(doc, page, assets, deps, report, "raster");
   expect(cuts).toEqual([{ dataUri: "data:image/png;base64,SRC", rect: { x: 100, y: 50, width: 200, height: 100 } }]);
   expect(out.get(node.id)).toEqual({ kind: "image", dataUri: "data:image/png;base64,CUT1", naturalWidth: 200, naturalHeight: 100, crop: { x: 0, y: 0, w: 1, h: 1 } });
-  expect(report).toEqual([`${label}: cut to the crop (200 × 100 of 400 × 200 px)`]);
+  expect(report).toEqual([`${label}: cut to what shows (200 × 100 of 400 × 200 px)`]);
   // The input map is not changed.
   expect((assets.get(node.id) as ImageAsset).dataUri).toBe("data:image/png;base64,SRC");
 });
@@ -74,7 +74,7 @@ test("a crop that leaves no whole pixel outside is passed through and reported a
   const asset = png();
   const { deps, cuts } = fakeDeps();
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report);
+  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster");
   expect(out.get(node.id)).toBe(asset);
   expect(cuts).toEqual([]);
   expect(report).toEqual([`${label}: nothing lay wholly outside the crop`]);
@@ -96,12 +96,12 @@ test("a failing cut leaves the asset whole and says why; the other panels are st
     },
   });
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map<string, FileAsset>([[node.id, asset], [other.id, png()]]), deps, report);
+  const out = await trimAssets(doc, page, new Map<string, FileAsset>([[node.id, asset], [other.id, png()]]), deps, report, "raster");
   expect(out.get(node.id)).toBe(asset);
   expect((out.get(other.id) as ImageAsset).dataUri).toBe("data:cut");
   expect(report).toEqual([
     `${label}: could not be trimmed, embedded whole (the image could not be decoded)`,
-    `${nodeLabel(doc, other)}: cut to the crop (200 × 100 of 400 × 200 px)`,
+    `${nodeLabel(doc, other)}: cut to what shows (200 × 100 of 400 × 200 px)`,
   ]);
 });
 
@@ -110,7 +110,7 @@ test("a content card's raster is left alone", async () => {
   const raster = { kind: "raster" as const, dataUri: "data:card" };
   const { deps, cuts } = fakeDeps();
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map([[node.id, raster]]), deps, report);
+  const out = await trimAssets(doc, page, new Map([[node.id, raster]]), deps, report, "raster");
   expect(out.get(node.id)).toBe(raster);
   expect(cuts).toEqual([]);
   expect(report).toEqual([]);
@@ -122,7 +122,7 @@ test("a cropped SVG is trimmed to its visible region in viewBox units, and the r
   const { doc, page, node, label } = figure({ file: "plot.svg", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
   const { deps, svgCalls } = fakeDeps({ svgRemoved: 412 });
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map([[node.id, svgAsset()]]), deps, report);
+  const out = await trimAssets(doc, page, new Map([[node.id, svgAsset()]]), deps, report, "raster");
   expect(svgCalls).toHaveLength(1);
   const visible = svgCalls[0].visible as { x: number; y: number; width: number; height: number };
   expect(visible.x).toBeCloseTo(50, 9);
@@ -138,7 +138,7 @@ test("an SVG with nothing wholly outside keeps its asset object, and says so", a
   const asset = svgAsset();
   const { deps } = fakeDeps();
   const report: string[] = [];
-  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report);
+  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster");
   expect(out.get(node.id)).toBe(asset);
   expect(report).toEqual([`${label}: nothing lay wholly outside the crop`]);
 });
@@ -147,7 +147,7 @@ test("one item removed is one item", async () => {
   const { doc, page, node, label } = figure({ file: "plot.svg", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
   const { deps } = fakeDeps({ svgRemoved: 1 });
   const report: string[] = [];
-  await trimAssets(doc, page, new Map([[node.id, svgAsset()]]), deps, report);
+  await trimAssets(doc, page, new Map([[node.id, svgAsset()]]), deps, report, "raster");
   expect(report).toEqual([`${label}: 1 item outside the crop removed`]);
 });
 
@@ -162,63 +162,88 @@ const pdfAsset = (): PdfAsset => ({
   rasterHeight: 625,
 });
 
-test("a cropped PDF panel has its raster cut and its page trimmed, each in its own units", async () => {
+test("for a raster exporter, a cropped PDF panel has its raster cut in raster pixels, and its page is left alone", async () => {
   const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
-  const { deps, cuts, pdfCalls } = fakeDeps({ pdfRemoved: 7, pdfNotes: ["a form nested deeper than 8 was kept whole"] });
+  const asset = pdfAsset();
+  const { deps, cuts, pdfCalls } = fakeDeps({ pdfRemoved: 7 });
   const report: string[] = [];
-  const out = (await trimAssets(doc, page, new Map([[node.id, pdfAsset()]]), deps, report)).get(node.id) as PdfAsset;
-  // Points for the page (top-left origin), raster pixels for the raster.
-  expect(pdfCalls).toEqual([{ pageIndex: 2, visible: { x: 75, y: 37.5, width: 150, height: 75 } }]);
+  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster")).get(node.id) as PdfAsset;
+  expect(pdfCalls).toEqual([]);
   expect(cuts).toEqual([{ dataUri: "data:image/png;base64,PAGE", rect: { x: 312, y: 156, width: 626, height: 313 } }]);
-  expect(Array.from(new Uint8Array(out.bytes))).toEqual([9, 9]);
+  expect(out.bytes).toBe(asset.bytes);
   expect(out.raster).toBe("data:image/png;base64,CUT1");
   expect([out.rasterWidth, out.rasterHeight]).toEqual([626, 313]);
   expect(out.rasterCrop!.x).toBeCloseTo(0.5 / 626, 12);
   expect(out.rasterCrop!.w).toBeCloseTo(625 / 626, 12);
   // The page itself keeps its size: the crop still names the same part of it.
   expect([out.widthPt, out.heightPt, out.pageIndex]).toEqual([300, 150, 2]);
-  expect(report).toEqual([`${label}: 7 items outside the crop removed`, `${label}: a form nested deeper than 8 was kept whole`]);
+  expect(report).toEqual([`${label}: cut to what shows (626 × 313 of 1250 × 625 px)`]);
 });
 
-test("a PDF page trim that removes nothing keeps the original bytes", async () => {
+test("for a raster exporter, a PDF raster that cannot be cut is embedded whole, and says why", async () => {
   const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
   const asset = pdfAsset();
-  const { deps } = fakeDeps();
-  const report: string[] = [];
-  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report)).get(node.id) as PdfAsset;
-  expect(out.bytes).toBe(asset.bytes);
-  expect(report).toEqual([`${label}: nothing lay wholly outside the crop`]);
-});
-
-test("a PDF page that cannot be trimmed is embedded whole, and its raster is still cut", async () => {
-  const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
-  const asset = pdfAsset();
-  const { deps } = fakeDeps({
-    trimPdf: async () => {
-      throw new Error("the content stream could not be decoded");
-    },
-  });
-  const report: string[] = [];
-  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report)).get(node.id) as PdfAsset;
-  expect(out.bytes).toBe(asset.bytes);
-  expect(out.raster).toBe("data:image/png;base64,CUT1");
-  expect(report).toEqual([`${label}: could not be trimmed, embedded whole (the content stream could not be decoded)`]);
-});
-
-test("a PDF raster that cannot be cut is reported beside the page's own line", async () => {
-  const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
-  const asset = pdfAsset();
-  const { deps } = fakeDeps({
-    pdfRemoved: 3,
+  const { deps, pdfCalls } = fakeDeps({
     cutImage: async () => {
       throw new Error("out of memory");
     },
   });
   const report: string[] = [];
-  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report)).get(node.id) as PdfAsset;
+  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster")).get(node.id);
+  expect(out).toBe(asset);
+  expect(pdfCalls).toEqual([]);
+  expect(report).toEqual([`${label}: could not be trimmed, embedded whole (out of memory)`]);
+});
+
+test("for a vector exporter, a cropped PDF panel has its page trimmed in points, and its raster is left alone", async () => {
+  const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+  const asset = pdfAsset();
+  const { deps, cuts, pdfCalls } = fakeDeps({ pdfRemoved: 7, pdfNotes: ["a form nested deeper than 8 was kept whole"] });
+  const report: string[] = [];
+  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "vector")).get(node.id) as PdfAsset;
+  // Points of the page, from its top-left corner.
+  expect(pdfCalls).toEqual([{ pageIndex: 2, visible: { x: 75, y: 37.5, width: 150, height: 75 } }]);
+  expect(cuts).toEqual([]);
+  expect(Array.from(new Uint8Array(out.bytes))).toEqual([9, 9]);
   expect(out.raster).toBe(asset.raster);
   expect(out.rasterCrop).toBeUndefined();
-  expect(report).toEqual([`${label}: 3 items outside the crop removed`, `${label}: its raster could not be trimmed, embedded whole (out of memory)`]);
+  expect([out.widthPt, out.heightPt, out.pageIndex]).toEqual([300, 150, 2]);
+  expect(report).toEqual([`${label}: 7 items outside the crop removed`, `${label}: a form nested deeper than 8 was kept whole`]);
+});
+
+test("for a vector exporter, a PDF page trim that removes nothing keeps the asset object", async () => {
+  const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+  const asset = pdfAsset();
+  const { deps } = fakeDeps();
+  const report: string[] = [];
+  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "vector")).get(node.id);
+  expect(out).toBe(asset);
+  expect(report).toEqual([`${label}: nothing lay wholly outside the crop`]);
+});
+
+test("for a vector exporter, a PDF page that cannot be trimmed is embedded whole, with no word of its raster", async () => {
+  const { doc, page, node, label } = figure({ file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+  const asset = pdfAsset();
+  const { deps, cuts } = fakeDeps({
+    trimPdf: async () => {
+      throw new Error("the content stream could not be decoded");
+    },
+  });
+  const report: string[] = [];
+  const out = (await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "vector")).get(node.id);
+  expect(out).toBe(asset);
+  expect(cuts).toEqual([]);
+  expect(report).toEqual([`${label}: could not be trimmed, embedded whole (the content stream could not be decoded)`]);
+});
+
+test("an uncropped cover panel is cut to what shows", async () => {
+  // 400×200 covered into 100×100: its middle 200×200 px show.
+  const { doc, page, node, label } = figure({ fit: "cover", crop: null, width: 100, height: 100 });
+  const { deps, cuts } = fakeDeps();
+  const report: string[] = [];
+  await trimAssets(doc, page, new Map([[node.id, png()]]), deps, report, "raster");
+  expect(cuts.map((c) => c.rect)).toEqual([{ x: 100, y: 0, width: 200, height: 200 }]);
+  expect(report).toEqual([`${label}: cut to what shows (200 × 200 of 400 × 200 px)`]);
 });
 
 /** The `<image>` of a page SVG and its clip rectangle, as numbers. */
@@ -243,7 +268,7 @@ test.each([
   const asset = make();
   const before = placed(buildPageSvg(doc, page, types, new Map([[node.id, asset]])).svg);
   const { deps, cuts } = fakeDeps();
-  const trimmed = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, []);
+  const trimmed = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, [], "raster");
   const after = placed(buildPageSvg(doc, page, types, trimmed).svg);
 
   expect(cuts).toHaveLength(1);

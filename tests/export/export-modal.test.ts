@@ -24,18 +24,23 @@ const { exportSummary, runExport } = await import("../../src/export/export-modal
 const { isFigureSource } = await import("../../src/export/write");
 const { svgExporter } = await import("../../src/export/exporters/svg");
 const { fileNodeType } = await import("../../src/nodes/file-node");
+const pdfDecoder = await import("../../src/links/decoders/pdf");
 
 // No TIFF or adjusted raster here: the decoders are never asked.
 const decoders = { pdf: vi.fn(), tiff: vi.fn(), raster: vi.fn() };
 /** Trimming that cuts nothing but records what it was asked to cut. */
 const cuts: unknown[] = [];
+const pdfTrims: unknown[] = [];
 const trim = {
   cutImage: async (dataUri: string, rect: { x: number; y: number; width: number; height: number }) => {
     cuts.push(rect);
     return { dataUri: "data:image/png;base64,CUT", width: rect.width, height: rect.height };
   },
   trimSvg: async (text: string) => ({ text, removed: 0 }),
-  trimPdf: async (bytes: ArrayBuffer) => ({ bytes: new Uint8Array(bytes), removed: 0, notes: [] }),
+  trimPdf: async (bytes: ArrayBuffer, pageIndex: number, visible: unknown) => {
+    pdfTrims.push({ pageIndex, visible });
+    return { bytes: new Uint8Array(bytes), removed: 4, notes: [] };
+  },
 };
 
 class FakeImage {
@@ -318,7 +323,30 @@ test("each cropped panel is trimmed after collection and before the page is buil
   expect(text(vault.content.get("Fig - Page 1.svg"))).toContain('href="data:image/png;base64,CUT"');
   expect(out.warnings).toEqual([
     `${nodeLabel(doc, moved)}: File not found in vault: moved.png`,
-    `${nodeLabel(doc, png)}: cut to the crop (320 × 240 of 640 × 480 px)`,
+    `${nodeLabel(doc, png)}: cut to what shows (320 × 240 of 640 × 480 px)`,
     `${nodeLabel(doc, moved)}: link missing, skipped`,
   ]);
+});
+
+test.each([
+  ["raster", "cut to what shows (626 × 313 of 1250 × 625 px)", 1, 0],
+  ["vector", "4 items outside the crop removed", 0, 1],
+] as const)("a cropped PDF panel is trimmed as the %s exporter embeds it, and only that is reported", async (pdfPanels, line, cutCount, pdfCount) => {
+  const { doc, png, resolved } = figure();
+  Object.assign(png, { file: "plot.pdf", fit: "contain", crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+  resolved.set(png.id, { kind: "image", file: { path: "plot.pdf", extension: "pdf" }, src: "app://x", source: "pdf", pageCount: 1, deps: [] });
+  vi.mocked(pdfDecoder.decodePdf).mockResolvedValue({ dataUrl: "data:image/png;base64,PAGE", width: 1250, height: 625, pageCount: 1 });
+  vi.mocked(pdfDecoder.pdfPageSizePt).mockResolvedValue({ width: 300, height: 150 });
+  const { app } = world();
+  (app as { vault: { getFileByPath: (path: string) => unknown } }).vault.getFileByPath = (path) => new FakeTFile(path);
+  const spy: Exporter = { ...svgExporter, pdfPanels, run: async (input) => ({ files: [], warnings: input.warnings }) };
+  cuts.length = 0;
+  pdfTrims.length = 0;
+  const out = await runExport(
+    { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+  );
+  expect(cuts).toHaveLength(cutCount);
+  expect(pdfTrims).toHaveLength(pdfCount);
+  expect(out.warnings.filter((w) => !/PDF panel rasterised/.test(w))).toEqual([`${nodeLabel(doc, png)}: ${line}`]);
 });

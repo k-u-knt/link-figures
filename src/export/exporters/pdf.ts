@@ -204,6 +204,7 @@ export const pdfExporter: Exporter = {
   name: "PDF (vector)",
   ext: "pdf",
   mime: PDF_MIME,
+  pdfPanels: "vector",
   options: () => [],
   async run(input) {
     // A PDF with no pages cannot exist (jsPDF would make a blank one), so no pages means no file, as for the SVG exporter.

@@ -194,9 +194,9 @@ export function tokenize(bytes: Uint8Array): Token[] {
   }
 
   /**
-   * The inline image starting with `BI` at `start`, through its `EI`. Its data ends where the dictionary's /L (or
-   * /Length) says, when an `EI` stands there; otherwise at the first `EI` with whitespace before it and whitespace or
-   * the end of the data after it.
+   * The inline image starting with `BI` at `start`, through its `EI`. Where its data ends is never guessed from the
+   * bytes (binary data can hold anything): it is the length the dictionary declares (/L or /Length), or, for unfiltered
+   * data, the length its size, bits per component and colour space give. Whitespace and `EI` must follow it exactly.
    */
   function inlineImage(start: number): Token {
     const dict: Token[] = [];
@@ -212,23 +212,16 @@ export function tokenize(bytes: Uint8Array): Token[] {
     if (!id) throw new ContentParseError(`Inline image without ID at byte ${start}`);
     const dictText = dict.length ? latin1(bytes, dict[0].start, dict[dict.length - 1].end) : "";
     // One whitespace byte separates ID from the data.
-    const dataStart = id.end < bytes.length && isWhite(bytes[id.end]) ? id.end + 1 : id.end;
+    if (!(id.end < bytes.length && isWhite(bytes[id.end]))) throw new ContentParseError(`No whitespace after ID at byte ${id.end}`);
+    const dataStart = id.end + 1;
 
-    const length = declaredLength(dict);
-    if (length !== null) {
-      let p = dataStart + length;
-      while (p < bytes.length && isWhite(bytes[p])) p++;
-      if (endsAt(p)) return finish(p + 2);
-    }
-    for (let p = Math.max(dataStart, id.end + 1); p + 1 < bytes.length; p++) {
-      if (bytes[p] === 0x45 && bytes[p + 1] === 0x49 && isWhite(bytes[p - 1]) && endsAt(p)) return finish(p + 2);
-    }
-    throw new ContentParseError(`Inline image without EI at byte ${start}`);
-
-    function finish(end: number): Token {
-      pos = end;
-      return { kind: "inlineImage", start, end, value: dictText };
-    }
+    const length = imageDataLength(inlineImageDict(dict), start);
+    let p = dataStart + length;
+    if (!(p < bytes.length && isWhite(bytes[p]))) throw new ContentParseError(`Inline image data not followed by EI at byte ${start}`);
+    while (p < bytes.length && isWhite(bytes[p])) p++;
+    if (!endsAt(p)) throw new ContentParseError(`Inline image data not followed by EI at byte ${start}`);
+    pos = p + 2;
+    return { kind: "inlineImage", start, end: pos, value: dictText };
   }
 
   /** True when an `EI` operator stands at `p`: "EI" followed by whitespace or the end of the data. */
@@ -237,15 +230,75 @@ export function tokenize(bytes: Uint8Array): Token[] {
   }
 }
 
-/** The data length an inline image's dictionary declares (/L or /Length), or null. */
-function declaredLength(dict: Token[]): number | null {
-  for (let i = 0; i + 1 < dict.length; i++) {
-    const key = dict[i];
-    const value = dict[i + 1];
-    if (key.kind === "name" && (key.value === "L" || key.value === "Length") && value.kind === "number") {
-      const n = Number(value.value);
-      if (Number.isInteger(n) && n >= 0) return n;
-    }
+/** A value in an inline image's dictionary: a single token, or the tokens of an array or dictionary (brackets excluded). */
+type DictValue = { token: Token } | { items: Token[] };
+
+/** An inline image's dictionary, by key. Throws when it is not a sequence of name keys and values. */
+function inlineImageDict(tokens: Token[]): Map<string, DictValue> {
+  const dict = new Map<string, DictValue>();
+  let i = 0;
+  while (i < tokens.length) {
+    const key = tokens[i++];
+    if (key.kind !== "name" || i >= tokens.length) throw new ContentParseError(`Bad inline image dictionary at byte ${key.start}`);
+    const first = tokens[i++];
+    if (first.kind === "arrayStart" || first.kind === "dictStart") {
+      const items: Token[] = [];
+      let depth = 1;
+      while (i < tokens.length) {
+        const t = tokens[i++];
+        if (t.kind === "arrayStart" || t.kind === "dictStart") depth++;
+        if (t.kind === "arrayEnd" || t.kind === "dictEnd") depth--;
+        if (depth === 0) break;
+        items.push(t);
+      }
+      if (depth !== 0) throw new ContentParseError(`Bad inline image dictionary at byte ${first.start}`);
+      dict.set(key.value, { items });
+    } else if (first.kind === "arrayEnd" || first.kind === "dictEnd") {
+      throw new ContentParseError(`Bad inline image dictionary at byte ${first.start}`);
+    } else dict.set(key.value, { token: first });
   }
-  return null;
+  return dict;
+}
+
+/** The value under either of two keys (an inline image's abbreviation and full name). */
+function lookup(dict: Map<string, DictValue>, short: string, long: string): DictValue | undefined {
+  return dict.get(short) ?? dict.get(long);
+}
+
+function integerValue(value: DictValue | undefined): number | null {
+  if (!value || !("token" in value) || value.token.kind !== "number") return null;
+  const n = Number(value.token.value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/** Components per pixel of an inline image's colour space; throws for one that is unknown here. */
+function components(value: DictValue | undefined, at: number): number {
+  const name = value && "token" in value && value.token.kind === "name" ? value.token.value : null;
+  if (name === "G" || name === "DeviceGray") return 1;
+  if (name === "RGB" || name === "DeviceRGB") return 3;
+  if (name === "CMYK" || name === "DeviceCMYK") return 4;
+  if (value && "items" in value && value.items[0]?.kind === "name" && (value.items[0].value === "I" || value.items[0].value === "Indexed")) return 1;
+  throw new ContentParseError(`Inline image with a colour space not known here at byte ${at}`);
+}
+
+/**
+ * The length of an inline image's data: the declared /L (/Length) or, for unfiltered data, height × bytes per row.
+ * Throws when it cannot be known exactly.
+ */
+function imageDataLength(dict: Map<string, DictValue>, at: number): number {
+  const declared = lookup(dict, "L", "Length");
+  if (declared) {
+    const n = integerValue(declared);
+    if (n === null) throw new ContentParseError(`Bad inline image length at byte ${at}`);
+    return n;
+  }
+  if (lookup(dict, "F", "Filter")) throw new ContentParseError(`Filtered inline image without a length at byte ${at}`);
+  const width = integerValue(lookup(dict, "W", "Width"));
+  const height = integerValue(lookup(dict, "H", "Height"));
+  const maskValue = lookup(dict, "IM", "ImageMask");
+  const mask = !!maskValue && "token" in maskValue && maskValue.token.kind === "operator" && maskValue.token.value === "true";
+  const bpc = integerValue(lookup(dict, "BPC", "BitsPerComponent")) ?? (mask ? 1 : null);
+  if (width === null || height === null || bpc === null) throw new ContentParseError(`Inline image without its size at byte ${at}`);
+  const comps = mask ? 1 : components(lookup(dict, "CS", "ColorSpace"), at);
+  return height * Math.ceil((width * bpc * comps) / 8);
 }

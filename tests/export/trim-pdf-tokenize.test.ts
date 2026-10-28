@@ -62,8 +62,9 @@ test("operators include the quote operators and star forms", () => {
   ]);
 });
 
-test("an inline image is one token; EI inside its data not followed by whitespace does not end it", () => {
-  const src = "q BI /W 2 /H 1 /BPC 8 /CS /G ID \x00 EIx\xffEI\x01 EI Q";
+test("an inline image is one token, its data as long as its size says, whatever EI it holds", () => {
+  // 9 gray 8-bit samples: "\x00 EIx\xffEI\x01".
+  const src = "q BI /W 9 /H 1 /BPC 8 /CS /G ID \x00 EIx\xffEI\x01 EI Q";
   const tokens = tokenize(enc(src));
   expect(tokens.map((t) => t.kind)).toEqual(["operator", "inlineImage", "operator"]);
   const image = tokens[1];
@@ -72,18 +73,45 @@ test("an inline image is one token; EI inside its data not followed by whitespac
   expect(tokens[2].value).toBe("Q");
 });
 
-test("an inline image's /L gives where its data ends", () => {
-  // The data is "EI EI" (5 bytes): without the length, the scan would end at the first " EI ".
-  const src = "BI /W 5 /H 1 /L 5 ID EI EI EI";
+test("an inline image's /L gives where its data ends, filtered or not", () => {
+  // The data is "EI EI" (5 bytes).
+  const src = "BI /W 5 /H 1 /F /AHx /L 5 ID EI EI EI";
   const tokens = tokenize(enc(src));
   expect(tokens).toHaveLength(1);
   expect(tokens[0].end).toBe(src.length);
+  expect(() => tokenize(enc("BI /W 5 /H 1 /L 4 ID EI EI EI"))).toThrow(ContentParseError);
 });
 
-test("an inline image may end at the end of the data", () => {
-  const tokens = tokenize(enc("BI /W 1 /H 1 ID x EI"));
-  expect(tokens).toHaveLength(1);
-  expect(tokens[0].kind).toBe("inlineImage");
+test("an unfiltered image's data length comes from its size, bits per component and colour space", () => {
+  const one = (src: string, data: string) => {
+    const tokens = tokenize(enc(src));
+    expect(tokens.map((t) => t.kind)).toEqual(["inlineImage", "operator"]);
+    expect(tokens[0].end).toBe(src.indexOf(data) + data.length + " EI".length);
+  };
+  // Gray 4×1, 8 bits, holding " EI ".
+  one("BI /W 4 /H 1 /BPC 8 /CS /G ID \x01 EI EI Q", "\x01 EI");
+  // RGB 2×2, 8 bits: 12 bytes.
+  one("BI /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB ID  EI EI EI EI EI Q", " EI EI EI EI");
+  // Gray 10×2, 1 bit: two bytes a row.
+  one("BI /W 10 /H 2 /BPC 1 /CS /G ID abcd EI Q", "abcd");
+  // An image mask, 1 bit by default.
+  one("BI /IM true /W 10 /H 2 ID abcd EI Q", "abcd");
+  // Indexed, given as an array.
+  one("BI /W 8 /H 1 /BPC 1 /CS [/I /RGB 1 <000000FFFFFF>] ID \x80 EI Q", "\x80");
+  // CMYK 1×1, 8 bits.
+  one("BI /W 1 /H 1 /BPC 8 /CS /CMYK ID wxyz EI Q", "wxyz");
+});
+
+test("an inline image whose data length cannot be known exactly throws", () => {
+  // Filtered without /L.
+  expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G /F /AHx ID 01020304> EI"))).toThrow(ContentParseError);
+  // A named resource colour space.
+  expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /CS0 ID abcd EI"))).toThrow(ContentParseError);
+  // No bits per component.
+  expect(() => tokenize(enc("BI /W 4 /H 1 /CS /G ID abcd EI"))).toThrow(ContentParseError);
+  // Data not followed by whitespace and EI.
+  expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G ID abcdEI"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G ID abcde EI"))).toThrow(ContentParseError);
 });
 
 test("an operator with bytes outside printable ASCII throws", () => {
@@ -100,7 +128,16 @@ test("the rest of an inline image ended too early throws, whatever its bytes rea
   expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI (\xfe\xfd) EI Q"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI ab EI Q"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI /\xfe EI Q"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI (\xfe\xfd) EI Q"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("q ID Q"))).toThrow(ContentParseError);
+});
+
+test("the real EI swallowed by a comment or a string after a false one throws", () => {
+  expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI %\x01 EI Q\nQ"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI (\x01 EI ) Q"))).toThrow(ContentParseError);
+  // With a known size the data ends where it must, so the false " EI " cannot end it either.
+  expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI %\x01 EI Q\nQ"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI (\x01 EI ) Q"))).toThrow(ContentParseError);
 });
 
 test("malformed input throws ContentParseError", () => {

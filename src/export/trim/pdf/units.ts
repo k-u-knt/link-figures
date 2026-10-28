@@ -108,7 +108,7 @@ const MITER_SLACK = 1e-9;
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
 /** `a` then `b`: the matrix a PDF writes as a × b. */
-function multiply(a: Matrix, b: Matrix): Matrix {
+export function multiply(a: Matrix, b: Matrix): Matrix {
   return [
     a[0] * b[0] + a[1] * b[2],
     a[0] * b[1] + a[1] * b[3],

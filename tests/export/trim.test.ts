@@ -207,7 +207,8 @@ test("for a vector exporter, a cropped PDF panel has its page trimmed in points,
   expect(Array.from(new Uint8Array(out.bytes))).toEqual([9, 9]);
   expect(out.raster).toBe(asset.raster);
   expect(out.rasterCrop).toBeUndefined();
-  expect([out.widthPt, out.heightPt, out.pageIndex]).toEqual([300, 150, 2]);
+  // The trimmed bytes are a one-page PDF: the page is their first. Its size is unchanged, so it is placed as before.
+  expect([out.widthPt, out.heightPt, out.pageIndex]).toEqual([300, 150, 0]);
   expect(report).toEqual([`${label}: 7 items outside the crop removed`, `${label}: a form nested deeper than 8 was kept whole`]);
 });
 

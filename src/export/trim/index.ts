@@ -30,11 +30,11 @@ async function trimSvgInDocument(text: string, visible: Rect): Promise<{ text: s
   }
 }
 
-/** The trimmers the export uses. PDF sources are passed through until their trimmer lands. */
+/** The trimmers the export uses. The PDF trimmer, and pdf-lib with it, is loaded when a PDF panel is first trimmed. */
 export const browserTrimDeps: TrimDeps = {
   cutImage: cutImageOnCanvas,
   trimSvg: trimSvgInDocument,
-  trimPdf: async (bytes) => ({ bytes: new Uint8Array(bytes), removed: 0, notes: [] }),
+  trimPdf: async (bytes, pageIndex, visible) => (await import("./pdf/trim-page")).trimPdfPage(bytes, pageIndex, visible),
 };
 
 const NOTHING_OUTSIDE = "nothing lay wholly outside the crop";
@@ -110,7 +110,8 @@ async function trimPdfAsset(
   const trimmed = await deps.trimPdf(asset.bytes, asset.pageIndex, points);
   say(removedLine(trimmed.removed));
   for (const note of trimmed.notes) say(note);
-  return trimmed.removed === 0 ? asset : { ...asset, bytes: ownBuffer(trimmed.bytes) };
+  // The trimmed bytes are a one-page PDF of the same size, so the page is their first and is placed as before.
+  return trimmed.removed === 0 ? asset : { ...asset, bytes: ownBuffer(trimmed.bytes), pageIndex: 0 };
 }
 
 /**

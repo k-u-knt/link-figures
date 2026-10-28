@@ -26,13 +26,15 @@ export function autoRange(data: Uint8Array | Uint16Array, samplesPerPixel: 1 | 3
   return min > max ? { min: 0, max: 0 } : { min, max };
 }
 
-/** Sample value to 0..255. A range with `max <= min` maps everything to 0 (never NaN). */
+/** Sample value to 0..255. A range with no span (`max <= min`) maps every value to mid-grey (128): a flat plane is shown as flat, not black (and never NaN). */
 function lookupTable(bitsPerSample: 8 | 16, range: Range16): Uint8ClampedArray {
   const table = new Uint8ClampedArray(1 << bitsPerSample);
   const span = range.max - range.min;
   if (span > 0) {
     // Multiply before dividing so exact halves stay exact (127.5, not 127.49999999999999); the clamped array clips to 0..255.
     for (let value = 0; value < table.length; value++) table[value] = Math.round(((value - range.min) * 255) / span);
+  } else {
+    table.fill(128);
   }
   return table;
 }
@@ -41,7 +43,9 @@ function lookupTable(bitsPerSample: 8 | 16, range: Range16): Uint8ClampedArray {
  * Maps the grey or R, G, B samples linearly from `range` to 0..255 and returns the range used. Grey (1 sample) is
  * replicated to RGB with alpha 255, and inverted first when `plane.whiteIsZero`. Alpha (4 samples) ignores `range`:
  * 8-bit alpha is copied, 16-bit alpha is scaled by 1/257. `"auto"` stretches 16-bit data to the colour samples' own min
- * and max; 8-bit data (grey or RGB(A)) is already scaled for display and passes through unchanged (range 0..255).
+ * and max; 8-bit data (grey or RGB(A)) is already scaled for display and passes through unchanged (range 0..255). A
+ * range with no span, which is what `"auto"` finds for a constant 16-bit plane, gives mid-grey (128, or 127 when
+ * inverted) rather than black, and is still the range returned.
  */
 export function planeToRgba(plane: Plane, range: Range16 | "auto"): { rgba: Uint8ClampedArray<ArrayBuffer>; range: Range16 } {
   const { width, height, bitsPerSample, samplesPerPixel, data } = plane;

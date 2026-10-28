@@ -11,8 +11,15 @@ test("ifdToPlane reads little-endian 16-bit", () => { const p = ifdToPlane({ wid
 const grey16 = (data: number[]) => ({ width: data.length, height: 1, bitsPerSample: 16 as const, samplesPerPixel: 1 as const, data: new Uint16Array(data) });
 
 test("autoRange of nothing is 0..0, and handles arrays too long to spread", () => { expect(autoRange(new Uint8Array(0))).toEqual({ min: 0, max: 0 }); const big = new Uint16Array(500_000).fill(7); big[123_456] = 9; big[400_000] = 2; expect(autoRange(big)).toEqual({ min: 2, max: 9 }); });
-test("a flat plane maps to black, not NaN", () => { const { rgba, range } = planeToRgba(grey16([50, 50, 50]), "auto"); expect(range).toEqual({ min: 50, max: 50 }); expect([...rgba]).toEqual([0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]); });
-test("an explicit range with max <= min maps to black", () => { const plane = grey16([0, 100, 65535]); for (const range of [{ min: 100, max: 100 }, { min: 200, max: 100 }]) expect([...planeToRgba(plane, range).rgba].filter((_, i) => i % 4 !== 3)).toEqual(Array(9).fill(0)); });
+test("a constant 16-bit plane under auto range is mid-grey, and reports the flat range", () => { const { rgba, range } = planeToRgba(grey16([50, 50]), "auto"); expect([...rgba]).toEqual([128, 128, 128, 255, 128, 128, 128, 255]); expect(range).toEqual({ min: 50, max: 50 }); });
+test("an explicit range with no span is mid-grey too, and WhiteIsZero inverts it to 127", () => {
+  const plane = grey16([0, 100, 65535]);
+  for (const range of [{ min: 100, max: 100 }, { min: 200, max: 100 }]) {
+    expect([...planeToRgba(plane, range).rgba].filter((_, i) => i % 4 !== 3)).toEqual(Array(9).fill(128));
+    expect([...planeToRgba({ ...plane, whiteIsZero: true }, range).rgba].filter((_, i) => i % 4 !== 3)).toEqual(Array(9).fill(127));
+  }
+});
+test("a constant 16-bit RGBA plane is mid-grey on every colour channel, with its alpha kept", () => { const { rgba } = planeToRgba({ width: 1, height: 1, bitsPerSample: 16, samplesPerPixel: 4, data: new Uint16Array([700, 700, 700, 65535]) }, "auto"); expect([...rgba]).toEqual([128, 128, 128, 255]); });
 test("an explicit range is returned as given", () => expect(planeToRgba(grey16([5]), { min: 1, max: 9 }).range).toEqual({ min: 1, max: 9 }));
 test("8-bit grey stretches under an explicit range", () => { const { rgba, range } = planeToRgba({ width: 3, height: 1, bitsPerSample: 8, samplesPerPixel: 1, data: new Uint8Array([50, 100, 150]) }, { min: 50, max: 150 }); expect(range).toEqual({ min: 50, max: 150 }); expect([...rgba]).toEqual([0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255]); });
 test("8-bit grey auto passes through, already scaled for display (an ImageJ export), with range 0..255", () => { const { rgba, range } = planeToRgba({ width: 3, height: 1, bitsPerSample: 8, samplesPerPixel: 1, data: new Uint8Array([50, 100, 150]) }, "auto"); expect(range).toEqual({ min: 0, max: 255 }); expect([...rgba]).toEqual([50, 50, 50, 255, 100, 100, 100, 255, 150, 150, 150, 255]); });

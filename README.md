@@ -50,20 +50,20 @@ Milestone 1 also settles three things the design leaves open. Run each check in 
 
 **Local fonts.** Run "Link Figures: Check local font access" from the command palette. It reports whether `window.queryLocalFonts` exists in Obsidian's Electron and how many fonts it returns, or the name of the error. This decides how M2 finds TrueType files for PDF embedding.
 
-- Obsidian version and platform: _to be filled in_
-- Result: _to be filled in_
+- Obsidian version and platform: Obsidian 1.14.5 (Electron 43.8.3, Chromium 150), macOS (Darwin 27.2.0), 2026-10-28
+- Result: `window.queryLocalFonts` exists and returned 623 fonts, with no permission prompt.
 
 **View-switch timing.** Opening a figure file starts in the markdown view and switches to the figure view. Open a figure from the file explorer, from a link, and by restarting Obsidian with one open, and note how long the markdown view shows and whether it is acceptable. If it is not, M2 wraps `setViewState` instead of reacting to the file-open events.
 
-- Opened from the file explorer: _to be filled in_
-- Opened from a link: _to be filled in_
-- Restored on startup: _to be filled in_
-- Verdict: _to be filled in_
+- Opened from the file explorer: the markdown view showed for about 37 ms (2 frames).
+- Opened from a link: about 14 ms (1 frame).
+- Restored on startup: no markdown view at all, because the workspace stores the figure view type.
+- Verdict: acceptable; timing alone does not call for wrapping `setViewState`. The open hook does break Back, though: Back pops the markdown entry and the hook pushes it again (see manual-checks-m1.md, Task 8).
 
 **External changes to a figure file.** A claim to confirm, not yet seen in Obsidian: reading Obsidian 1.14.5's `app.js` during M1, the implementer found that the text file view re-reads a file that is modified from outside the view (a link update after a rename, a sync, another editor) and hands the text to the plugin's `setViewData(text, false)`, merging three ways when the view has unsaved changes. The plugin takes that call up without reloading the figure when only link targets differ, and listens to the file's own modify event as well in case a version does not make the call, so it works either way. With a figure open, rename one of its sources in the file explorer and edit the figure file in another editor; note whether `setViewData` is called (a breakpoint or a `console.log` in it) and whether the figure keeps its selection and undo history.
 
-- Obsidian version and platform: _to be filled in_
-- Confirmed or struck: _to be filled in_
+- Obsidian version and platform: Obsidian 1.14.5 (Electron 43.8.3, Chromium 150), macOS (Darwin 27.2.0), 2026-10-28
+- Confirmed or struck: confirmed. `setViewData(text, false)` is called when a source rename rewrites the Links section; the figure keeps its selection and undo history, and the panel re-resolves. It is also called (clear = false) for an external edit of the figure file, which reloads the figure as an ordinary change.
 
 ## Roadmap
 

@@ -4,3 +4,13 @@ test-vault/.obsidian/
 *.map
 .superpowers/
 .DS_Store
+
+# The test vault is a scratch space: only the fixtures that scripts/make-fixtures.mjs writes are tracked.
+test-vault/*
+!test-vault/Notes/
+test-vault/Notes/*
+!test-vault/Notes/analysis.md
+!test-vault/Notes/plot.png
+!test-vault/Notes/plot.svg
+!test-vault/Notes/plot.pdf
+!test-vault/Notes/cells.tif

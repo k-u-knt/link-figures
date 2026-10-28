@@ -53,6 +53,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
   };
   const settings = { attachmentFolder: "" };
   const pdf = vi.fn(async () => ({ dataUrl: "data:pdf-page", width: 300, height: 600, pageCount: 1 }));
+  const tiff = vi.fn();
   const exists = (path: string) => path in files || folders.has(path);
 
   const view = {
@@ -83,7 +84,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
     plugin: {
       settings,
       access: new FakeAccess({ files } as FakeVault),
-      decoders: { pdf, tiff: vi.fn() },
+      decoders: { pdf, tiff },
     },
     store,
     viewport: new Viewport(),
@@ -118,7 +119,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
 
   const intake = new Intake(view as unknown as ViewArg);
   intake.attach({} as HTMLElement);
-  return { intake, store, written, files, images, settings, folders, commits, view, pdf, handlers: view.handlers };
+  return { intake, store, written, files, images, settings, folders, commits, view, pdf, tiff, handlers: view.handlers };
 }
 
 /** Puts a node of the given z on page `index` (0 or 1), as if it had been there already. */
@@ -151,6 +152,13 @@ const pasteEvent = (items: { kind: "file" | "string"; type: string; file?: unkno
     getData: () => text,
   },
 });
+
+/** What the Notice for an item that was added but cannot be decoded says; `reason` is the decoder's own, when there is one. */
+const undecodable = (label: string, reason?: string) =>
+  `Link Figures: ${label} could not be decoded; its panel shows a badge saying so.${reason ? ` ${reason}` : ""}`;
+
+/** The height of a node that has no picture to follow: the default, a quarter of the page's. */
+const DEFAULT_HEIGHT_PX = 0.25 * mmToPx(297);
 
 const fileNodes = (s: Setup) => s.store.doc.nodes.filter((n): n is FileNode => n.type === "file");
 
@@ -274,34 +282,70 @@ describe("a file dragged from Obsidian", () => {
     expect(fileNodes(s)[0].height).toBeCloseTo(NODE_WIDTH_PX * 2, 1);
   });
 
-  test("a PDF that cannot be decoded is reported and left out; the rest of the drop goes in", async () => {
+  test("a PDF that cannot be decoded is reported and still added, at the default size, for its badge; the rest of the drop goes in", async () => {
     const s = setup({ files: { "Notes/bad.pdf": "BINARY" } });
     s.pdf.mockRejectedValue(new Error("corrupt"));
     s.view.app.dragManager = { draggable: { type: "files", files: [{ path: "Notes/bad.pdf" }, { path: "Notes/plot.png" }] } };
     s.handlers.drop(dropEvent());
-    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
-    expect(fileNodes(s)[0].file).toBe("Notes/plot.png");
-    expect(notices).toEqual(["Link Figures: Notes/bad.pdf could not be decoded, so it was not added. corrupt"]);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect(fileNodes(s).map((n) => n.file)).toEqual(["Notes/bad.pdf", "Notes/plot.png"]);
+    expect(fileNodes(s)[0].height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    expect(fileNodes(s)[1].height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    expect(notices).toEqual([undecodable("Notes/bad.pdf", "corrupt")]);
+    expect(s.commits).toEqual(["insert"]);
   });
 
-  test("a page over the size limit is left out with a Notice that names its size", async () => {
+  test("a page over the size limit is added with its badge, and the Notice names its size", async () => {
     const s = setup({ files: { "Notes/huge.pdf": "BINARY" } });
     s.pdf.mockRejectedValue(new DecodeLimitError("PDF page at 150 dpi is 9000×9000 px (81 MP); the limit is 50 MP", 9000, 9000));
     s.view.app.dragManager = { draggable: { type: "file", file: { path: "Notes/huge.pdf" } } };
     s.handlers.drop(dropEvent());
-    await vi.waitFor(() => expect(notices).toHaveLength(1));
-    expect(notices).toEqual([
-      "Link Figures: Notes/huge.pdf could not be decoded, so it was not added. PDF page at 150 dpi is 9000×9000 px (81 MP); the limit is 50 MP",
-    ]);
-    expect(fileNodes(s)).toHaveLength(0);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].file).toBe("Notes/huge.pdf");
+    expect(notices).toEqual([undecodable("Notes/huge.pdf", "PDF page at 150 dpi is 9000×9000 px (81 MP); the limit is 50 MP")]);
   });
 
-  test("an image that will not load is reported and left out", async () => {
+  test("a dropped TIFF over the size budget is saved, added at the default size, and the Notice names the reason", async () => {
+    const s = setup();
+    s.tiff.mockRejectedValue(new DecodeLimitError("TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP", 8000, 8000));
+    s.handlers.drop(dropEvent({ files: [osFile("big16.tif", "image/tiff")] }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show]).toEqual(["attachments/big16.tif", "", "image"]);
+    expect(node.width).toBeCloseTo(NODE_WIDTH_PX, 6);
+    expect(node.height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    // The saved file is the one the node links to, so there is no orphan in the attachment folder.
+    expect([...s.written.keys()]).toEqual(["attachments/big16.tif"]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("64 MP");
+    expect(notices).toEqual([undecodable("attachments/big16.tif", "TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP")]);
+    expect(s.commits).toEqual(["insert"]);
+    expect(s.view.setSelection).toHaveBeenCalledWith([node.id]);
+  });
+
+  test("a vault image that cannot be loaded is added with its badge, not dropped", async () => {
     const s = setup({ files: { "Notes/broken.png": "BINARY" } });
     s.view.app.dragManager = { draggable: { type: "files", files: [{ path: "Notes/broken.png" }, { path: "Notes/plot.png" }] } };
     s.handlers.drop(dropEvent());
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect(fileNodes(s).map((n) => n.file)).toEqual(["Notes/broken.png", "Notes/plot.png"]);
+    expect(fileNodes(s)[0].height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    expect(fileNodes(s)[1].height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    // The image failed to load, not to decode: there is no decoder's reason to add.
+    expect(notices).toEqual([undecodable("Notes/broken.png")]);
+  });
+
+  test("a link whose resolution throws is added at the default size, with a Notice", async () => {
+    const s = setup({ files: { "Notes/paper.pdf": "BINARY" } });
+    vi.spyOn(s.view.plugin.access, "readBinary").mockRejectedValue(new Error("read failed"));
+    s.view.app.dragManager = { draggable: { type: "file", file: { path: "Notes/paper.pdf" } } };
+    s.handlers.drop(dropEvent());
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
-    expect(notices).toEqual(["Link Figures: Notes/broken.png could not be decoded, so it was not added."]);
+    expect(fileNodes(s)[0].file).toBe("Notes/paper.pdf");
+    expect(fileNodes(s)[0].height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    expect(notices).toEqual([undecodable("Notes/paper.pdf")]);
+    expect(console.error).toHaveBeenCalled();
   });
 
   test("other kinds of file are skipped, in one Notice that names them", async () => {
@@ -599,13 +643,27 @@ describe("files from the OS", () => {
     expect(notices).toEqual(["Link Figures: could not save bad.png. disk full"]);
   });
 
-  test("a file saved but then not decodable is reported and gets no node (the file stays in the vault)", async () => {
+  test("a file that could not be saved adds no node, writes nothing and commits nothing", async () => {
+    const s = setup();
+    s.view.app.vault.createBinary.mockRejectedValueOnce(new Error("disk full"));
+    s.handlers.drop(dropEvent({ files: [osFile("bad.png")] }));
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    // Let the rest of the drop run its course before looking for what is not there.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fileNodes(s)).toHaveLength(0);
+    expect(s.commits).toEqual([]);
+    expect(s.files["attachments/bad.png"]).toBeUndefined();
+    expect(notices).toEqual(["Link Figures: could not save bad.png. disk full"]);
+  });
+
+  test("a file saved but then not decodable is reported and still added, for its badge (the file is in the vault, and linked)", async () => {
     const s = setup();
     // `attachments/odd.png` is saved but not in `images`: it will not load.
     s.handlers.drop(dropEvent({ files: [osFile("odd.png")] }));
-    await vi.waitFor(() => expect(notices).toHaveLength(1));
-    expect(fileNodes(s)).toHaveLength(0);
-    expect(notices[0]).toBe("Link Figures: attachments/odd.png could not be decoded, so it was not added.");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].file).toBe("attachments/odd.png");
+    expect(fileNodes(s)[0].height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    expect(notices).toEqual([undecodable("attachments/odd.png")]);
     expect(s.files["attachments/odd.png"]).toBe("BINARY");
   });
 

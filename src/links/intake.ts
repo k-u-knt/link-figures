@@ -24,7 +24,7 @@ export type IntakeTarget = PlacePoint;
 
 /** What a node is to link to, and how it is to show it. */
 type Planned = Pick<FileNode, "file" | "subpath" | "show">;
-/** A planned node and the natural size of the image it will show, or null when it shows none (or the image has no size). */
+/** A planned node and the natural size of the image it will show, or null when it shows none, the image has no size, or it could not be decoded (the node is then made at its default size). */
 type Measured = Planned & { size: Size | null };
 
 /** What `app.dragManager.draggable` is known to hold. The field is unofficial, so every part of it is checked. */
@@ -117,9 +117,10 @@ export class Intake {
    * Makes a node for each action, from the left: saves what has to be saved, resolves each link and measures the image
    * it shows, then adds all the nodes to the page in one commit (`"insert"`, so one undo takes them all out and leaves
    * any saved file alone) and selects them. The view draws and resolves new nodes on that commit (`NodeHost.applyChange`),
-   * so they are not resolved again here. An item that cannot be saved or decoded is reported in a
-   * Notice and left out; the others go in. `files` are indexed as the actions' `index` fields are, and may have gaps.
-   * Resolves to the ids of the new nodes.
+   * so they are not resolved again here. An item that cannot be saved is reported in a Notice and left out (nothing was
+   * written for it); the others go in. An item that is saved or linked but cannot be decoded goes in too, at the default
+   * size, so that its panel shows the badge for it and the file is not left orphaned; a Notice gives the decoder's reason.
+   * `files` are indexed as the actions' `index` fields are, and may have gaps. Resolves to the ids of the new nodes.
    */
   async execute(actions: IntakeAction[], at: IntakeTarget, files: ReadonlyArray<File | Blob | undefined>): Promise<NodeId[]> {
     const figure = this.view.file;
@@ -135,8 +136,7 @@ export class Intake {
     const measured: Measured[] = [];
     for (const action of actions) {
       const planned = await this.plan(action, figure.path, files, skipped);
-      const item = planned && (await this.measure(planned, figure.path, at.page));
-      if (item) measured.push(item);
+      if (planned) measured.push(await this.measure(planned, figure.path, at.page));
     }
     if (skipped.length > 0) new Notice(`Link Figures: skipped ${skipped.join(", ")}: not an image, PDF or TIFF file.`);
     return measured.length > 0 ? this.insert(measured, at) : [];
@@ -314,13 +314,18 @@ export class Intake {
     }
   }
 
-  /** Resolves the node's link as the view will and, for an image, loads it to learn its size. Null (with a Notice) when it cannot be decoded. */
-  private async measure(planned: Planned, figurePath: string, page: Page): Promise<Measured | null> {
+  /**
+   * Resolves the node's link as the view will and, for an image, loads it to learn its size. Never null: what cannot be
+   * decoded (a decoder that fails or refuses, a resolution that throws, an image that will not load) is still added, at
+   * its default size, so that the panel shows the badge the resolver gives it, and one Notice says so with the decoder's
+   * reason when there is one. Leaving it out would orphan a file that `plan` has already saved.
+   */
+  private async measure(planned: Planned, figurePath: string, page: Page): Promise<Measured> {
     const { access, decoders } = this.view.plugin;
     const label = planned.file + planned.subpath;
-    const failed = (reason?: string): null => {
-      new Notice(`Link Figures: ${label} could not be decoded, so it was not added.${reason ? ` ${reason}` : ""}`);
-      return null;
+    const failed = (reason?: string): Measured => {
+      new Notice(`Link Figures: ${label} could not be decoded; its panel shows a badge saying so.${reason ? ` ${reason}` : ""}`);
+      return { ...planned, size: null };
     };
 
     let resolved: Resolved;

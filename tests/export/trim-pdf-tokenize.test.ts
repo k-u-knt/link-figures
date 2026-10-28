@@ -114,17 +114,41 @@ test("an inline image whose data length cannot be known exactly throws", () => {
   expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G ID abcde EI"))).toThrow(ContentParseError);
 });
 
+test("an inline image whose dictionary cannot be right throws", () => {
+  // An image mask is 1 bit a sample (here 8 would give 4 bytes, the data's length).
+  expect(() => tokenize(enc("BI /IM true /W 1 /H 4 /BPC 8 ID abcd EI"))).toThrow(ContentParseError);
+  expect(tokenize(enc("BI /IM true /W 10 /H 2 /BPC 1 ID abcd EI"))).toHaveLength(1);
+  // Bits per component other than 1, 2, 4, 8 or 16 (here 3 would give 2 bytes, the data's length).
+  expect(() => tokenize(enc("BI /W 5 /H 1 /BPC 3 /CS /G ID ab EI"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("BI /W 5 /H 1 /BPC 3 /CS /G /L 2 ID ab EI"))).toThrow(ContentParseError);
+  expect(tokenize(enc("BI /W 1 /H 1 /BPC 16 /CS /G ID ab EI"))).toHaveLength(1);
+  // Indexed is an array, never a dictionary.
+  expect(() => tokenize(enc("BI /W 8 /H 1 /BPC 1 /CS << /I /RGB >> ID \x80 EI"))).toThrow(ContentParseError);
+});
+
+test("a declared length that is not what an unfiltered image's size gives throws; one that cannot be checked is used", () => {
+  // Gray 4×1, 8 bits, is 4 bytes, not the 5 that /L declares.
+  expect(() => tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G /L 5 ID abcde EI"))).toThrow(ContentParseError);
+  expect(tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G /L 4 ID abcd EI"))).toHaveLength(1);
+  // A colour space named in the resources is not known here, so /L stands.
+  expect(tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /CS0 /L 5 ID abcde EI"))).toHaveLength(1);
+  // Filtered data has no length to check against.
+  expect(tokenize(enc("BI /W 4 /H 1 /BPC 8 /CS /G /F /AHx /L 3 ID ab> EI"))).toHaveLength(1);
+});
+
 test("an operator with bytes outside printable ASCII throws", () => {
   expect(() => tokenize(enc("q \xff\x01 Q"))).toThrow(ContentParseError);
 });
 
 test("binary inline-image data holding \" EI \" without /L never yields a token inside the image", () => {
-  // The scan ends the image at the first " EI "; the binary bytes after it then cannot be read as operators.
+  // The size gives one byte of data, so the image would end at the first " EI "; the binary bytes after it then cannot be
+  // read as operators.
   expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI \xfe\x01 EI Q"))).toThrow(ContentParseError);
 });
 
 test("the rest of an inline image ended too early throws, whatever its bytes read as", () => {
-  // A false " EI " in binary data without /L, followed by bytes that read as a string, an operator or a name.
+  // A " EI " inside binary data where the image would end (by its size) or whose length cannot be known (no bits per
+  // component or colour space), followed by bytes that read as a string, an operator or a name.
   expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI (\xfe\xfd) EI Q"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI ab EI Q"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI /\xfe EI Q"))).toThrow(ContentParseError);

@@ -230,8 +230,11 @@ export function tokenize(bytes: Uint8Array): Token[] {
   }
 }
 
-/** A value in an inline image's dictionary: a single token, or the tokens of an array or dictionary (brackets excluded). */
-type DictValue = { token: Token } | { items: Token[] };
+/**
+ * A value in an inline image's dictionary: a single token, or the tokens of an array or dictionary (brackets excluded)
+ * with which of the two it is.
+ */
+type DictValue = { token: Token } | { items: Token[]; bracket: "array" | "dict" };
 
 /** An inline image's dictionary, by key. Throws when it is not a sequence of name keys and values. */
 function inlineImageDict(tokens: Token[]): Map<string, DictValue> {
@@ -252,7 +255,7 @@ function inlineImageDict(tokens: Token[]): Map<string, DictValue> {
         items.push(t);
       }
       if (depth !== 0) throw new ContentParseError(`Bad inline image dictionary at byte ${first.start}`);
-      dict.set(key.value, { items });
+      dict.set(key.value, { items, bracket: first.kind === "arrayStart" ? "array" : "dict" });
     } else if (first.kind === "arrayEnd" || first.kind === "dictEnd") {
       throw new ContentParseError(`Bad inline image dictionary at byte ${first.start}`);
     } else dict.set(key.value, { token: first });
@@ -271,34 +274,48 @@ function integerValue(value: DictValue | undefined): number | null {
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
-/** Components per pixel of an inline image's colour space; throws for one that is unknown here. */
-function components(value: DictValue | undefined, at: number): number {
+/** The bits per component an image may have. */
+const BITS_PER_COMPONENT = new Set([1, 2, 4, 8, 16]);
+
+/** Components per pixel of an inline image's colour space, or null for one that is unknown here (a resource's name). */
+function components(value: DictValue | undefined): number | null {
   const name = value && "token" in value && value.token.kind === "name" ? value.token.value : null;
   if (name === "G" || name === "DeviceGray") return 1;
   if (name === "RGB" || name === "DeviceRGB") return 3;
   if (name === "CMYK" || name === "DeviceCMYK") return 4;
-  if (value && "items" in value && value.items[0]?.kind === "name" && (value.items[0].value === "I" || value.items[0].value === "Indexed")) return 1;
-  throw new ContentParseError(`Inline image with a colour space not known here at byte ${at}`);
+  // [/Indexed base hival lookup]: an array, never a dictionary.
+  if (value && "items" in value && value.bracket === "array" && value.items[0]?.kind === "name" && (value.items[0].value === "I" || value.items[0].value === "Indexed")) return 1;
+  return null;
 }
 
 /**
  * The length of an inline image's data: the declared /L (/Length) or, for unfiltered data, height × bytes per row.
- * Throws when it cannot be known exactly.
+ * Throws when it cannot be known exactly, or when what the dictionary says cannot be right: bits per component other
+ * than 1, 2, 4, 8 or 16 (or other than 1 for an image mask), or, for unfiltered data whose size, bits per component and
+ * colour space are all known, a declared length that is not the length they give.
  */
 function imageDataLength(dict: Map<string, DictValue>, at: number): number {
-  const declared = lookup(dict, "L", "Length");
-  if (declared) {
-    const n = integerValue(declared);
-    if (n === null) throw new ContentParseError(`Bad inline image length at byte ${at}`);
-    return n;
-  }
-  if (lookup(dict, "F", "Filter")) throw new ContentParseError(`Filtered inline image without a length at byte ${at}`);
-  const width = integerValue(lookup(dict, "W", "Width"));
-  const height = integerValue(lookup(dict, "H", "Height"));
+  const declaredValue = lookup(dict, "L", "Length");
+  const declared = declaredValue === undefined ? null : integerValue(declaredValue);
+  if (declaredValue !== undefined && declared === null) throw new ContentParseError(`Bad inline image length at byte ${at}`);
   const maskValue = lookup(dict, "IM", "ImageMask");
   const mask = !!maskValue && "token" in maskValue && maskValue.token.kind === "operator" && maskValue.token.value === "true";
-  const bpc = integerValue(lookup(dict, "BPC", "BitsPerComponent")) ?? (mask ? 1 : null);
+  const bpcValue = lookup(dict, "BPC", "BitsPerComponent");
+  const bpc = bpcValue === undefined ? (mask ? 1 : null) : integerValue(bpcValue);
+  if (bpcValue !== undefined && (bpc === null || !BITS_PER_COMPONENT.has(bpc) || (mask && bpc !== 1))) {
+    throw new ContentParseError(`Bad inline image bits per component at byte ${at}`);
+  }
+  const filtered = lookup(dict, "F", "Filter") !== undefined;
+  const width = integerValue(lookup(dict, "W", "Width"));
+  const height = integerValue(lookup(dict, "H", "Height"));
+  const comps = mask ? 1 : components(lookup(dict, "CS", "ColorSpace"));
+  const computed = !filtered && width !== null && height !== null && bpc !== null && comps !== null ? height * Math.ceil((width * bpc * comps) / 8) : null;
+  if (declared !== null) {
+    if (computed !== null && computed !== declared) throw new ContentParseError(`Inline image length does not match its size at byte ${at}`);
+    return declared;
+  }
+  if (filtered) throw new ContentParseError(`Filtered inline image without a length at byte ${at}`);
   if (width === null || height === null || bpc === null) throw new ContentParseError(`Inline image without its size at byte ${at}`);
-  const comps = mask ? 1 : components(lookup(dict, "CS", "ColorSpace"), at);
-  return height * Math.ceil((width * bpc * comps) / 8);
+  if (comps === null) throw new ContentParseError(`Inline image with a colour space not known here at byte ${at}`);
+  return computed!;
 }

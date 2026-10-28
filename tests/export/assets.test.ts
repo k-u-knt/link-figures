@@ -1,3 +1,4 @@
+import { hasActiveAdjustments, type PixelRecipe } from "../../src/adjust/render";
 import { nodeLabel } from "../../src/model/labels";
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import type { Document, FileNode } from "../../src/model/types";
@@ -17,9 +18,10 @@ const { bytesToDataUri, collectAssets } = await import("../../src/export/assets"
 const { DecodeLimitError } = await import("../../src/links/decoders/budget");
 const { resolveFileNode } = await import("../../src/links/resolver");
 const { FakeAccess } = await import("../links/fake-access");
+const { testRegistry } = await import("../adjust/fixtures");
 
 /** The decoders collectAssets is given; only TIFF and raster go through them. */
-const decoders = { pdf: vi.fn(), tiff: mocks.tiff, raster: mocks.raster };
+const decoders = { pdf: vi.fn(), tiff: mocks.tiff, raster: mocks.raster, adjusts: (recipe: PixelRecipe) => hasActiveAdjustments(recipe, testRegistry()) };
 
 /** An image decoder that reports 640 x 480 for any data URI, and fails for the bytes 0xff 0xff 0xff. */
 class FakeImage {
@@ -260,6 +262,13 @@ describe("raster sources with adjustments", () => {
     expect(mocks.raster).toHaveBeenCalledWith(s.files["fig/a.avif"], { range: "auto", adjustments });
     // A PNG now, so the AVIF limit of the PDF export does not apply.
     expect(s.warnings).toEqual([]);
+  });
+
+  test("with only enabled entries of types not registered keep the file's own bytes", async () => {
+    const s = setup([{ node: { adjustments: [{ type: "future.thing", enabled: true, params: {} }] }, resolved: image("fig/a.png", "raster") }]);
+    s.files["fig/a.png"] = bytes(1, 2, 3);
+    expect((await s.run()).get(s.nodes[0].id)).toMatchObject({ dataUri: "data:image/png;base64,AQID" });
+    expect(mocks.raster).not.toHaveBeenCalled();
   });
 
   test("with every entry disabled keep the file's own bytes", async () => {

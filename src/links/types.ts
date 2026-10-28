@@ -37,8 +37,10 @@ export interface Decoders {
   pdf(bytes: ArrayBuffer, pageIndex: number, scale: number): Promise<DecodedImage>;
   /** One page's native samples drawn through the panel's recipe (see `renderSamples`). */
   tiff(bytes: ArrayBuffer, pageIndex: number, recipe: PixelRecipe): Promise<DecodedImage>;
-  /** A PNG, JPEG or other browser-decodable image drawn through the panel's recipe; used only when an adjustment is on. */
+  /** A PNG, JPEG or other browser-decodable image drawn through the panel's recipe; used only when `adjusts` is true. */
   raster(bytes: ArrayBuffer, recipe: PixelRecipe): Promise<DecodedImage>;
+  /** Whether the recipe has an adjustment that is switched on and registered (see `hasActiveAdjustments`). */
+  adjusts(recipe: PixelRecipe): boolean;
 }
 
 /** `deps` are the vault paths whose change should trigger re-resolution. */

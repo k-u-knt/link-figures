@@ -1,4 +1,4 @@
-import { hasActiveAdjustments, recipeOf } from "../adjust/render";
+import { recipeOf } from "../adjust/render";
 import { PANEL_EXTENSIONS, PDF_SCREEN_DPI } from "../constants";
 import { joinLinktext, splitLinktext } from "../format/links-section";
 import type { FileNode } from "../model/types";
@@ -40,8 +40,9 @@ async function resolvePanel(
   deps: string[],
 ): Promise<Resolved> {
   const source = sourceKindOf(file.extension);
-  // SVG ignores adjustments; a raster image without one is shown by the browser straight from the vault.
-  if (source === "svg" || (source === "raster" && !hasActiveAdjustments(node))) {
+  // SVG ignores adjustments; a raster image without one that draws (on and registered) is shown by the browser straight
+  // from the vault.
+  if (source === "svg" || (source === "raster" && !decoders.adjusts(node))) {
     return { kind: "image", file, src: access.resourcePath(file), source, pageCount: 1, deps };
   }
   const bytes = await access.readBinary(file);

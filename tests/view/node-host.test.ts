@@ -78,6 +78,7 @@ function setup() {
     }),
     tiff: vi.fn(),
     raster: vi.fn(),
+    adjusts: () => false,
   };
 
   const view = {

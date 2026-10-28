@@ -17,7 +17,8 @@ export function rgbaToPngDataUrl(image: RgbaImage): string {
 /**
  * A raster image (PNG, JPEG, GIF, WebP, AVIF, BMP) drawn through `renderSamples` as a PNG data URL. The browser
  * decodes it to 8-bit RGBA, which is the `SampleImage` the adjustments get (8 bits, 4 samples). An image over the
- * decode budget is refused (`DecodeLimitError`) before its pixels are read.
+ * decode budget is refused (`DecodeLimitError`) once `createImageBitmap` has decoded it (only then is its size known),
+ * before its pixels are read back and drawn through the adjustments.
  */
 export async function decodeRaster(bytes: ArrayBuffer, recipe: PixelRecipe, adjustments: AdjustmentRegistry): Promise<DecodedImage> {
   const bitmap = await createImageBitmap(new Blob([bytes]));

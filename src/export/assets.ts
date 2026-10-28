@@ -2,7 +2,7 @@ import type { App } from "obsidian";
 import { MAX_DECODE_MEGAPIXELS } from "../constants";
 import { DecodeLimitError } from "../links/decoders/budget";
 import { decodePdf, pdfPageSizePt } from "../links/decoders/pdf";
-import { hasActiveAdjustments, recipeOf } from "../adjust/render";
+import { recipeOf } from "../adjust/render";
 import type { Decoders, Resolved } from "../links/types";
 import { nodeLabel } from "../model/labels";
 import type { Document, FileNode, NodeId, Page } from "../model/types";
@@ -110,7 +110,7 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
   const path = resolved.file.path;
   switch (resolved.source) {
     case "raster": {
-      if (hasActiveAdjustments(node)) {
+      if (deps.decoders.adjusts(node)) {
         // Drawn as a PNG: the AVIF limit of the PDF export does not apply to it.
         const decoded = await deps.decoders.raster(await deps.readBinary(path), recipeOf(node));
         return { kind: "image", dataUri: decoded.dataUrl, naturalWidth: decoded.width, naturalHeight: decoded.height };

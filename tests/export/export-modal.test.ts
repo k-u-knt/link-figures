@@ -27,7 +27,7 @@ const { fileNodeType } = await import("../../src/nodes/file-node");
 const pdfDecoder = await import("../../src/links/decoders/pdf");
 
 // No TIFF or adjusted raster here: the decoders are never asked.
-const decoders = { pdf: vi.fn(), tiff: vi.fn(), raster: vi.fn() };
+const decoders = { pdf: vi.fn(), tiff: vi.fn(), raster: vi.fn(), adjusts: () => false };
 /** Trimming that cuts nothing but records what it was asked to cut. */
 const cuts: unknown[] = [];
 const pdfTrims: unknown[] = [];

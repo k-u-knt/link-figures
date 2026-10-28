@@ -68,9 +68,11 @@ describe("renderSamples", () => {
 });
 
 describe("hasActiveAdjustments", () => {
-  test("is true when any entry is enabled, known or not", () => {
-    expect(hasActiveAdjustments({ range: "auto", adjustments: [] })).toBe(false);
-    expect(hasActiveAdjustments({ range: "auto", adjustments: [step("test.invert", false)] })).toBe(false);
-    expect(hasActiveAdjustments({ range: "auto", adjustments: [step("test.invert", false), step("future.thing")] })).toBe(true);
+  test("is true only when an entry is both enabled and registered", () => {
+    expect(hasActiveAdjustments({ range: "auto", adjustments: [] }, registry)).toBe(false);
+    expect(hasActiveAdjustments({ range: "auto", adjustments: [step("test.invert", false)] }, registry)).toBe(false);
+    // An unknown type is skipped when drawing, so it changes nothing.
+    expect(hasActiveAdjustments({ range: "auto", adjustments: [step("test.invert", false), step("future.thing")] }, registry)).toBe(false);
+    expect(hasActiveAdjustments({ range: "auto", adjustments: [step("future.thing"), step("test.invert")] }, registry)).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import { hasActiveAdjustments } from "../../adjust/render";
 import type { AdjustmentRegistry } from "../../registry/adjustment";
 import type { Decoders } from "../types";
 import { decodePdf } from "./pdf";
@@ -10,5 +11,6 @@ export function createDecoders(adjustments: AdjustmentRegistry): Decoders {
     pdf: decodePdf,
     tiff: (bytes, pageIndex, recipe) => decodeTiff(bytes, pageIndex, recipe, adjustments),
     raster: (bytes, recipe) => decodeRaster(bytes, recipe, adjustments),
+    adjusts: (recipe) => hasActiveAdjustments(recipe, adjustments),
   };
 }

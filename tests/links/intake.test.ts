@@ -84,7 +84,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
     plugin: {
       settings,
       access: new FakeAccess({ files } as FakeVault),
-      decoders: { pdf, tiff },
+      decoders: { pdf, tiff, adjusts: () => false },
     },
     store,
     viewport: new Viewport(),

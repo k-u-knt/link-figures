@@ -10,9 +10,12 @@ export function recipeOf(node: PixelRecipe): PixelRecipe {
   return { range: node.range, adjustments: node.adjustments };
 }
 
-/** True when any adjustment is switched on, registered or not. With none, a panel takes the path it took before adjustments existed. */
-export function hasActiveAdjustments(recipe: PixelRecipe): boolean {
-  return recipe.adjustments.some((a) => a.enabled);
+/**
+ * True when any adjustment that is switched on is also registered, so that drawing would change a pixel (a type that
+ * is not registered is skipped when drawing). Without one, a panel takes the path it took before adjustments existed.
+ */
+export function hasActiveAdjustments(recipe: PixelRecipe, registry: AdjustmentRegistry): boolean {
+  return recipe.adjustments.some((a) => a.enabled && registry.get(a.type) !== undefined);
 }
 
 /**

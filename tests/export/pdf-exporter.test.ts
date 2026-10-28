@@ -71,6 +71,8 @@ const input = (over: Partial<ExportInput> = {}): ExportInput => {
   };
 };
 
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 test("it describes itself as a vector PDF, with no options", () => {
   expect(pdfExporter).toMatchObject({ id: "pdf", name: "PDF (vector)", ext: "pdf", mime: "application/pdf" });
   expect(pdfExporter.options()).toEqual([]);
@@ -347,27 +349,27 @@ test("a page that cannot be embedded fails the export, naming the node and the p
   const f = panelFigure();
   const source = await sourcePdf([[300, 200]]);
   const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source, { pageIndex: 4 }));
-  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} \\("plot\\.pdf", page 5\\)`));
+  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(`${nodeLabel(f.i.doc, node)}: could not embed page 5 of the PDF`);
 });
 
 test("a source that is not a PDF fails the export, naming the node and the page", async () => {
   const f = panelFigure();
   const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(new TextEncoder().encode("not a pdf").buffer as ArrayBuffer));
-  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} \\("plot\\.pdf", page 1\\): could not embed the PDF page as vectors`));
+  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(`${nodeLabel(f.i.doc, node)}: could not embed page 1 of the PDF as vectors`);
 });
 
 test("a source page with its own rotation is refused rather than drawn turned", async () => {
   const f = panelFigure();
   const source = await sourcePdf([[300, 200]], (page) => page.setRotation(degrees(90)));
   const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source));
-  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} .*rotation`));
+  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`${escapeRe(nodeLabel(f.i.doc, node))}: .*rotation`));
 });
 
 test("a crop with no area fails the export instead of drawing a broken page", async () => {
   const f = panelFigure();
   const source = await sourcePdf([[300, 200]]);
   const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source), { crop: { x: 0.5, y: 0, w: 0, h: 1 } });
-  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} .*no area`));
+  await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`${escapeRe(nodeLabel(f.i.doc, node))}: .*no area`));
 });
 
 describe("fonts the PDF cannot set", () => {
@@ -430,6 +432,6 @@ describe("encrypted source PDFs", () => {
     const source = await encryptedPdf({ ownerPassword: "owner", userPassword: "secret" });
     const f = panelFigure();
     const node = f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(source));
-    await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`Node ${node.id} \\("plot\\.pdf", page 1\\): could not embed the PDF page as vectors`));
+    await expect(pdfExporter.run(f.i, {})).rejects.toThrow(`${nodeLabel(f.i.doc, node)}: could not embed page 1 of the PDF as vectors`);
   });
 });

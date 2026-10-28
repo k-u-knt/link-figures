@@ -123,7 +123,7 @@ function isDrawable({ box, ...placed }: PdfPlacement): boolean {
  * One panel's page of its source PDF, drawn on `target` at the panel's rectangle as vectors: the source page's own content
  * is embedded in the output, clipped to the part that shows. Anything that goes wrong names the node and the page.
  */
-async function drawPdfPanel(lib: PdfLib, out: PDFDocument, target: PDFPage, page: Page, { node, asset }: PdfPanel): Promise<void> {
+async function drawPdfPanel(doc: Document, lib: PdfLib, out: PDFDocument, target: PDFPage, page: Page, { node, asset }: PdfPanel): Promise<void> {
   try {
     const source = await loadSource(lib, asset.bytes);
     const sourcePage = source.getPage(asset.pageIndex);
@@ -151,7 +151,7 @@ async function drawPdfPanel(lib: PdfLib, out: PDFDocument, target: PDFPage, page
     });
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new Error(`Node ${node.id} ("${node.file}", page ${asset.pageIndex + 1}): could not embed the PDF page as vectors: ${reason}`, { cause });
+    throw new Error(`${nodeLabel(doc, node)}: could not embed page ${asset.pageIndex + 1} of the PDF as vectors: ${reason}`, { cause });
   }
 }
 
@@ -170,8 +170,11 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
     for (const [index, layer] of layers.entries()) {
       if (layer.kind === "pdf") {
         const panel = panels.get(layer.nodeId);
-        if (!panel) throw new Error(`Node ${layer.nodeId} is not a PDF panel`);
-        await drawPdfPanel(lib, out, target, page, panel);
+        if (!panel) {
+          const node = input.doc.nodes.find((n) => n.id === layer.nodeId);
+          throw new Error(`${node ? nodeLabel(input.doc, node) : `Node ${layer.nodeId}`} is not a PDF panel`);
+        }
+        await drawPdfPanel(input.doc, lib, out, target, page, panel);
         continue;
       }
       // Only the first layer has the paper; a layer with no nodes (the first, below a panel) is just that.

@@ -144,6 +144,16 @@ test("the visible region is measured from the top-left of the CropBox, and the p
   expect(out.page.getCropBox()).toEqual({ x: 50, y: 50, width: 200, height: 200 });
 });
 
+test("a stroke whose path lies just outside but whose width, set by gs, reaches in is kept", async () => {
+  // The line runs at y 95, 5 pt below the visible region; the ExtGState's 20 pt width reaches 10 pt either side.
+  const reaching = "0 95 m 50 95 l S";
+  const source = await pdfWith(`q /GS0 gs ${reaching} Q q ${reaching} Q`, () => ({ ExtGState: { GS0: { LW: 20 } } }));
+  const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
+  expect(trimmed.removed).toBe(1);
+  const out = await read(trimmed.bytes);
+  expect(out.content).toBe(`q /GS0 gs ${reaching} Q q  Q`);
+});
+
 test("the page asked for is the one trimmed, and the result has that page only", async () => {
   const source = await pdfWith(`${INSIDE} ${OUTSIDE}`, () => ({}), { pages: 3 });
   const trimmed = await trimPdfPage(source, 2, TOP_LEFT);
@@ -299,6 +309,33 @@ describe("drawings that read the page's resources (no Resources of their own)", 
     const out = await read((await trimPdfPage(source, 0, TOP_LEFT)).bytes);
     expect(namesIn(out.resources, "XObject")).toEqual(["ImG"]);
     expect(namesIn(out.resources, "Font")).toEqual(["T3"]);
+  });
+
+  test("a Type 3 font set by an ExtGState keeps what its glyphs draw", async () => {
+    const source = await pdfWith(`q /GSf gs BT 10 150 Td (a) Tj ET Q ${OUTSIDE_IMAGE}`, (make, context) => ({
+      ExtGState: {
+        GSf: {
+          Font: [
+            context.obj({
+              Type: "Font",
+              Subtype: "Type3",
+              FontBBox: [0, 0, 1, 1],
+              FontMatrix: [1, 0, 0, 1, 0, 0],
+              FirstChar: 97,
+              LastChar: 97,
+              Widths: [1],
+              Encoding: { Type: "Encoding", Differences: [97, "a"] },
+              CharProcs: { a: context.register(context.stream("1 0 0 0 1 1 d1 /ImG Do")) },
+            }),
+            10,
+          ],
+        },
+      },
+      XObject: { ImG: make.image(), ImOut: make.image() },
+    }));
+    const out = await read((await trimPdfPage(source, 0, TOP_LEFT)).bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual(["ImG"]);
+    expect(namesIn(out.resources, "ExtGState")).toEqual(["GSf"]);
   });
 
   test("a tiling pattern and a soft mask group keep what they draw", async () => {
@@ -556,6 +593,23 @@ describe("what the units are told of the resources", () => {
       Font: { H: { Type: "Font", Subtype: "Type0", Encoding: "Identity-H", DescendantFonts: [{ Subtype: "CIDFontType2", DW: 900, W: [1, [500, 1200], 10, 20, 700] }] } },
     }));
     expect(res.font("H")).toEqual({ widths: { first: 0, list: [500, 1200, 700], missing: 900 }, twoByte: true });
+  });
+
+  test("an ExtGState's line style and font; null when it, or one of those entries, cannot be read", async () => {
+    const res = await info((make) => ({
+      ExtGState: {
+        GS0: { LW: 20, LC: 2, LJ: 1, ML: 4, CA: 0.5 },
+        GSf: { Font: [make.font(), 12] },
+        Plain: { CA: 0.5 },
+        BadLW: { LW: "x" },
+        BadFont: { Font: [make.font()] },
+        NotDict: 3,
+      },
+    }));
+    expect(res.extGState("GS0")).toEqual({ lineWidth: 20, cap: 2, join: 1, miterLimit: 4 });
+    expect(res.extGState("GSf")).toEqual({ font: { font: { widths: null, twoByte: false }, size: 12 } });
+    expect(res.extGState("Plain")).toEqual({});
+    for (const name of ["BadLW", "BadFont", "NotDict", "Nope"]) expect(res.extGState(name)).toBeNull();
   });
 
   test("forms with their BBox and Matrix, images, and shadings with their BBox", async () => {

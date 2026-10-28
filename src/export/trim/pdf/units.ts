@@ -12,12 +12,33 @@ import { ContentParseError, type Token } from "./tokenize";
 /** A PDF matrix [a b c d e f], mapping (x, y) to (a·x + c·y + e, b·x + d·y + f). */
 export type Matrix = [number, number, number, number, number, number];
 
+/** A font's horizontal widths (in thousandths of an em); `widths` is null when every glyph counts as an em. */
+export interface FontInfo {
+  widths: { first: number; list: number[]; missing: number } | null;
+  twoByte: boolean;
+}
+
+/** What an ExtGState sets of the line style and the font; an entry left out is one the dictionary does not set. */
+export interface ExtGStateInfo {
+  lineWidth?: number;
+  cap?: number;
+  join?: number;
+  miterLimit?: number;
+  /** The font and size it sets; `font` is null for a font that must not be measured. */
+  font?: { font: FontInfo | null; size: number };
+}
+
 /** What the units need to know about the resources the stream names. */
 export interface ResourceInfo {
   xobject(name: string): { subtype: "Form"; bbox: [number, number, number, number]; matrix: Matrix } | { subtype: "Image" } | null;
-  /** A font's horizontal widths (in thousandths of an em), or null for a font that must not be measured. */
-  font(name: string): { widths: { first: number; list: number[]; missing: number } | null; twoByte: boolean } | null;
+  /** A font's widths, or null for a font that must not be measured. */
+  font(name: string): FontInfo | null;
   shadingBBox(name: string): [number, number, number, number] | null;
+  /**
+   * What the ExtGState `name` sets that moves a drawing's box, or null when it cannot be read: missing, not a
+   * dictionary, or one of those entries malformed.
+   */
+  extGState(name: string): ExtGStateInfo | null;
 }
 
 /**
@@ -61,7 +82,11 @@ const LINE: StateKey[] = ["w", "J", "j", "M", "d"];
 const MISC: StateKey[] = ["ri", "i"];
 const ALL: StateKey[] = ["font", "Tc", "Tw", "Tz", "TL", "Ts", "Tr", ...FILL, ...STROKE, ...LINE, ...MISC];
 
-/** What each operator reads and writes of the state above. An operator not listed reads everything. */
+/**
+ * What each operator reads and writes of the state above. An operator not listed reads everything. `gs` may set the
+ * line style and the font, but which of them depends on its dictionary, so it is listed as writing nothing: a write left
+ * out only keeps a text object's state counted as used, which keeps the text object.
+ */
 const EFFECTS: Record<string, { reads: StateKey[]; writes: StateKey[] }> = {};
 function effect(names: string, reads: StateKey[], writes: StateKey[]): void {
   for (const name of names.split(" ")) EFFECTS[name] = { reads, writes };
@@ -241,7 +266,15 @@ interface GState {
   cap: number;
   join: number;
   miterLimit: number;
+  /** False after a `gs` that could not be read, which may have set the line style (until the matching `Q`). */
+  lineKnown: boolean;
+  /**
+   * The font, as a key into the fonts read so far: `/name` for a font a `Tf` names, `gs /name` for the font the
+   * ExtGState `name` sets.
+   */
   font: string | null;
+  /** False after a `gs` that could not be read, which may have set the font (until the matching `Q`). */
+  fontKnown: boolean;
   size: number;
   charSpacing: number;
   wordSpacing: number;
@@ -292,15 +325,16 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
   const textChecks: { unit: Unit; next: number; depth: number; writes: Set<StateKey> }[] = [];
 
   let gs: GState = {
-    ctm: [...ctm], lineWidth: 1, cap: 0, join: 0, miterLimit: 10,
-    font: null, size: 0, charSpacing: 0, wordSpacing: 0, scale: 1, leading: 0, rise: 0, render: 0,
+    ctm: [...ctm], lineWidth: 1, cap: 0, join: 0, miterLimit: 10, lineKnown: true,
+    font: null, fontKnown: true, size: 0, charSpacing: 0, wordSpacing: 0, scale: 1, leading: 0, rise: 0, render: 0,
   };
   const saved: GState[] = [];
   let path: PathBuild | null = null;
   let text: TextBuild | null = null;
   let tm: Matrix = IDENTITY;
   let tlm: Matrix = IDENTITY;
-  const fonts = new Map<string, ReturnType<ResourceInfo["font"]>>();
+  /** The fonts read so far, by the keys of `GState.font`. */
+  const fonts = new Map<string, FontInfo | null>();
   /** Per two-byte font: the width each byte counts as, the widest known glyph but at least an em. */
   const twoByteWidths = new Map<string, number>();
 
@@ -436,8 +470,27 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
         if (op.operands.length !== 2 || font.kind !== "name" || size.kind !== "number" || !Number.isFinite(size.value)) {
           throw new ContentParseError(`"Tf" needs a name and a size at byte ${op.start}`);
         }
-        gs.font = font.value;
+        gs.font = `/${font.value}`;
         gs.size = size.value;
+        break;
+      }
+      case "gs": {
+        const gsName = nameOperand(op);
+        const info = resources.extGState(gsName);
+        if (!info) {
+          gs.lineKnown = false;
+          gs.fontKnown = false;
+          break;
+        }
+        if (info.lineWidth !== undefined) gs.lineWidth = Math.abs(info.lineWidth);
+        if (info.cap !== undefined) gs.cap = info.cap;
+        if (info.join !== undefined) gs.join = info.join;
+        if (info.miterLimit !== undefined) gs.miterLimit = info.miterLimit;
+        if (info.font) {
+          gs.font = `gs /${gsName}`;
+          gs.size = info.font.size;
+          fonts.set(gs.font, info.font.font);
+        }
         break;
       }
       case "Td": {
@@ -503,13 +556,15 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     }
 
     // Render modes 4–7 add the glyphs to the clipping path, which outlives the text object.
-    if (gs.render >= 4 || gs.render < 0 || gs.font === null) {
+    // An unreadable ExtGState may have set the font, or (for modes 1 and 2) the width the outlines are stroked with.
+    if (gs.render >= 4 || gs.render < 0 || gs.font === null || !gs.fontKnown || (!gs.lineKnown && (gs.render === 1 || gs.render === 2))) {
       t.known = false;
       return;
     }
     let font = fonts.get(gs.font);
     if (font === undefined) {
-      font = resources.font(gs.font);
+      // Keys of fonts set by an ExtGState are read when it is applied, so this is a font a Tf names.
+      font = resources.font(gs.font.slice(1));
       fonts.set(gs.font, font);
     }
     if (!font) {
@@ -673,7 +728,8 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     }
     path = null;
     let box: Rect | null = null;
-    if (p.known) {
+    // An unreadable ExtGState may have set the line style a stroke is drawn with.
+    if (p.known && (gs.lineKnown || !STROKE_PAINT.has(op.name))) {
       if (STROKE_PAINT.has(op.name)) {
         // Round and butt ends stay within half the line width; projecting caps reach it diagonally.
         const half = (gs.lineWidth / 2) * maxScale(gs.ctm) * (gs.cap === 2 ? Math.SQRT2 : 1);

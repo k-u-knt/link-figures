@@ -7,14 +7,21 @@ const enc = (s: string) => new Uint8Array([...s].map((c) => c.charCodeAt(0)));
 
 type FontInfo = ReturnType<ResourceInfo["font"]>;
 type XObjectInfo = ReturnType<ResourceInfo["xobject"]>;
+type GStateInfo = ReturnType<ResourceInfo["extGState"]>;
 
 function resources(
-  opts: { fonts?: Record<string, FontInfo>; xobjects?: Record<string, XObjectInfo>; shadings?: Record<string, [number, number, number, number]> } = {},
+  opts: {
+    fonts?: Record<string, FontInfo>;
+    xobjects?: Record<string, XObjectInfo>;
+    shadings?: Record<string, [number, number, number, number]>;
+    gstates?: Record<string, GStateInfo>;
+  } = {},
 ): ResourceInfo {
   return {
     xobject: (name) => opts.xobjects?.[name] ?? null,
     font: (name) => opts.fonts?.[name] ?? null,
     shadingBBox: (name) => opts.shadings?.[name] ?? null,
+    extGState: (name) => opts.gstates?.[name] ?? null,
   };
 }
 
@@ -243,6 +250,49 @@ describe("text", () => {
 
   test("a text object with nothing shown has no box", () => {
     expect(units("BT 0 0 Td ET").units[0].box).toBeNull();
+  });
+});
+
+describe("graphics states (gs)", () => {
+  test("a line width set by gs widens the stroke box, and Q restores it", () => {
+    const res = resources({ gstates: { GS0: { lineWidth: 20 } } });
+    expectBox(units("/GS0 gs 0 0 m 10 0 l S", res).units[0], -10, -10, 30, 20);
+    expectBox(units("q /GS0 gs Q 0 0 m 10 0 l S", res).units[0], -0.5, -0.5, 11, 1);
+  });
+
+  test("a larger miter limit set by gs reveals miter tips the default limit cuts off", () => {
+    // A spike so sharp (about 50 half-widths) that the default limit of 10 bevels it.
+    const spike = "4 w 0 -0.2 m 10 0 l 0 0.2 l S";
+    const res = resources({ gstates: { GSm: { miterLimit: 100 }, GSc: { cap: 2 }, GSj: { join: 1 } } });
+    const beveled = units(spike, res).units[0].box!;
+    const mitered = units(`/GSm gs ${spike}`, res).units[0].box!;
+    expect(beveled.x + beveled.width).toBeLessThan(13);
+    expect(mitered.x + mitered.width).toBeGreaterThan(100);
+    // A round join set by gs has no tip; a projecting cap reaches half the width diagonally.
+    expect(units(`/GSm gs /GSj gs ${spike}`, res).units[0].box).toEqual(beveled);
+    expectBox(units("/GSc gs 0 0 m 10 0 l S", res).units[0], -Math.SQRT1_2, -Math.SQRT1_2, 10 + Math.SQRT2, Math.SQRT2);
+  });
+
+  test("a font set by gs is the one the text is measured with", () => {
+    const res = resources({ gstates: { GSf: { font: { font: EM_FONT, size: 10 } }, GSx: { font: { font: null, size: 10 } } } });
+    expectBox(units("/GSf gs BT (a) Tj ET", res).units[0], -5, -5, 20, 17);
+    // A font set by gs that must not be measured, as by Tf, gives no box.
+    expect(units("/GSx gs BT (a) Tj ET", res).units[0].box).toBeNull();
+  });
+
+  test("an unreadable ExtGState makes strokes and text unknown until its Q; fills stay known", () => {
+    const res = resources({ fonts: { F1: EM_FONT } });
+    const found = units("q /Bad gs 0 0 m 10 0 l S 0 0 10 10 re f BT /F1 10 Tf (a) Tj ET Q 0 0 m 10 0 l S BT /F1 10 Tf (a) Tj ET", res).units;
+    expect(found.map((u) => u.box === null)).toEqual([true, false, true, false, false]);
+    // A Tf or w after it does not make it known again: what else the dictionary set is still unknown.
+    expect(units("/Bad gs 1 w 0 0 m 10 0 l S", res).units[0].box).toBeNull();
+    expect(units("/Bad gs BT /F1 10 Tf (a) Tj ET", res).units[0].box).toBeNull();
+  });
+
+  test("a gs after a text object does not count as setting its line width again, so the text object stays", () => {
+    // Whether GS0 sets the width depends on its dictionary, so the stroke after it may read the width set in the text.
+    const res = resources({ fonts: { F1: EM_FONT }, gstates: { GS0: { lineWidth: 3 } } });
+    expect(units("BT 5 w /F1 10 Tf (a) Tj ET /GS0 gs 0 0 m 1 1 l S", res).units[0].box).toBeNull();
   });
 });
 

@@ -14,7 +14,7 @@ import {
 } from "@cantoo/pdf-lib";
 import type { Rect } from "../../../model/geometry";
 import { ContentParseError, tokenize } from "./tokenize";
-import { findUnits, multiply, type Matrix, type ResourceInfo } from "./units";
+import { findUnits, multiply, type ExtGStateInfo, type FontInfo, type Matrix, type ResourceInfo } from "./units";
 
 /**
  * Trimming a PDF page for the vector PDF export (spec §3.5): every drawing of the page's content that lies wholly
@@ -296,15 +296,19 @@ function borrowingStreams(resources: PDFDict | undefined, name: string): PDFObje
   const borrows = (dict: PDFDict) => ownResources(dict) === undefined;
   const form = entry(resources, "XObject", name);
   if (form instanceof PDFStream && subtype(form.dict) === "Form" && borrows(form.dict)) streams.push(form);
-  const font = entry(resources, "Font", name);
-  if (font instanceof PDFDict && subtype(font) === "Type3" && borrows(font)) {
+  const type3Glyphs = (font: PDFObject | undefined) => {
+    if (!(font instanceof PDFDict && subtype(font) === "Type3" && borrows(font))) return;
     const procs = font.lookup(PDFName.of("CharProcs"));
     if (!(procs instanceof PDFDict)) throw new TrimFallback("a Type 3 font has no glyphs to read");
     for (const key of procs.keys()) streams.push(procs.lookup(key)!);
-  }
+  };
+  type3Glyphs(entry(resources, "Font", name));
   const pattern = entry(resources, "Pattern", name);
   if (pattern instanceof PDFStream && borrows(pattern.dict)) streams.push(pattern);
   const gstate = entry(resources, "ExtGState", name);
+  // An ExtGState's font ([font size]) is drawn with the names of the stream that sets it, like a font a Tf names.
+  const gfont = gstate instanceof PDFDict ? gstate.lookup(PDFName.of("Font")) : undefined;
+  if (gfont instanceof PDFArray) type3Glyphs(gfont.lookup(0));
   const mask = gstate instanceof PDFDict ? gstate.lookup(PDFName.of("SMask")) : undefined;
   const group = mask instanceof PDFDict ? mask.lookup(PDFName.of("G")) : undefined;
   if (group instanceof PDFStream && borrows(group.dict)) streams.push(group);
@@ -314,7 +318,8 @@ function borrowingStreams(resources: PDFDict | undefined, name: string): PDFObje
 /**
  * What `findUnits` needs to know of a stream's resources (see `ResourceInfo`). Anything that cannot be read with
  * certainty is null, so the drawings using it are kept: a form without a usable BBox or Matrix, a Type 3 font (its
- * glyphs are drawings of any size), a font written vertically, a font whose widths are malformed.
+ * glyphs are drawings of any size), a font written vertically, a font whose widths are malformed, an ExtGState whose
+ * line style or font is malformed.
  */
 export function pdfResourceInfo(resources: PDFDict | undefined): ResourceInfo {
   return {
@@ -330,34 +335,58 @@ export function pdfResourceInfo(resources: PDFDict | undefined): ResourceInfo {
       return bbox && matrix ? { subtype: "Form", bbox: bbox as [number, number, number, number], matrix: matrix as Matrix } : null;
     },
     font(name) {
-      const font = entry(resources, "Font", name);
-      if (!(font instanceof PDFDict)) return null;
-      const kind = subtype(font);
-      if (kind === "Type0") return compositeFont(font);
-      if (kind !== "Type1" && kind !== "MMType1" && kind !== "TrueType") return null;
-      const widths = font.lookup(PDFName.of("Widths"));
-      if (widths === undefined) return { widths: null, twoByte: false };
-      const list = numbersOf(widths);
-      const first = font.lookup(PDFName.of("FirstChar"));
-      const descriptor = font.lookup(PDFName.of("FontDescriptor"));
-      const missingObject = descriptor instanceof PDFDict ? descriptor.lookup(PDFName.of("MissingWidth")) : undefined;
-      const missing = missingObject === undefined ? 0 : missingObject instanceof PDFNumber ? missingObject.asNumber() : NaN;
-      if (!list || !(first instanceof PDFNumber) || !Number.isFinite(missing)) return null;
-      return { widths: { first: first.asNumber(), list, missing }, twoByte: false };
+      return fontInfo(entry(resources, "Font", name));
     },
     shadingBBox(name) {
       const shading = entry(resources, "Shading", name);
       const dict = shading instanceof PDFStream ? shading.dict : shading instanceof PDFDict ? shading : undefined;
       return (numbersOf(dict?.lookup(PDFName.of("BBox")), 4) as [number, number, number, number] | null) ?? null;
     },
+    extGState(name) {
+      const gstate = entry(resources, "ExtGState", name);
+      if (!(gstate instanceof PDFDict)) return null;
+      const info: ExtGStateInfo = {};
+      const keys: [string, "lineWidth" | "cap" | "join" | "miterLimit"][] = [["LW", "lineWidth"], ["LC", "cap"], ["LJ", "join"], ["ML", "miterLimit"]];
+      for (const [key, field] of keys) {
+        const value = gstate.lookup(PDFName.of(key));
+        if (value === undefined) continue;
+        if (!(value instanceof PDFNumber) || !Number.isFinite(value.asNumber())) return null;
+        info[field] = value.asNumber();
+      }
+      const font = gstate.lookup(PDFName.of("Font"));
+      if (font !== undefined) {
+        // [font size], the font given by itself (an indirect reference) rather than by a resource name.
+        const size = font instanceof PDFArray && font.size() === 2 ? font.lookup(1) : undefined;
+        if (!(size instanceof PDFNumber) || !Number.isFinite(size.asNumber())) return null;
+        info.font = { font: fontInfo((font as PDFArray).lookup(0)), size: size.asNumber() };
+      }
+      return info;
+    },
   };
+}
+
+/** A simple or Type 0 font's widths, or null for one that must not be measured. */
+function fontInfo(font: PDFObject | undefined): FontInfo | null {
+  if (!(font instanceof PDFDict)) return null;
+  const kind = subtype(font);
+  if (kind === "Type0") return compositeFont(font);
+  if (kind !== "Type1" && kind !== "MMType1" && kind !== "TrueType") return null;
+  const widths = font.lookup(PDFName.of("Widths"));
+  if (widths === undefined) return { widths: null, twoByte: false };
+  const list = numbersOf(widths);
+  const first = font.lookup(PDFName.of("FirstChar"));
+  const descriptor = font.lookup(PDFName.of("FontDescriptor"));
+  const missingObject = descriptor instanceof PDFDict ? descriptor.lookup(PDFName.of("MissingWidth")) : undefined;
+  const missing = missingObject === undefined ? 0 : missingObject instanceof PDFNumber ? missingObject.asNumber() : NaN;
+  if (!list || !(first instanceof PDFNumber) || !Number.isFinite(missing)) return null;
+  return { widths: { first: first.asNumber(), list, missing }, twoByte: false };
 }
 
 /**
  * A Type 0 font, measured as two bytes a glyph at its widest width. Vertical writing (a `-V` CMap, or an embedded CMap
  * not known to be horizontal) cannot be measured this way.
  */
-function compositeFont(font: PDFDict): ReturnType<ResourceInfo["font"]> {
+function compositeFont(font: PDFDict): FontInfo | null {
   const encoding = font.lookup(PDFName.of("Encoding"));
   if (encoding instanceof PDFName) {
     if (encoding.decodeText().endsWith("-V")) return null;

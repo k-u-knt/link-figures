@@ -96,5 +96,10 @@ export class LinkFiguresSettingTab extends PluginSettingTab {
           await this.owner.saveSettings();
         });
       });
+
+    // A note, not a control: where a TIFF source is not shown in the explorer, panels from it still work.
+    new Setting(containerEl)
+      .setName("TIFF files")
+      .setDesc("Obsidian hides `.tif`/`.tiff` files in the file explorer unless Settings → Files and links → Detect all file extensions is on; panels from them work either way.");
   }
 }

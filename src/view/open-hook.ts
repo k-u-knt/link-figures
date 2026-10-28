@@ -1,10 +1,22 @@
 import { MarkdownView, Notice, type App, type TFile, type WorkspaceLeaf } from "obsidian";
-import { FRONTMATTER_KEY, VIEW_TYPE } from "../constants";
+import { FILE_SUFFIX, FRONTMATTER_KEY, VIEW_TYPE } from "../constants";
 import type LinkFiguresPlugin from "../main";
 
 /** True when the metadata cache has seen the `link-figures` frontmatter key on the file. */
 export function hasFigureMarker(app: App, file: TFile): boolean {
   return app.metadataCache.getFileCache(file)?.frontmatter?.[FRONTMATTER_KEY] !== undefined;
+}
+
+/**
+ * True when `path` should open in the figure view: the setting is on, the user has not chosen markdown for the path, and
+ * the file is a figure. That is a file with the figure suffix, or else one whose frontmatter carries the marker (the cache
+ * may not have indexed a new file yet, which is why the suffix decides first and without the cache).
+ */
+export function isFigureFile(plugin: LinkFiguresPlugin, path: string): boolean {
+  if (!plugin.settings.openAsFigure || plugin.forcedMarkdown.has(path)) return false;
+  if (path.endsWith(FILE_SUFFIX)) return true;
+  const file = plugin.app.vault.getFileByPath(path);
+  return file !== null && hasFigureMarker(plugin.app, file);
 }
 
 /** Shows `path` in the figure view in `leaf` and makes the leaf active. */
@@ -13,8 +25,10 @@ export function showInFigureView(leaf: WorkspaceLeaf, path: string): Promise<voi
 }
 
 /**
- * Obsidian opens every `.md` file in the markdown view, so a figure file is switched to the figure view right after
- * it opens (a brief markdown flash is accepted). Uses public events only.
+ * The fallback for a figure file that still opens in the markdown view. `installViewStateRewrite` turns a markdown open of a
+ * figure file into the figure view's before it is recorded; this catches an open that did not go through `setViewState` with
+ * a figure path (a figure without the suffix that the cache had not indexed). It switches the leaf right after the file
+ * opens, which costs a brief markdown flash and an extra history entry. Uses public events only.
  */
 export function installOpenHook(plugin: LinkFiguresPlugin): void {
   const { workspace } = plugin.app;
@@ -22,15 +36,15 @@ export function installOpenHook(plugin: LinkFiguresPlugin): void {
   const switching = new Set<WorkspaceLeaf>();
 
   const consider = (leaf: WorkspaceLeaf | null): void => {
-    if (!leaf || switching.has(leaf) || !plugin.settings.openAsFigure) return;
+    if (!leaf || switching.has(leaf)) return;
     const view = leaf.view;
     // Anything but a loaded markdown view is skipped: that includes a leaf already showing the figure view.
     if (!(view instanceof MarkdownView) || !view.file) return;
-    const file = view.file;
-    if (plugin.forcedMarkdown.has(file.path) || !hasFigureMarker(plugin.app, file)) return;
+    const path = view.file.path;
+    if (!isFigureFile(plugin, path)) return;
 
     switching.add(leaf);
-    showInFigureView(leaf, file.path)
+    showInFigureView(leaf, path)
       .catch((error: unknown) => {
         console.error("Link Figures: could not open the file as a figure", error);
         new Notice("Link Figures: could not open this file as a figure. Use \"Open as markdown\" to see its source.");

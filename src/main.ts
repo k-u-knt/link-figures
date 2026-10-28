@@ -14,6 +14,7 @@ import { DEFAULT_SETTINGS, LinkFiguresSettingTab, type LinkFiguresSettings } fro
 import { LinkFiguresView } from "./view/figure-view";
 import { createFigureFile } from "./view/new-figure";
 import { hasFigureMarker, installOpenHook, showInFigureView } from "./view/open-hook";
+import { installViewStateRewrite } from "./view/view-state-rewrite";
 
 const NEW_FIGURE_NAME = "Untitled figure";
 
@@ -35,7 +36,9 @@ export default class LinkFiguresPlugin extends Plugin {
     registerBuiltinCommands(this);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
+    // The fallback for an open that did not go through `setViewState` with a figure path; the wrapper below does the work.
     installOpenHook(this);
+    this.register(installViewStateRewrite(this));
 
     this.addCommand({
       id: "new-figure",

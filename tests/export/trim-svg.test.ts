@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 import { svgIntrinsicSize } from "../../src/export/inline-svg";
-import { browserTrimDeps } from "../../src/export/trim";
+import { browserTrimDeps, trimAssets } from "../../src/export/trim";
 import { domSvgMeasure, pruneSvg, type SvgMeasure } from "../../src/export/trim/svg";
+import { createDocument, fileNodeDefaults } from "../../src/model/defaults";
 import type { Rect } from "../../src/model/geometry";
+import { nodeLabel } from "../../src/model/labels";
+import type { FileNode } from "../../src/model/types";
 
 /** The visible region of the 100×100 test sources: the left half. */
 const LEFT_HALF: Rect = { x: 0, y: 0, width: 50, height: 100 };
@@ -251,12 +254,21 @@ describe("domSvgMeasure", () => {
     stubLayout(OUTSIDE, [1, 0, 0, 1, 0, 0]);
     const { out, mounted } = pruneInHost(UNSAFE_SOURCE.replace(`@import "https://evil.example/a.css"; `, ""));
     for (const banned of ["onload", "onerror", "script", "foreignObject", "xhtml", "https://", "alert"]) expect(mounted).not.toContain(banned);
-    expect(mounted).toContain(".a { fill: none; }");
-    expect(mounted).toContain('style="fill: none"');
+    expect(mounted).toContain(".a { fill: url(#lf-removed); }");
+    expect(mounted).toContain('style="fill: url(#lf-removed)"');
     expect(out.removed).toBe(3);
     expect(idsIn(out.text)).toEqual(["in"]);
     expect(out.text).toContain("<script>alert(2)</script>");
     expect(out.text).toContain('onload="alert(1)"');
+  });
+
+  test("a url() out of the file names nothing in the copy: a paint keeps its fallback, a filter or marker naming it cannot be measured", () => {
+    stubLayout(OUTSIDE, [1, 0, 0, 1, 0, 0]);
+    const { mounted } = pruneInHost(svg(`<rect id="in" style="fill: url(https://x.example/p.svg#p) blue"/>`));
+    expect(mounted).toContain('style="fill: url(#lf-removed) blue"');
+    // An element of the source with that id would be named after all: the copy drops the id.
+    expect(measureFirst(`<filter id="lf-removed"/><rect id="r" style="filter: url(https://x.example/f.svg#f)"/>`, "r")).toBeNull();
+    expect(measureFirst(`<path id="p" style="stroke: black; marker-end: url('https://x.example/m.svg#m')"/>`, "p")).toBeNull();
   });
 
   test("CSS that cannot be made safe (an @import) mounts nothing, and nothing is measured", () => {
@@ -273,6 +285,48 @@ describe("domSvgMeasure", () => {
       throw new Error("no layout");
     });
     expect(measureFirst(`<rect id="r"/>`, "r")).toBeNull();
+  });
+});
+
+describe("an SVG that cannot be measured at all", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const SOURCE = svg(`<style>@import "https://x.example/a.css";</style><rect id="a"/><rect id="b"/>`);
+
+  test("styles that cannot be made safe: the browser's trimmer throws, so the panel reads as not trimmed", async () => {
+    const before = document.body.childElementCount;
+    await expect(browserTrimDeps.trimSvg(SOURCE, LEFT_HALF)).rejects.toThrow("the SVG's styles could not be made safe to measure");
+    expect(document.body.childElementCount).toBe(before);
+
+    const doc = createDocument("a4-portrait");
+    const page = doc.pages[0];
+    const node: FileNode = { ...fileNodeDefaults(page, { file: "plots/a.svg", subpath: "", show: "image" }, []), width: 100, height: 100 };
+    node.crop = { x: 0, y: 0, w: 0.5, h: 1 };
+    doc.nodes.push(node);
+    const asset = { kind: "svg" as const, text: SOURCE, width: 200, height: 200 };
+    const report: string[] = [];
+    const out = await trimAssets(doc, page, new Map([[node.id, asset]]), browserTrimDeps, report, "vector");
+    expect(out.get(node.id)).toBe(asset);
+    expect(report).toEqual([`${nodeLabel(doc, node)}: could not be trimmed, embedded whole (the SVG's styles could not be made safe to measure)`]);
+  });
+
+  test("a root that cannot be laid out (no screen matrix): the browser's trimmer throws", async () => {
+    const proto = (window as unknown as { SVGGraphicsElement: { prototype: SVGGraphicsElement } }).SVGGraphicsElement.prototype;
+    vi.spyOn(proto, "getBBox").mockImplementation(() => new DOMRect(70, 10, 10, 10));
+    vi.spyOn(proto, "getScreenCTM").mockImplementation(() => null);
+    await expect(browserTrimDeps.trimSvg(svg(`<rect id="a"/>`), LEFT_HALF)).rejects.toThrow("the SVG could not be laid out to measure");
+  });
+
+  test("one element that cannot be measured does not make the whole SVG unmeasured", async () => {
+    const proto = (window as unknown as { SVGGraphicsElement: { prototype: SVGGraphicsElement } }).SVGGraphicsElement.prototype;
+    vi.spyOn(proto, "getBBox").mockImplementation(function (this: SVGGraphicsElement) {
+      if (this.id === "a") throw new Error("no layout");
+      return new DOMRect(70, 10, 10, 10);
+    });
+    vi.spyOn(proto, "getScreenCTM").mockImplementation(() => DOMMatrix.fromMatrix({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) as unknown as DOMMatrix);
+    const out = await browserTrimDeps.trimSvg(svg(`<rect id="a"/><rect id="b"/>`), LEFT_HALF);
+    expect(out.removed).toBe(1);
+    expect(idsIn(out.text)).toEqual(["a"]);
   });
 });
 

@@ -18,13 +18,19 @@ export interface TrimDeps {
   trimPdf(bytes: ArrayBuffer, pageIndex: number, visible: Rect): Promise<{ bytes: Uint8Array; removed: number; notes: string[] }>;
 }
 
-/** Prunes an SVG measured by the browser, in a host out of sight under `document.body` that is removed afterwards. */
+/**
+ * Prunes an SVG measured by the browser, in a host out of sight under `document.body` that is removed afterwards.
+ * Throws when none of it could be measured, so that the panel is reported as not trimmed rather than as checked.
+ */
 async function trimSvgInDocument(text: string, visible: Rect): Promise<{ text: string; removed: number }> {
   const host = document.createElement("div");
   Object.assign(host.style, { visibility: "hidden", position: "absolute", left: "-100000px", top: "0" });
   document.body.appendChild(host);
   try {
-    return pruneSvg(text, visible, domSvgMeasure(host));
+    const measure = domSvgMeasure(host);
+    const pruned = pruneSvg(text, visible, measure);
+    if (measure.failure) throw new Error(measure.failure);
+    return pruned;
   } finally {
     host.remove();
   }

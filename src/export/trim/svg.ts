@@ -322,11 +322,19 @@ function isLocalTarget(target: string): boolean {
 }
 
 /**
- * `css` with every `url()` that leaves the file replaced by `none`, or `null` when what is left could still load
+ * What a `url()` that leaves the file becomes in the measuring copy: a reference to nothing, as a target that cannot be
+ * loaded is to the browser. A paint falls back to the colour written after it, and a filter or marker naming it cannot
+ * be measured, so what it draws is kept.
+ */
+const REMOVED_URL = "url(#lf-removed)";
+const REMOVED_ID = "lf-removed";
+
+/**
+ * `css` with every `url()` that leaves the file replaced by `REMOVED_URL`, or `null` when what is left could still load
  * something (an `@import`, `image-set()`, a CSS escape that could spell either, a `url(` that was not understood).
  */
 function localCss(css: string): string | null {
-  const out = css.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/gi, (whole, _quote: string, target: string) => (isLocalTarget(target) ? whole : "none"));
+  const out = css.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/gi, (whole, _quote: string, target: string) => (isLocalTarget(target) ? whole : REMOVED_URL));
   if (/\\|@import|image-set\(|image\(|cross-fade\(|element\(/i.test(out)) return null;
   for (const m of out.matchAll(/url\(/gi)) {
     if (!/^url\(\s*["']?\s*(#|data:)/i.test(out.slice(m.index))) return null;
@@ -337,7 +345,7 @@ function localCss(css: string): string | null {
 /**
  * Makes `root` (a copy, not yet in any live document) safe to put into the app's document: drops elements that run or
  * embed (scripts, `foreignObject`, anything not SVG) and animations, event attributes, links out of the file, and
- * CSS that loads. False when some CSS could not be made safe: the copy must then not be used.
+ * CSS that loads (see `localCss`). False when some CSS could not be made safe: the copy must then not be used.
  */
 function makeSafe(root: Element): boolean {
   for (const el of elementsOf(root)) {
@@ -345,6 +353,8 @@ function makeSafe(root: Element): boolean {
       el.remove();
       continue;
     }
+    // `REMOVED_URL` must name nothing.
+    if (el.id === REMOVED_ID) el.removeAttribute("id");
     for (const attribute of Array.from(el.attributes)) {
       const name = attribute.localName.toLowerCase();
       const isLink = name === "href" || name === "src" || attribute.namespaceURI === XLINK_NS;
@@ -386,18 +396,28 @@ function mountSafeCopy(source: Element, host: HTMLElement): Mounted | null {
 }
 
 /**
+ * A measure with the browser's layout. `failure` says why no element of the SVG could be measured at all (its styles
+ * could not be made safe, or its root could not be laid out), or is `null`: then a `null` box is that element's own.
+ */
+export type DomSvgMeasure = SvgMeasure & { readonly failure: string | null };
+
+const UNSAFE_FAILURE = "the SVG's styles could not be made safe to measure";
+const LAYOUT_FAILURE = "the SVG could not be laid out to measure";
+
+/**
  * Measures with the browser's layout. The source itself never enters the app's document: the first element measured
  * puts a safe copy of its SVG (see `makeSafe`) into a shadow root of `host` (which should be in the document, out of
  * sight but not `display: none`), and each element is measured by its copy. The shadow root keeps the SVG's `<style>`
  * rules and the app's apart. The box is `getBBox()` mapped to the root's user units (its viewBox) through the screen
  * matrices of the element and of the root, widened by half the stroke width (scaled), by the farthest reach of its
  * markers (see `markerReach`), and to the filter region of every filter on the element or above it. `null` when any
- * of this cannot be read, or no safe copy can be made.
+ * of this cannot be read, or no safe copy can be made (and then `failure` says so).
  */
-export function domSvgMeasure(host: HTMLElement): SvgMeasure {
+export function domSvgMeasure(host: HTMLElement): DomSvgMeasure {
   let mounted: Mounted | null = null;
   let unsafe: Element | null = null;
-  return (source) => {
+  let failure: string | null = null;
+  const measure: SvgMeasure = (source) => {
     try {
       const sourceRoot = rootOf(source);
       if (unsafe === sourceRoot) return null;
@@ -405,6 +425,7 @@ export function domSvgMeasure(host: HTMLElement): SvgMeasure {
         mounted = mountSafeCopy(sourceRoot, host);
         if (!mounted) {
           unsafe = sourceRoot;
+          failure = UNSAFE_FAILURE;
           return null;
         }
       }
@@ -413,7 +434,11 @@ export function domSvgMeasure(host: HTMLElement): SvgMeasure {
       const view = root.ownerDocument.defaultView;
       const rootScreen = (root as SVGGraphicsElement).getScreenCTM();
       const toRootFromScreen = rootScreen ? invert(matrixOf(rootScreen)) : null;
-      if (!el || !el.isConnected || !view || !toRootFromScreen) return null;
+      if (!view || !toRootFromScreen) {
+        failure = LAYOUT_FAILURE;
+        return null;
+      }
+      if (!el || !el.isConnected) return null;
       /** `node`'s user units to the root's, or `null`. */
       const toRoot = (node: SVGGraphicsElement): Matrix | null => {
         const screen = node.getScreenCTM();
@@ -452,4 +477,5 @@ export function domSvgMeasure(host: HTMLElement): SvgMeasure {
       return null;
     }
   };
+  return Object.defineProperty(measure, "failure", { get: () => failure }) as DomSvgMeasure;
 }

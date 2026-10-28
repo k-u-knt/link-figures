@@ -1,5 +1,5 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
-import { MAX_DPI, MIN_DPI } from "../constants";
+import { DEFAULT_PAGE_LIMIT_MM, MAX_DPI, MAX_PAGE_LIMIT_MM, MIN_DPI, MIN_PAGE_LIMIT_MM, normalisePageLimit } from "../constants";
 import type LinkFiguresPlugin from "../main";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 
@@ -13,6 +13,8 @@ export interface LinkFiguresSettings {
   /** Where exports are written; "" puts them next to the figure. */
   exportFolder: string;
   exportDpi: number;
+  /** The largest width or height, in mm, that the inspector lets a page have. */
+  maxPageSizeMm: number;
 }
 
 export const DEFAULT_SETTINGS: LinkFiguresSettings = {
@@ -21,6 +23,7 @@ export const DEFAULT_SETTINGS: LinkFiguresSettings = {
   defaultPreset: "nature-double",
   exportFolder: "",
   exportDpi: 300,
+  maxPageSizeMm: DEFAULT_PAGE_LIMIT_MM,
 };
 
 export class LinkFiguresSettingTab extends PluginSettingTab {
@@ -93,6 +96,22 @@ export class LinkFiguresSettingTab extends PluginSettingTab {
           // Ignore a half-typed or out-of-range value rather than saving it.
           if (value.trim() === "" || !Number.isFinite(dpi) || dpi < MIN_DPI || dpi > MAX_DPI) return;
           settings.exportDpi = Math.round(dpi);
+          await this.owner.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Maximum page size (mm)")
+      .setDesc(`Pages larger than this cannot be made, to keep the editor and exports within memory. ${MIN_PAGE_LIMIT_MM}–${MAX_PAGE_LIMIT_MM} mm.`)
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_PAGE_LIMIT_MM);
+        text.inputEl.max = String(MAX_PAGE_LIMIT_MM);
+        text.setValue(String(settings.maxPageSizeMm)).onChange(async (value) => {
+          const mm = Number(value);
+          // Ignore a half-typed value; a number outside the range is brought into it.
+          if (value.trim() === "" || !Number.isFinite(mm)) return;
+          settings.maxPageSizeMm = normalisePageLimit(mm);
           await this.owner.saveSettings();
         });
       });

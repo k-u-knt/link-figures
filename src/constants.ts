@@ -23,6 +23,10 @@ export const MAX_DECODE_MEGAPIXELS = 50;
 /** The range of the export resolution (dpi). */
 export const MIN_DPI = 72;
 export const MAX_DPI = 1200;
+/** The range of the setting that caps a page's width and height, and its default (millimetres). */
+export const MIN_PAGE_LIMIT_MM = 100;
+export const MAX_PAGE_LIMIT_MM = 5000;
+export const DEFAULT_PAGE_LIMIT_MM = 2000;
 export const PT_TO_PX = 96 / 72;
 export const PX_TO_PT = 72 / 96;
 
@@ -37,3 +41,9 @@ export const DEFAULT_FONT: Font = {
   align: "left",
   lineHeight: 1.2,
 };
+
+/** A stored page limit kept within its range; anything that is not a number is the default. */
+export function normalisePageLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PAGE_LIMIT_MM;
+  return Math.min(MAX_PAGE_LIMIT_MM, Math.max(MIN_PAGE_LIMIT_MM, value));
+}

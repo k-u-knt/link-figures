@@ -1,7 +1,7 @@
 import { MarkdownView, Notice, Plugin, type TFile, type WorkspaceLeaf } from "obsidian";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
-import { VIEW_TYPE } from "./constants";
+import { VIEW_TYPE, normalisePageLimit } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
 import { svgExporter } from "./export/exporters/svg";
 import { createDecoders } from "./links/decoders";
@@ -79,6 +79,7 @@ export default class LinkFiguresPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.maxPageSizeMm = normalisePageLimit(this.settings.maxPageSizeMm);
   }
 
   async saveSettings(): Promise<void> {

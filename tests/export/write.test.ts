@@ -13,6 +13,7 @@ const settings = (exportFolder: string): LinkFiguresSettings => ({
   defaultPreset: "nature-double",
   exportFolder,
   exportDpi: 300,
+  maxPageSizeMm: 2000,
 });
 const blob = (text: string) => new Blob([text]);
 const text = (data: ArrayBuffer | undefined) => new TextDecoder().decode(data);

@@ -77,7 +77,7 @@ test("each page gets its own assets and SVG, and the files are written to the fo
   const { doc, resolved } = figure();
   const { vault, app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "exports", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "exports", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
@@ -103,7 +103,7 @@ test("the exporter is given the pages asked for, with their SVGs, their assets, 
     },
   };
   await runExport(
-    { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 150 },
+    { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 150, maxPageSizeMm: 2000 },
     { app, nodeTypes: types, resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(seen?.pages).toEqual([doc.pages[0]]);
@@ -118,7 +118,7 @@ test("what could not be embedded comes back as warnings, from the collection and
   resolved.set(png.id, { kind: "image", file: { path: "moved.png", extension: "png" }, src: "app://x", source: "raster", pageCount: 1, deps: [] });
   const { app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
@@ -135,7 +135,7 @@ test("an exporter that fails stops the export before anything is written", async
   const failing: Exporter = { ...svgExporter, run: async () => Promise.reject(new Error("no way")) };
   await expect(
     runExport(
-      { exporter: failing, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300 },
+      { exporter: failing, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300, maxPageSizeMm: 2000 },
       { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
     ),
   ).rejects.toThrow("no way");
@@ -146,7 +146,7 @@ test("a figure with an empty page exports a sheet of paper", async () => {
   const doc = createDocument("a4-portrait");
   const { vault, app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Blank", folder: "", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Blank", folder: "", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out).toEqual({ files: 1, warnings: [] });
@@ -165,7 +165,7 @@ test("two pages with the same name are written to two files, and the rename is a
   const doc = namedPages("Page 2", "Page 2");
   const { vault, app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(2);
@@ -179,7 +179,7 @@ test("names that only become the same once unsafe characters are replaced do not
   const doc = namedPages("A/B", "A:B", "A?B");
   const { vault, app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.files).toBe(3);
@@ -199,7 +199,7 @@ test("pages with different names produce no rename warning, and the exporter's o
   const doc = namedPages("One", "Two");
   const { app } = world();
   const out = await runExport(
-    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300 },
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
     { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: () => false },
   );
   expect(out.warnings).toEqual([]);
@@ -221,7 +221,7 @@ describe("an export never writes over a source of the figure", () => {
     vault.entries.set("Figures/Figure 2.pdf", new FakeTFile("Figures/Figure 2.pdf"));
     vault.content.set("Figures/Figure 2.pdf", new TextEncoder().encode("the plot").buffer as ArrayBuffer);
     const out = await runExport(
-      { exporter: named("Figure 2.pdf", "Figure 2 - Page 1.svg"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 },
+      { exporter: named("Figure 2.pdf", "Figure 2 - Page 1.svg"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 },
       { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard("Figures/Figure 2.pdf") },
     );
     expect(out.files).toBe(1);
@@ -234,7 +234,7 @@ describe("an export never writes over a source of the figure", () => {
     const doc = createDocument("nature-double");
     const { vault, app } = world();
     const out = await runExport(
-      { exporter: named("Figure 2.lnkfig.md", "Legend.md"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 },
+      { exporter: named("Figure 2.lnkfig.md", "Legend.md"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 },
       { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard() },
     );
     expect(out.files).toBe(0);
@@ -248,7 +248,7 @@ describe("an export never writes over a source of the figure", () => {
   test("exporting again writes over the previous export, silently", async () => {
     const doc = createDocument("nature-double");
     const { vault, app } = world();
-    const run = { exporter: svgExporter, doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300 };
+    const run = { exporter: svgExporter, doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 };
     const deps = { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, isProtected: guard("Figures/plot.svg") };
     await runExport(run, deps);
     const again = await runExport(run, deps);
@@ -269,4 +269,18 @@ test("the success message names the folder, or the vault root", () => {
   expect(exportSummary(2, "Figures/out")).toBe("Exported 2 file(s) to Figures/out");
   expect(exportSummary(1, "")).toBe("Exported 1 file(s) to the vault root");
   expect(exportSummary(1, "/")).toBe("Exported 1 file(s) to the vault root");
+});
+
+test("a page over the page limit is still exported, with a warning", async () => {
+  const { doc, resolved } = figure();
+  doc.pages[0].width = 3000;
+  doc.pages[0].height = 210;
+  const { vault, app } = world();
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, isProtected: () => false },
+  );
+  expect(out.files).toBe(1);
+  expect(vault.content.has("Fig - Page 1.svg")).toBe(true);
+  expect(out.warnings).toContain('Page "Page 1" is 3000 × 210 mm, over the 2000 mm page limit');
 });

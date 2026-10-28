@@ -23,6 +23,8 @@ export interface ExportRun {
   /** Vault folder the files are written to; `""` is the vault root. */
   folder: string;
   dpi: number;
+  /** Pages larger than this (mm, either side) are still exported, with a warning. */
+  maxPageSizeMm: number;
 }
 
 export interface ExportDeps {
@@ -52,6 +54,9 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
   };
 
   for (const page of run.pages) {
+    if (page.width > run.maxPageSizeMm || page.height > run.maxPageSizeMm) {
+      warnings.push(`Page "${page.name}" is ${page.width} × ${page.height} mm, over the ${run.maxPageSizeMm} mm page limit`);
+    }
     const pageAssets = await collectAssets(run.doc, page, {
       app,
       resolved: deps.resolved,
@@ -213,7 +218,7 @@ export class ExportModal extends Modal {
       const pages = this.pageChoice === "all" ? doc.pages : current ? [current] : [];
       const folder = exportFolderFor(plugin.settings, file.path);
       const { files, warnings } = await runExport(
-        { exporter, doc, pages, baseName: view.getDisplayText(), folder, dpi: Math.round(dpi) },
+        { exporter, doc, pages, baseName: view.getDisplayText(), folder, dpi: Math.round(dpi), maxPageSizeMm: plugin.settings.maxPageSizeMm },
         {
           app: view.app,
           nodeTypes: plugin.registries.nodeTypes,

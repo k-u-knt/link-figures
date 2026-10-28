@@ -1,4 +1,5 @@
 import type { Page } from "../model/types";
+import { DEFAULT_PAGE_LIMIT_MM } from "../constants";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
 
@@ -79,21 +80,37 @@ export function writeValue(obj: object, key: string, value: unknown): void {
   at[parts[parts.length - 1]] = value;
 }
 
+/** `mm` kept within the page limit, and whether it had to be. */
+export function clampPageSize(mm: number, limitMm: number): { value: number; clamped: boolean } {
+  return mm > limitMm ? { value: limitMm, clamped: true } : { value: mm, clamped: false };
+}
+
 /**
  * What editing one of a page's fields does to `page` (changing it in place, so it can run on a draft). The preset
  * select also sets the size; a width or height that is then not the preset's makes the page custom, so the select
- * never names a size the page does not have.
+ * never names a size the page does not have. A width or height over `limitMm` is set to it instead; the result says
+ * whether that happened.
  */
-export function writePageField(page: Page, key: string, value: unknown): void {
+export function writePageField(page: Page, key: string, value: unknown, limitMm: number = DEFAULT_PAGE_LIMIT_MM): boolean {
   if (key === "preset") {
     const next = applyPreset(page, String(value));
+    const width = clampPageSize(next.width, limitMm);
+    const height = clampPageSize(next.height, limitMm);
     page.preset = next.preset;
-    page.width = next.width;
-    page.height = next.height;
-    return;
+    page.width = width.value;
+    page.height = height.value;
+    return width.clamped || height.clamped;
   }
-  writeValue(page, key, value);
-  if (key !== "width" && key !== "height") return;
+  let clamped = false;
+  if ((key === "width" || key === "height") && typeof value === "number") {
+    const size = clampPageSize(value, limitMm);
+    clamped = size.clamped;
+    writeValue(page, key, size.value);
+  } else {
+    writeValue(page, key, value);
+  }
+  if (key !== "width" && key !== "height") return false;
   const preset = page.preset === undefined ? undefined : getPreset(page.preset);
   if (preset && (preset.width !== page.width || preset.height !== page.height)) page.preset = CUSTOM_PRESET;
+  return clamped;
 }

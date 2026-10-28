@@ -1,6 +1,6 @@
 import { createPage } from "../../src/model/defaults";
 import { PAGE_PRESETS } from "../../src/model/presets";
-import { applyPreset, nodeBaseFields, pageFields, readValue, writePageField, writeValue } from "../../src/view/page-fields";
+import { applyPreset, clampPageSize, nodeBaseFields, pageFields, readValue, writePageField, writeValue } from "../../src/view/page-fields";
 
 test("applyPreset sets size and keeps paper", () => { const p = createPage("a4-portrait", []); p.paper = "#eeeeee"; const q = applyPreset(p, "nature-double"); expect(q).toMatchObject({ preset: "nature-double", width: 183, height: 170, paper: "#eeeeee" }); });
 test("page fields include preset select with custom", () => { const f = pageFields().find(f => f.key === "preset")!; expect(f.kind).toBe("select"); expect(f.options!.some(o => o.value === "custom")).toBe(true); });
@@ -89,4 +89,25 @@ test("writePageField: other fields are plain writes", () => {
   writePageField(p, "paper", "#f4f4f4");
   writePageField(p, "margins.left", 15);
   expect(p).toMatchObject({ preset: "a4-portrait", paper: "#f4f4f4", margins: { left: 15 } });
+});
+
+test("clampPageSize: a size over the limit is brought to it", () => {
+  expect(clampPageSize(2500, 2000)).toEqual({ value: 2000, clamped: true });
+  expect(clampPageSize(183, 2000)).toEqual({ value: 183, clamped: false });
+});
+
+test("writePageField: a width over the limit is set to the limit and reported", () => {
+  const p = createPage("a4-portrait", []);
+  expect(writePageField(p, "width", 2500, 2000)).toBe(true);
+  expect(p).toMatchObject({ preset: "custom", width: 2000, height: 297 });
+  expect(writePageField(p, "height", 400, 2000)).toBe(false);
+  expect(p.height).toBe(400);
+});
+
+test("writePageField: a preset is applied whole unless it is over the limit", () => {
+  const p = createPage("a4-portrait", []);
+  expect(writePageField(p, "preset", "a4-landscape", 2000)).toBe(false);
+  expect(p).toMatchObject({ preset: "a4-landscape", width: 297, height: 210 });
+  expect(writePageField(p, "preset", "a4-portrait", 250)).toBe(true);
+  expect(p).toMatchObject({ width: 210, height: 250 });
 });

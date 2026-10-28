@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_LIMIT_MM } from "../constants";
 import { mmToPx, pxToMm } from "../model/geometry";
 import type { NodeId } from "../model/types";
 import { getPreset } from "../model/presets";
@@ -130,7 +131,12 @@ export class Inspector {
   /** A change of section is waiting for the control being typed into to lose the focus. */
   private pending = false;
 
-  constructor(private readonly view: LinkFiguresView, private readonly el: HTMLElement) {
+  /** `onPageLimit` is told the limit when a page edit had to be cut down to it (the view shows a notice). */
+  constructor(
+    private readonly view: LinkFiguresView,
+    private readonly el: HTMLElement,
+    private readonly onPageLimit: (limitMm: number) => void = () => {},
+  ) {
     // `change` has committed the field's write by the time the focus leaves it, so the section that was held back is then drawn.
     this.el.addEventListener("focusout", () => {
       if (this.pending) this.render();
@@ -194,11 +200,15 @@ export class Inspector {
         if (key === "preset") return current.preset !== undefined && getPreset(current.preset) ? current.preset : CUSTOM_PRESET;
         return readValue(current, key);
       },
-      write: (key, value) =>
+      write: (key, value) => {
+        const limit = this.view.plugin.settings?.maxPageSizeMm ?? DEFAULT_PAGE_LIMIT_MM;
+        let clamped = false;
         this.view.store.commit(`inspect:${key}`, (draft) => {
           const target = draft.pages.find((p) => p.id === id);
-          if (target) writePageField(target, key, value);
-        }),
+          if (target) clamped = writePageField(target, key, value, limit);
+        });
+        if (clamped) this.onPageLimit(limit);
+      },
     };
   }
 

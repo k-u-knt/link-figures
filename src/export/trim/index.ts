@@ -4,6 +4,7 @@ import type { Document, FileNode, Page } from "../../model/types";
 import type { AssetMap, FileAsset, ImageAsset, PdfAsset, SvgAsset } from "../asset-types";
 import { svgIntrinsicSize } from "../inline-svg";
 import { cutImageOnCanvas, cutRaster, type CutImage } from "./raster";
+import { domSvgMeasure, pruneSvg } from "./svg";
 import { fromFraction, isWhollyVisible, toFraction, visibleSourceRect } from "./visible";
 
 export type { PixelRect } from "./visible";
@@ -17,10 +18,22 @@ export interface TrimDeps {
   trimPdf(bytes: ArrayBuffer, pageIndex: number, visible: Rect): Promise<{ bytes: Uint8Array; removed: number; notes: string[] }>;
 }
 
-/** The trimmers the export uses. SVG and PDF sources are passed through until their trimmers land. */
+/** Prunes an SVG measured by the browser, in a host out of sight under `document.body` that is removed afterwards. */
+async function trimSvgInDocument(text: string, visible: Rect): Promise<{ text: string; removed: number }> {
+  const host = document.createElement("div");
+  Object.assign(host.style, { visibility: "hidden", position: "absolute", left: "-100000px", top: "0" });
+  document.body.appendChild(host);
+  try {
+    return pruneSvg(text, visible, domSvgMeasure(host));
+  } finally {
+    host.remove();
+  }
+}
+
+/** The trimmers the export uses. PDF sources are passed through until their trimmer lands. */
 export const browserTrimDeps: TrimDeps = {
   cutImage: cutImageOnCanvas,
-  trimSvg: async (text) => ({ text, removed: 0 }),
+  trimSvg: trimSvgInDocument,
   trimPdf: async (bytes) => ({ bytes: new Uint8Array(bytes), removed: 0, notes: [] }),
 };
 

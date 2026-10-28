@@ -18,6 +18,7 @@
     "@types/node": "^26.6.5",
     "builtin-modules": "^5.4.0",
     "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4",
     "obsidian": "^1.14.4",
     "obsidian-typings": "^6.51.0",
     "typescript": "^5.9.3",

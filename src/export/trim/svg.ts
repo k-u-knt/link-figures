@@ -418,6 +418,8 @@ export function domSvgMeasure(host: HTMLElement): DomSvgMeasure {
   let unsafe: Element | null = null;
   let failure: string | null = null;
   const measure: SvgMeasure = (source) => {
+    /** Whether the copy is in place and its root laid out: a failure before that is the whole SVG's. */
+    let rootReady = false;
     try {
       const sourceRoot = rootOf(source);
       if (unsafe === sourceRoot) return null;
@@ -438,6 +440,7 @@ export function domSvgMeasure(host: HTMLElement): DomSvgMeasure {
         failure = LAYOUT_FAILURE;
         return null;
       }
+      rootReady = true;
       if (!el || !el.isConnected) return null;
       /** `node`'s user units to the root's, or `null`. */
       const toRoot = (node: SVGGraphicsElement): Matrix | null => {
@@ -474,6 +477,7 @@ export function domSvgMeasure(host: HTMLElement): DomSvgMeasure {
       }
       return box;
     } catch {
+      if (!rootReady) failure ??= LAYOUT_FAILURE;
       return null;
     }
   };

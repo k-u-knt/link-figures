@@ -317,6 +317,14 @@ describe("an SVG that cannot be measured at all", () => {
     await expect(browserTrimDeps.trimSvg(svg(`<rect id="a"/>`), LEFT_HALF)).rejects.toThrow("the SVG could not be laid out to measure");
   });
 
+  test("a root whose layout throws: the browser's trimmer throws", async () => {
+    const proto = (window as unknown as { SVGGraphicsElement: { prototype: SVGGraphicsElement } }).SVGGraphicsElement.prototype;
+    vi.spyOn(proto, "getScreenCTM").mockImplementation(() => {
+      throw new Error("no layout");
+    });
+    await expect(browserTrimDeps.trimSvg(svg(`<rect id="a"/>`), LEFT_HALF)).rejects.toThrow("the SVG could not be laid out to measure");
+  });
+
   test("one element that cannot be measured does not make the whole SVG unmeasured", async () => {
     const proto = (window as unknown as { SVGGraphicsElement: { prototype: SVGGraphicsElement } }).SVGGraphicsElement.prototype;
     vi.spyOn(proto, "getBBox").mockImplementation(function (this: SVGGraphicsElement) {

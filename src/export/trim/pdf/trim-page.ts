@@ -181,11 +181,15 @@ function trimStream(
       state.notes.add(DEPTH_NOTE);
       continue;
     }
+    // A form without resources inside another form: readers disagree on whether it reads the page's resources or its
+    // parent's, so it is kept whole (its names stay in this level's resources, see `withBorrowedNames`).
+    const own = ownResources(form.dict);
+    if (!own && resources !== state.pageResources) continue;
     const matrix = numbersOf(form.dict.lookup(PDFName.of("Matrix")), 6) ?? IDENTITY;
     const inner = trimStream(
       state,
       decodeStream(form),
-      form.dict.lookupMaybe(RESOURCES, PDFDict) ?? state.pageResources,
+      own ?? state.pageResources,
       multiply(matrix as Matrix, unit.ctm!),
       depth + 1,
     );
@@ -289,7 +293,7 @@ function withBorrowedNames(resources: PDFDict | undefined, used: Set<string>): S
 /** The content streams of whatever `name` names in `resources` that read their names from `resources` too. */
 function borrowingStreams(resources: PDFDict | undefined, name: string): PDFObject[] {
   const streams: PDFObject[] = [];
-  const borrows = (dict: PDFDict) => dict.lookup(RESOURCES) === undefined;
+  const borrows = (dict: PDFDict) => ownResources(dict) === undefined;
   const form = entry(resources, "XObject", name);
   if (form instanceof PDFStream && subtype(form.dict) === "Form" && borrows(form.dict)) streams.push(form);
   const font = entry(resources, "Font", name);
@@ -393,6 +397,12 @@ function cidWidths(w: PDFObject): number[] | null {
     }
   }
   return widths.every(Number.isFinite) ? widths : null;
+}
+
+/** A drawing's own resources; one that is not a dictionary counts as none (the drawing then reads its user's). */
+function ownResources(dict: PDFDict): PDFDict | undefined {
+  const resources = dict.lookup(RESOURCES);
+  return resources instanceof PDFDict ? resources : undefined;
 }
 
 /** The resource `name` of `category` (e.g. "Font"), resolved. */

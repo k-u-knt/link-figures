@@ -316,6 +316,39 @@ describe("drawings that read the page's resources (no Resources of their own)", 
     expect(namesIn(out.resources, "Pattern")).toEqual(["P0"]);
   });
 
+  test("a resource-less form inside a form with resources is kept whole, so what it draws keeps its resource", async () => {
+    // P has its own resources, holding N and Im; N has none and draws /Im, which only P's resources hold.
+    const source = await pdfWith("/P Do", (make) => {
+      const n = make.form(`q 20 0 0 20 10 150 cm /Im Do Q ${OUTSIDE}`, [0, 0, 200, 200]);
+      return { XObject: { P: make.form(`/N Do ${OUTSIDE}`, [0, 0, 200, 200], { XObject: { N: n, Im: make.image() } }) } };
+    });
+    const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
+    // P's own outside rectangle goes; N is not rewritten.
+    expect(trimmed.removed).toBe(1);
+    const out = await read(trimmed.bytes);
+    expect(out.content).toBe("/P_lf1 Do");
+    const p = formContent(out.resources, "P_lf1");
+    expect(p.content).toBe("/N Do ");
+    expect(namesIn(p.resources!, "XObject")).toEqual(["Im", "N"]);
+    expect(formContent(p.resources!, "N").content).toBe(`q 20 0 0 20 10 150 cm /Im Do Q ${OUTSIDE}`);
+  });
+
+  test("a Resources entry that is not a dictionary counts as none", async () => {
+    const source = await pdfWith(`q 1 0 0 1 10 150 cm /M0 Do Q q 20 0 0 20 150 20 cm /ImOut Do Q /Fm Do`, (make, context) => ({
+      XObject: {
+        M0: context.register(context.stream("q 5 0 0 5 0 0 cm /ImM Do Q", { Type: "XObject", Subtype: "Form", BBox: [0, 0, 5, 5], Resources: 7 })),
+        Fm: context.register(context.stream(`${INSIDE} ${OUTSIDE}`, { Type: "XObject", Subtype: "Form", BBox: [0, 0, 200, 200], Resources: "Bad" })),
+        ImM: make.image(),
+        ImOut: make.image(),
+      },
+    }));
+    const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
+    // Fm crosses the edge and is trimmed with the page's resources; M0's image stays, the outside one goes.
+    expect(trimmed.removed).toBe(2);
+    const out = await read(trimmed.bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual(["Fm_lf1", "ImM", "M0"]);
+  });
+
   test("a borrowing drawing that cannot be read keeps every resource, and says so", async () => {
     const source = await pdfWith(`q 1 0 0 1 10 150 cm /M0 Do Q ${OUTSIDE_IMAGE}`, (make, context) => ({
       XObject: {

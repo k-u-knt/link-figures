@@ -1,0 +1,244 @@
+/**
+ * A tokenizer for PDF content streams (ISO 32000-1 §7.2, §8.9.7): numbers, names, strings, hex strings, array and
+ * dictionary brackets, operators, and inline images (`BI … ID … EI`) as single tokens. It is strict: anything it
+ * cannot read with certainty throws, and the caller then leaves the stream as it is.
+ */
+
+/** The content stream cannot be read with certainty: the caller must not rewrite it. */
+export class ContentParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContentParseError";
+  }
+}
+
+/**
+ * One token, covering the bytes [start, end) of the stream. `value` is the number's text, the name decoded (without its
+ * `/`), the string's bytes decoded (one character per byte), the operator's text, the bracket itself, or, for an
+ * inline image, the text of its dictionary (between `BI` and `ID`).
+ */
+export interface Token {
+  kind: "number" | "name" | "string" | "hexstring" | "arrayStart" | "arrayEnd" | "dictStart" | "dictEnd" | "operator" | "inlineImage";
+  start: number;
+  end: number;
+  value: string;
+}
+
+const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+
+/** A regular token that starts like a number must be one. */
+const NUMBER_START = /^[+\-.0-9]/;
+
+function isWhite(b: number): boolean {
+  return b === 0x20 || b === 0x0a || b === 0x0d || b === 0x09 || b === 0x0c || b === 0x00;
+}
+
+function isDelimiter(b: number): boolean {
+  // ( ) < > [ ] { } / %
+  return b === 0x28 || b === 0x29 || b === 0x3c || b === 0x3e || b === 0x5b || b === 0x5d || b === 0x7b || b === 0x7d || b === 0x2f || b === 0x25;
+}
+
+function hexValue(b: number): number {
+  if (b >= 0x30 && b <= 0x39) return b - 0x30;
+  if (b >= 0x41 && b <= 0x46) return b - 0x41 + 10;
+  if (b >= 0x61 && b <= 0x66) return b - 0x61 + 10;
+  return -1;
+}
+
+function latin1(bytes: Uint8Array, start: number, end: number): string {
+  let out = "";
+  for (let i = start; i < end; i++) out += String.fromCharCode(bytes[i]);
+  return out;
+}
+
+/** Reads a content stream into tokens; comments and whitespace are dropped. Throws `ContentParseError` on malformed input. */
+export function tokenize(bytes: Uint8Array): Token[] {
+  const tokens: Token[] = [];
+  let pos = 0;
+  while (true) {
+    const token = next();
+    if (!token) break;
+    if (token.kind === "operator" && token.value === "BI") tokens.push(inlineImage(token.start));
+    else tokens.push(token);
+  }
+  return tokens;
+
+  /** The next token after `pos`, or null at the end of the data. */
+  function next(): Token | null {
+    skipWhiteAndComments();
+    if (pos >= bytes.length) return null;
+    const start = pos;
+    const b = bytes[pos];
+    if (b === 0x28) return literalString(start);
+    if (b === 0x3c) {
+      if (bytes[pos + 1] === 0x3c) {
+        pos += 2;
+        return { kind: "dictStart", start, end: pos, value: "<<" };
+      }
+      return hexString(start);
+    }
+    if (b === 0x3e) {
+      if (bytes[pos + 1] === 0x3e) {
+        pos += 2;
+        return { kind: "dictEnd", start, end: pos, value: ">>" };
+      }
+      throw new ContentParseError(`Unexpected ">" at byte ${start}`);
+    }
+    if (b === 0x5b) {
+      pos++;
+      return { kind: "arrayStart", start, end: pos, value: "[" };
+    }
+    if (b === 0x5d) {
+      pos++;
+      return { kind: "arrayEnd", start, end: pos, value: "]" };
+    }
+    if (b === 0x2f) return name(start);
+    if (b === 0x29 || b === 0x7b || b === 0x7d) throw new ContentParseError(`Unexpected "${String.fromCharCode(b)}" at byte ${start}`);
+    while (pos < bytes.length && !isWhite(bytes[pos]) && !isDelimiter(bytes[pos])) pos++;
+    const text = latin1(bytes, start, pos);
+    if (NUMBER.test(text)) return { kind: "number", start, end: pos, value: text };
+    if (NUMBER_START.test(text)) throw new ContentParseError(`Malformed number "${text}" at byte ${start}`);
+    return { kind: "operator", start, end: pos, value: text };
+  }
+
+  function skipWhiteAndComments(): void {
+    while (pos < bytes.length) {
+      const b = bytes[pos];
+      if (isWhite(b)) pos++;
+      else if (b === 0x25) {
+        while (pos < bytes.length && bytes[pos] !== 0x0a && bytes[pos] !== 0x0d) pos++;
+      } else break;
+    }
+  }
+
+  function name(start: number): Token {
+    pos++;
+    let value = "";
+    while (pos < bytes.length && !isWhite(bytes[pos]) && !isDelimiter(bytes[pos])) {
+      const b = bytes[pos];
+      if (b === 0x23 && pos + 2 < bytes.length && hexValue(bytes[pos + 1]) >= 0 && hexValue(bytes[pos + 2]) >= 0) {
+        value += String.fromCharCode(hexValue(bytes[pos + 1]) * 16 + hexValue(bytes[pos + 2]));
+        pos += 3;
+      } else {
+        value += String.fromCharCode(b);
+        pos++;
+      }
+    }
+    return { kind: "name", start, end: pos, value };
+  }
+
+  function literalString(start: number): Token {
+    pos++;
+    let depth = 1;
+    let value = "";
+    while (pos < bytes.length) {
+      const b = bytes[pos++];
+      if (b === 0x5c) {
+        if (pos >= bytes.length) break;
+        const e = bytes[pos++];
+        if (e >= 0x30 && e <= 0x37) {
+          // Up to three octal digits; overflow past a byte is ignored, as readers do.
+          let code = e - 0x30;
+          for (let k = 0; k < 2 && pos < bytes.length && bytes[pos] >= 0x30 && bytes[pos] <= 0x37; k++) code = code * 8 + (bytes[pos++] - 0x30);
+          value += String.fromCharCode(code & 0xff);
+        } else if (e === 0x0d) {
+          // A backslash before an end of line continues the string on the next line.
+          if (bytes[pos] === 0x0a) pos++;
+        } else if (e !== 0x0a) {
+          const escapes: Record<number, string> = { 0x6e: "\n", 0x72: "\r", 0x74: "\t", 0x62: "\b", 0x66: "\f" };
+          value += escapes[e] ?? String.fromCharCode(e);
+        }
+      } else if (b === 0x28) {
+        depth++;
+        value += "(";
+      } else if (b === 0x29) {
+        depth--;
+        if (depth === 0) return { kind: "string", start, end: pos, value };
+        value += ")";
+      } else if (b === 0x0d) {
+        // Any end of line inside a string reads as a line feed.
+        if (bytes[pos] === 0x0a) pos++;
+        value += "\n";
+      } else value += String.fromCharCode(b);
+    }
+    throw new ContentParseError(`Unterminated string at byte ${start}`);
+  }
+
+  function hexString(start: number): Token {
+    pos++;
+    let value = "";
+    let high = -1;
+    while (pos < bytes.length) {
+      const b = bytes[pos++];
+      if (b === 0x3e) {
+        if (high >= 0) value += String.fromCharCode(high * 16);
+        return { kind: "hexstring", start, end: pos, value };
+      }
+      if (isWhite(b)) continue;
+      const v = hexValue(b);
+      if (v < 0) throw new ContentParseError(`Bad hex digit in string at byte ${pos - 1}`);
+      if (high < 0) high = v;
+      else {
+        value += String.fromCharCode(high * 16 + v);
+        high = -1;
+      }
+    }
+    throw new ContentParseError(`Unterminated hex string at byte ${start}`);
+  }
+
+  /**
+   * The inline image starting with `BI` at `start`, through its `EI`. Its data ends where the dictionary's /L (or
+   * /Length) says, when an `EI` stands there; otherwise at the first `EI` with whitespace before it and whitespace or
+   * the end of the data after it.
+   */
+  function inlineImage(start: number): Token {
+    const dict: Token[] = [];
+    let id: Token | null = null;
+    for (let t = next(); t; t = next()) {
+      if (t.kind === "operator" && t.value === "ID") {
+        id = t;
+        break;
+      }
+      if (t.kind === "operator" && t.value === "BI") throw new ContentParseError(`Nested BI at byte ${t.start}`);
+      dict.push(t);
+    }
+    if (!id) throw new ContentParseError(`Inline image without ID at byte ${start}`);
+    const dictText = dict.length ? latin1(bytes, dict[0].start, dict[dict.length - 1].end) : "";
+    // One whitespace byte separates ID from the data.
+    const dataStart = id.end < bytes.length && isWhite(bytes[id.end]) ? id.end + 1 : id.end;
+
+    const length = declaredLength(dict);
+    if (length !== null) {
+      let p = dataStart + length;
+      while (p < bytes.length && isWhite(bytes[p])) p++;
+      if (endsAt(p)) return finish(p + 2);
+    }
+    for (let p = Math.max(dataStart, id.end + 1); p + 1 < bytes.length; p++) {
+      if (bytes[p] === 0x45 && bytes[p + 1] === 0x49 && isWhite(bytes[p - 1]) && endsAt(p)) return finish(p + 2);
+    }
+    throw new ContentParseError(`Inline image without EI at byte ${start}`);
+
+    function finish(end: number): Token {
+      pos = end;
+      return { kind: "inlineImage", start, end, value: dictText };
+    }
+  }
+
+  /** True when an `EI` operator stands at `p`: "EI" followed by whitespace or the end of the data. */
+  function endsAt(p: number): boolean {
+    return bytes[p] === 0x45 && bytes[p + 1] === 0x49 && (p + 2 === bytes.length || isWhite(bytes[p + 2]));
+  }
+}
+
+/** The data length an inline image's dictionary declares (/L or /Length), or null. */
+function declaredLength(dict: Token[]): number | null {
+  for (let i = 0; i + 1 < dict.length; i++) {
+    const key = dict[i];
+    const value = dict[i + 1];
+    if (key.kind === "name" && (key.value === "L" || key.value === "Length") && value.kind === "number") {
+      const n = Number(value.value);
+      if (Number.isInteger(n) && n >= 0) return n;
+    }
+  }
+  return null;
+}

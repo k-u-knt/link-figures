@@ -228,7 +228,7 @@ function builtinCommands(): Command[] {
       name: "Delete",
       icon: "trash",
       group: "edit",
-      applies: (ctx) => ctx.selection.length > 0,
+      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !n.locked),
       run: (ctx) => void editor(ctx).deleteSelection(),
     },
     { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", applies: (ctx) => ctx.selection.length > 0, run: duplicate },

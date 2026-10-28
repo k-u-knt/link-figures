@@ -85,7 +85,7 @@ test("every command is in the palette as lf-<id> with its own name, and none has
 });
 
 test("a palette command acts on the active figure view, and only when it applies", () => {
-  const { plugin, view } = setup();
+  const { plugin, view } = setup((d) => { fileNode(d, { id: "p-xxxx" }); });
   const fit = plugin.commands.find((c) => c.id === "lf-fit-page");
   const del = plugin.commands.find((c) => c.id === "lf-delete");
   // Checking is not acting.
@@ -129,6 +129,14 @@ test("selection commands apply only with a selection; an empty figure runs every
   for (const id of ["duplicate", "bring-forward", "send-backward", "open-source"]) expect(() => command(id).run(ctx())).not.toThrow();
   expect(command("reset-aspect").applies(ctx())).toBe(false);
   expect(view.store.doc.nodes).toEqual([]);
+});
+
+test("delete applies only when the selection holds an unlocked node", () => {
+  const { command, ctx, view } = setup((d) => { fileNode(d, { id: "p-locked", locked: true }); fileNode(d, { id: "p-free" }); });
+  view.selection = ["p-locked"];
+  expect(command("delete").applies(ctx())).toBe(false);
+  view.selection = ["p-locked", "p-free"];
+  expect(command("delete").applies(ctx())).toBe(true);
 });
 
 test("delete is the view's own deletion", () => {

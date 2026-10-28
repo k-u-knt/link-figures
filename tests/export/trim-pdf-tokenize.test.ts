@@ -86,6 +86,15 @@ test("an inline image may end at the end of the data", () => {
   expect(tokens[0].kind).toBe("inlineImage");
 });
 
+test("an operator with bytes outside printable ASCII throws", () => {
+  expect(() => tokenize(enc("q \xff\x01 Q"))).toThrow(ContentParseError);
+});
+
+test("binary inline-image data holding \" EI \" without /L never yields a token inside the image", () => {
+  // The scan ends the image at the first " EI "; the binary bytes after it then cannot be read as operators.
+  expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI \xfe\x01 EI Q"))).toThrow(ContentParseError);
+});
+
 test("malformed input throws ContentParseError", () => {
   expect(() => tokenize(enc("(unterminated"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("<41 4"))).toThrow(ContentParseError);

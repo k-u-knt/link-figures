@@ -67,6 +67,18 @@ describe("paths", () => {
     expect(box.x).toBeLessThanOrEqual(-Math.SQRT2 + 1e-9);
   });
 
+  test("s, b and b* close the path, and the closing joins' miter tips are in the box", () => {
+    // An open triangle (0,0) → (10,0) → (10,10); closing adds sharp 45° corners at (10,10) and (0,0), whose miters
+    // (about 2.6 half-widths: x 2 · 2.61 along the bisector) reach well past half the line width.
+    for (const paint of ["s", "b", "b*"]) {
+      const box = units(`4 w 0 0 m 10 0 l 10 10 l ${paint}`).units[0].box!;
+      expect(box.y + box.height).toBeGreaterThan(14.5);
+      expect(box.x).toBeLessThan(-4.5);
+    }
+    // S does not close: the end at (10, 10) has a butt cap, and only the right-angle corner is mitered.
+    expectBox(units("4 w 0 0 m 10 0 l 10 10 l S").units[0], -2, -2, 14, 14);
+  });
+
   test("curves use all their control points", () => {
     expectBox(units("0 0 m 0 50 10 50 10 0 c f").units[0], 0, 0, 10, 50);
     expectBox(units("0 0 m 5 -20 10 0 v f").units[0], 0, -20, 10, 20);
@@ -156,34 +168,48 @@ describe("text", () => {
     expect(found).toHaveLength(1);
     expect(found[0].kind).toBe("text");
     expect(text(found[0])).toBe("BT /F1 10 Tf 0 0 Td (ab) Tj 1000 0 Td (c) Tj ET");
-    // "c" starts at x 1000 and is 10 wide; the em box runs from -3 to 12.
-    expectBox(found[0], 0, -3, 1010, 15);
+    // "c" starts at x 1000 and is 10 wide; each show is padded by half an em (5) on each side; -0.5 em to 1.2 em high.
+    expectBox(found[0], -5, -5, 1020, 17);
   });
 
   test("Review Focus 5: a two-byte font counts one em per byte", () => {
     const { units: found } = units("BT /F0 10 Tf <00410042> Tj ET", resources({ fonts: { F0: { widths: null, twoByte: true } } }));
-    expectBox(found[0], 0, -3, 40, 15);
+    expectBox(found[0], -5, -5, 50, 17);
+  });
+
+  test("a two-byte font's glyphs are as wide as its widest known glyph, when that exceeds an em", () => {
+    const font: FontInfo = { widths: { first: 1, list: [600, 1500], missing: 500 }, twoByte: true };
+    // Two bytes of 1.5 em at 10 pt, padded by 5 on each side.
+    expectBox(units("BT /F0 10 Tf <0102> Tj ET", resources({ fonts: { F0: font } })).units[0], -5, -5, 40, 17);
   });
 
   test("a simple font uses its widths, and the missing width for codes outside the table", () => {
     const font: FontInfo = { widths: { first: 65, list: [500, 250], missing: 100 }, twoByte: false };
-    // A (500) B (250) C (missing: 100) at 20 pt: 10 + 5 + 2.
-    expectBox(units("BT /F1 20 Tf (ABC) Tj ET", resources({ fonts: { F1: font } })).units[0], 0, -6, 17, 30);
+    // A (500) B (250) C (missing: 100) at 20 pt: 10 + 5 + 2, padded by 10 on each side.
+    expectBox(units("BT /F1 20 Tf (ABC) Tj ET", resources({ fonts: { F1: font } })).units[0], -10, -10, 37, 34);
   });
 
   test("Tm, the CTM, char and word spacing, horizontal scaling and rise are applied", () => {
     const src = "2 0 0 2 0 0 cm BT /F1 10 Tf 1 0 0 1 5 0 Tm 1 Tc 2 Tw 50 Tz 4 Ts (a b) Tj ET";
-    // Advances: a 10+1, space 10+1+2, b 10 (inked) → (11 + 13 + 10) × 0.5 = 17; y from -3+4 to 12+4.
-    expectBox(units(src, resources({ fonts: { F1: EM_FONT } })).units[0], 10, 2, 34, 30);
+    // Advances: a 10+1, space 10+1+2, b 10 (inked) → (11 + 13 + 10) × 0.5 = 17, padded by 2.5 (half a scaled em) on
+    // each side: -2.5…19.5, then +5 and ×2 → 5…49. y from -5+4 to 12+4, ×2 → -2…32.
+    expectBox(units(src, resources({ fonts: { F1: EM_FONT } })).units[0], 5, -2, 44, 34);
   });
 
   test("TJ adjustments move the next glyph back", () => {
-    expectBox(units("BT /F1 10 Tf [(a) -1000 (b)] TJ ET", resources({ fonts: { F1: EM_FONT } })).units[0], 0, -3, 30, 15);
+    expectBox(units("BT /F1 10 Tf [(a) -1000 (b)] TJ ET", resources({ fonts: { F1: EM_FONT } })).units[0], -5, -5, 40, 17);
   });
 
   test("T*, ' and \" move to the next line by the leading", () => {
     const { units: found } = units("BT /F1 10 Tf 12 TL (a) Tj T* (b) Tj (c) ' 0 0 (d) \" ET", resources({ fonts: { F1: EM_FONT } }));
-    expectBox(found[0], 0, -36 - 3, 10, 36 + 15);
+    expectBox(found[0], -5, -36 - 5, 20, 36 + 17);
+  });
+
+  test("stroked text (render modes 1 and 2) is widened by half the line width", () => {
+    const res = resources({ fonts: { F1: EM_FONT } });
+    expectBox(units("2 w BT /F1 10 Tf 1 Tr (a) Tj ET", res).units[0], -6, -6, 22, 19);
+    expectBox(units("2 w BT /F1 10 Tf 2 Tr (a) Tj ET", res).units[0], -6, -6, 22, 19);
+    expectBox(units("2 w BT /F1 10 Tf 0 Tr (a) Tj ET", res).units[0], -5, -5, 20, 17);
   });
 
   test("text render mode 7 (and any clipping mode) gives no box", () => {

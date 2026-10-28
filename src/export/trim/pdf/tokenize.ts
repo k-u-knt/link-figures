@@ -98,6 +98,10 @@ export function tokenize(bytes: Uint8Array): Token[] {
     const text = latin1(bytes, start, pos);
     if (NUMBER.test(text)) return { kind: "number", start, end: pos, value: text };
     if (NUMBER_START.test(text)) throw new ContentParseError(`Malformed number "${text}" at byte ${start}`);
+    // An operator is printable ASCII: anything else is binary data read as content (a misparsed inline image).
+    for (let i = start; i < pos; i++) {
+      if (bytes[i] < 0x21 || bytes[i] > 0x7e) throw new ContentParseError(`Non-ASCII byte in operator at byte ${i}`);
+    }
     return { kind: "operator", start, end: pos, value: text };
   }
 

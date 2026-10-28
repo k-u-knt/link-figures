@@ -94,9 +94,13 @@ const TEXT_ALLOWED = new Set([
 ]);
 const TEXT_SHOWING = new Set(["Tj", "TJ", "'", '"']);
 
-/** Text box: from 0.3 em below the baseline to 1.2 em above it. */
-const TEXT_DESCENT = -0.3;
+/**
+ * Text box: from 0.5 em below the baseline to 1.2 em above it, and 0.5 em beyond each end of a showing operator's
+ * glyphs, so that descenders, accents and ink past the advance width (italics, swashes) stay inside.
+ */
+const TEXT_DESCENT = -0.5;
 const TEXT_ASCENT = 1.2;
+const TEXT_SIDE = 0.5;
 
 /** Ratios within this (relative) of the miter limit are taken as mitered, to err on the larger box. */
 const MITER_SLACK = 1e-9;
@@ -512,6 +516,8 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     }
     const size = gs.size;
     const th = gs.scale;
+    // A two-byte font's codes are not mapped to glyphs here: each byte counts as a glyph at least one em wide.
+    const twoByteWidth = font.widths ? Math.max(1000, font.widths.missing, ...font.widths.list) : 1000;
     let x = 0;
     let minX = Infinity;
     let maxX = -Infinity;
@@ -523,7 +529,7 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
       const codes = (item as { value: string }).value;
       for (let i = 0; i < codes.length; i++) {
         const code = codes.charCodeAt(i);
-        const w0 = font.twoByte || !font.widths ? 1000 : (font.widths.list[code - font.widths.first] ?? font.widths.missing);
+        const w0 = font.twoByte ? twoByteWidth : !font.widths ? 1000 : (font.widths.list[code - font.widths.first] ?? font.widths.missing);
         const ink = (w0 / 1000) * size * th;
         minX = Math.min(minX, x, x + ink);
         maxX = Math.max(maxX, x, x + ink);
@@ -534,7 +540,13 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     if (minX <= maxX) {
       const y0 = Math.min(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
       const y1 = Math.max(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
-      const box = rectThrough(multiply(tm, gs.ctm), minX, y0, maxX, y1);
+      const side = Math.abs(TEXT_SIDE * size * th);
+      let box = rectThrough(multiply(tm, gs.ctm), minX - side, y0, maxX + side, y1);
+      // Modes 1 and 2 stroke the glyph outlines.
+      if (box && (gs.render === 1 || gs.render === 2)) {
+        const half = (gs.lineWidth / 2) * maxScale(gs.ctm);
+        box = { x: box.x - half, y: box.y - half, width: box.width + 2 * half, height: box.height + 2 * half };
+      }
       if (!box) t.known = false;
       t.box = union(t.box, box);
       t.shown = true;
@@ -638,8 +650,10 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
   /** A painting operator (or `n`) ends the path; a painted path that does not clip is a unit. */
   function paint(op: Op): void {
     const p = path!;
-    path = null;
-    if (op.name === "n" || p.clip) return;
+    if (op.name === "n" || p.clip) {
+      path = null;
+      return;
+    }
     if (CLOSING_PAINT.has(op.name)) {
       // Closing the last subpath adds its joins (its points are all in already).
       if (p.last) {
@@ -650,6 +664,7 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
         } else if (p.first) miterTip(p.sx, p.sy, p.last, p.first);
       }
     }
+    path = null;
     let box: Rect | null = null;
     if (p.known) {
       if (STROKE_PAINT.has(op.name)) {

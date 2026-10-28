@@ -44,6 +44,12 @@ export const browserTrimDeps: TrimDeps = {
 };
 
 const NOTHING_OUTSIDE = "nothing lay wholly outside the crop";
+const FALLBACK = "could not be trimmed, embedded whole";
+
+/** True for a line of `trimAssets`'s report that says a panel could not be trimmed (and so was embedded whole). */
+export function isTrimFallback(line: string): boolean {
+  return line.includes(`: ${FALLBACK} (`);
+}
 
 function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -162,7 +168,7 @@ export async function trimAssets(
         }
       }
     } catch (error) {
-      say(`could not be trimmed, embedded whole (${reasonOf(error)})`);
+      say(`${FALLBACK} (${reasonOf(error)})`);
     }
   }
   return out;

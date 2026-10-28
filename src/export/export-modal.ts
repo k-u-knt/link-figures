@@ -8,10 +8,10 @@ import type { LinkFiguresView } from "../view/figure-view";
 import type { AssetMap } from "./asset-types";
 import { collectAssets } from "./assets";
 import { buildPageSvg } from "./svg-builder";
-import { browserTrimDeps, trimAssets, type TrimDeps } from "./trim";
+import { browserTrimDeps, isTrimFallback, trimAssets, type TrimDeps } from "./trim";
 import { exportDir, exportFolderFor, exportPathFor, isFigureSource, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
-/** More warnings than this are summarised in the notice; all of them go to the console. */
+/** More report lines than this are summarised in the notice; all of them go to the console. */
 const MAX_WARNINGS_SHOWN = 12;
 const WARNING_NOTICE_MS = 15_000;
 
@@ -45,11 +45,15 @@ export interface ExportDeps {
  * Collects each page's assets, trims each panel's source to the part of it that shows, builds the page's SVG, lets the
  * exporter turn them into files and writes those to the vault. The warnings returned are everything that could not be
  * done faithfully (assets that failed, nodes skipped, nodes rasterised, and files not written because their path is
- * protected: `deps.isProtected`), and what trimming did to each cropped panel. `files` counts the files actually written.
+ * protected: `deps.isProtected`), and what trimming did to each cropped panel. They come in that order of urgency: the
+ * panels that could not be trimmed first, then the other warnings, then the rest of the trim report, so that the
+ * notice, which shows only the first few, never leaves out a panel embedded whole for a line saying all went well.
+ * `files` counts the files actually written.
  */
 export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ files: number; warnings: string[] }> {
   const { app } = deps;
   const warnings: string[] = [];
+  const trimReport: string[] = [];
   const svgs = new Map<PageId, string>();
   const assets = new Map<PageId, AssetMap>();
 
@@ -73,7 +77,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       dpi: run.dpi,
       warnings,
     });
-    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, warnings, run.exporter.pdfPanels);
+    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, trimReport, run.exporter.pdfPanels);
     const built = buildPageSvg(run.doc, page, deps.nodeTypes, pageAssets);
     warnings.push(...built.warnings);
     assets.set(page.id, pageAssets);
@@ -104,7 +108,10 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
     await writeExportFile(app, run.folder, names[i], file.blob);
     written++;
   }
-  return { files: written, warnings: reported };
+  return {
+    files: written,
+    warnings: [...trimReport.filter(isTrimFallback), ...reported, ...trimReport.filter((line) => !isTrimFallback(line))],
+  };
 }
 
 /** The success message: how many files were written, and to which folder. */
@@ -115,7 +122,7 @@ export function exportSummary(files: number, folder: string): string {
 function warningsNotice(warnings: string[]): Notice {
   const shown = warnings.slice(0, MAX_WARNINGS_SHOWN);
   const fragment = createFragment((el) => {
-    el.createEl("div", { text: "Export warnings:" });
+    el.createEl("div", { text: "Export report:" });
     for (const warning of shown) el.createEl("div", { text: warning });
     if (warnings.length > shown.length) el.createEl("div", { text: `…and ${warnings.length - shown.length} more (see the developer console)` });
   });
@@ -239,7 +246,7 @@ export class ExportModal extends Modal {
       );
       new Notice(exportSummary(files, folder));
       if (warnings.length > 0) {
-        console.warn("Link Figures: export warnings", warnings);
+        console.warn("Link Figures: export report", warnings);
         warningsNotice(warnings);
       }
       this.close();

@@ -1,6 +1,6 @@
 import { Notice, TextFileView, TFile, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
-import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
+import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FormatError, NotFigureError } from "../format/errors";
 import { applyLinkEntries, classifyReload } from "../format/links-reload";
@@ -409,6 +409,16 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return this.nodeHost.naturalSize(id);
   }
 
+  /** The Maximum page size setting, in millimetres. */
+  pageLimitMm(): number {
+    return this.plugin.settings?.maxPageSizeMm ?? DEFAULT_PAGE_LIMIT_MM;
+  }
+
+  /** Says that a page size was cut down to the limit. */
+  notePageLimit(limitMm: number): void {
+    new Notice(`Pages are limited to ${limitMm} mm on a side (Settings → Link Figures → Maximum page size).`);
+  }
+
   /** Opens a link target from this figure's place in the vault, in a new tab when asked to (the badge on a node, and the Open source command). */
   openLink(linktext: string, newLeaf: PaneType | boolean = false): void {
     void this.app.workspace.openLinkText(linktext, this.file?.path ?? "", newLeaf);
@@ -434,9 +444,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.intake = new Intake(this);
     // Once per view: they read `store` when they render, so a new store needs nothing from them (`setDocument` re-renders).
     this.toolbar = new Toolbar(this, this.toolbarEl);
-    this.inspector = new Inspector(this, this.inspectorEl, (limit) =>
-      new Notice(`Pages are limited to ${limit} mm on a side (Settings → Link Figures → Maximum page size).`),
-    );
+    this.inspector = new Inspector(this, this.inspectorEl, (limit) => this.notePageLimit(limit));
     this.selection.onChange(() => this.renderChrome());
     this.applyViewport();
   }

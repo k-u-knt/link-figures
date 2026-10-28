@@ -323,8 +323,35 @@ test("each cropped panel is trimmed after collection and before the page is buil
   expect(text(vault.content.get("Fig - Page 1.svg"))).toContain('href="data:image/png;base64,CUT"');
   expect(out.warnings).toEqual([
     `${nodeLabel(doc, moved)}: File not found in vault: moved.png`,
-    `${nodeLabel(doc, png)}: cut to what shows (320 × 240 of 640 × 480 px)`,
     `${nodeLabel(doc, moved)}: link missing, skipped`,
+    `${nodeLabel(doc, png)}: cut to what shows (320 × 240 of 640 × 480 px)`,
+  ]);
+});
+
+test("the report puts panels that could not be trimmed first, then the warnings, then the rest of the trim report", async () => {
+  const { doc, png, gone, resolved } = figure();
+  png.fit = "contain";
+  png.crop = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+  const bad = { ...png, id: "bad", x: 200 };
+  doc.nodes.push(bad);
+  resolved.set(bad.id, resolved.get(png.id)!);
+  const { app } = world();
+  let calls = 0;
+  const failing = {
+    ...trim,
+    cutImage: async (dataUri: string, rect: { x: number; y: number; width: number; height: number }) => {
+      if (++calls === 2) throw new Error("out of memory");
+      return trim.cutImage(dataUri, rect);
+    },
+  };
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim: failing, isProtected: () => false },
+  );
+  expect(out.warnings).toEqual([
+    `${nodeLabel(doc, bad)}: could not be trimmed, embedded whole (out of memory)`,
+    `${nodeLabel(doc, gone)}: link missing, skipped`,
+    `${nodeLabel(doc, png)}: cut to what shows (320 × 240 of 640 × 480 px)`,
   ]);
 });
 

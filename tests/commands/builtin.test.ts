@@ -34,6 +34,10 @@ class FakeView implements EditorView {
   armTool(command: Command): void { this.armedTool = this.armedTool?.id === command.id ? null : command; }
   disarmTool(): void { this.armedTool = null; }
   activateNode(id: NodeId): void { this.calls.push(`activate:${id}`); }
+  /** The Maximum page size setting. */
+  limitMm = 2000;
+  pageLimitMm(): number { return this.limitMm; }
+  notePageLimit(limitMm: number): void { this.calls.push(`page-limit:${limitMm}`); }
   commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
 }
@@ -459,6 +463,27 @@ test("add page after a page of a custom size copies the size", () => {
   const { command, ctx, store } = setup((d) => { Object.assign(d.pages[0], { preset: "custom", width: 123, height: 45 }); });
   command("add-page").run(ctx());
   expect(store.doc.pages[1]).toMatchObject({ preset: "custom", width: 123, height: 45 });
+});
+
+test("add page after a page over the size limit cuts the copy down to the limit, and says so", () => {
+  const { command, ctx, store, view } = setup((d) => { Object.assign(d.pages[0], { preset: "custom", width: 2500, height: 45 }); });
+  command("add-page").run(ctx());
+  expect(store.doc.pages[1]).toMatchObject({ preset: "custom", width: 2000, height: 45 });
+  expect(view.calls).toEqual(["page-limit:2000"]);
+});
+
+test("add page after a preset larger than a lowered limit makes a custom page at the limit", () => {
+  const { command, ctx, store, view } = setup();
+  view.limitMm = 200;
+  command("add-page").run(ctx());
+  expect(store.doc.pages[1]).toMatchObject({ preset: "custom", width: 200, height: 200 });
+  expect(view.calls).toEqual(["page-limit:200"]);
+});
+
+test("add page within the limit says nothing", () => {
+  const { command, ctx, view } = setup();
+  command("add-page").run(ctx());
+  expect(view.calls).toEqual([]);
 });
 
 test("add page on a document that has no pages makes the first one", () => {

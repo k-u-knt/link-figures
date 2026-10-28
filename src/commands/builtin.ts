@@ -6,6 +6,7 @@ import { PAGE_PRESETS, getPreset } from "../model/presets";
 import type { FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
 import type { Command, CommandContext, FigureViewLike } from "../registry/command";
+import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
 
 /** How far a duplicate sits from its original, along both axes. */
@@ -24,6 +25,10 @@ export interface EditorView extends FigureViewLike {
   imageSize(id: NodeId): Promise<{ width: number; height: number }>;
   /** Tells a node what a double-click on it tells it (a text node starts editing). */
   activateNode(id: NodeId): void;
+  /** The largest width or height a page may have, in millimetres (the Maximum page size setting). */
+  pageLimitMm(): number;
+  /** Says that a page size had to be cut down to `limitMm` (the view shows a notice, as the inspector's edits do). */
+  notePageLimit(limitMm: number): void;
 }
 
 const editor = (ctx: CommandContext): EditorView => ctx.view as EditorView;
@@ -88,8 +93,12 @@ function stackCommand(id: string, name: string, icon: string, direction: "forwar
   };
 }
 
-/** A page like `current` (its preset, or its size when that is not a preset), to go after it; `existingIds` are the document's page ids. */
-function pageLike(current: Page | undefined, existingIds: string[]): Page {
+/**
+ * A page like `current` (its preset, or its size when that is not a preset), to go after it; `existingIds` are the
+ * document's page ids. A width or height over `limitMm` is cut down to it, which makes the page custom; `clamped` says
+ * whether that happened.
+ */
+function pageLike(current: Page | undefined, existingIds: string[], limitMm: number): { page: Page; clamped: boolean } {
   const preset = current?.preset === undefined ? undefined : getPreset(current.preset);
   const page = createPage(preset?.id ?? PAGE_PRESETS[0].id, existingIds);
   if (current && !preset) {
@@ -98,7 +107,14 @@ function pageLike(current: Page | undefined, existingIds: string[]): Page {
     if (current.preset === undefined) delete page.preset;
     else page.preset = current.preset;
   }
-  return page;
+  const width = clampPageSize(page.width, limitMm);
+  const height = clampPageSize(page.height, limitMm);
+  const clamped = width.clamped || height.clamped;
+  page.width = width.value;
+  page.height = height.value;
+  // A preset whose size was cut down is no longer that preset.
+  if (clamped && page.preset !== undefined) page.preset = CUSTOM_PRESET;
+  return { page, clamped };
 }
 
 function duplicate(ctx: CommandContext): void {
@@ -128,11 +144,13 @@ function duplicate(ctx: CommandContext): void {
 
 function addPage(ctx: CommandContext): void {
   const { pages } = ctx.store.doc;
-  const page = pageLike(ctx.page, pages.map((p) => p.id));
+  const limit = editor(ctx).pageLimitMm();
+  const { page, clamped } = pageLike(ctx.page, pages.map((p) => p.id), limit);
   const at = pages.findIndex((p) => p.id === ctx.page?.id);
   ctx.store.commit("add-page", (draft) => {
     draft.pages.splice(at === -1 ? draft.pages.length : at + 1, 0, page);
   });
+  if (clamped) editor(ctx).notePageLimit(limit);
 }
 
 function deletePage(ctx: CommandContext): void {

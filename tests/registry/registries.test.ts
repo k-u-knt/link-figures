@@ -1,3 +1,4 @@
+import { AdjustmentRegistry } from "../../src/registry/adjustment";
 import { CommandRegistry } from "../../src/registry/command";
 import { NodeTypeRegistry } from "../../src/registry/node-type";
 import { ExporterRegistry } from "../../src/registry/exporter";
@@ -8,3 +9,5 @@ test("registering the same id twice replaces", () => { const r = new NodeTypeReg
 test("createRegistries returns three empty registries", () => { const r = createRegistries(); expect(r.commands.all()).toEqual([]); expect(r.exporters.all()).toEqual([]); });
 test("replacing a command keeps its registration position within its group", () => { const r = new CommandRegistry(); const cmd = (id: string, name: string) => ({ id, name, group: "edit" as const, applies: () => true, run() {} }); r.register(cmd("a", "A")); r.register(cmd("b", "B")); r.register(cmd("a", "A2")); expect(r.all().map(c => c.id)).toEqual(["a", "b"]); expect(r.get("a")!.name).toBe("A2"); expect(r.get("missing")).toBeUndefined(); });
 test("exporters replace by id in place and keep registration order", () => { const r = new ExporterRegistry(); const e = (id: string, name: string) => ({ id, name, ext: id, mime: "x/y", options: () => [], run: async () => ({ files: [], warnings: [] }) }); r.register(e("png", "PNG")); r.register(e("svg", "SVG")); r.register(e("png", "PNG2")); expect(r.all().map(x => x.id)).toEqual(["png", "svg"]); expect(r.get("png")!.name).toBe("PNG2"); });
+test("adjustments replace by id in place and keep registration order", () => { const r = new AdjustmentRegistry(); const a = (id: string, name: string) => ({ id, name, stage: "pixel" as const, defaults: () => ({}), fields: () => [], apply: (img: any) => img }); r.register(a("tint", "Tint")); r.register(a("gamma", "Gamma")); r.register(a("tint", "Tint2")); expect(r.all().map(x => x.id)).toEqual(["tint", "gamma"]); expect(r.get("tint")!.name).toBe("Tint2"); expect(r.get("missing")).toBeUndefined(); });
+test("createRegistries includes an empty adjustment registry", () => expect(createRegistries().adjustments.all()).toEqual([]));

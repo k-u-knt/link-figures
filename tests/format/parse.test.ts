@@ -84,3 +84,12 @@ test.each([
   ["node with a non-numeric width", docWith([{ id: "p-1", type: "text", ...geom, width: "wide" }])],
   ["page without a width", { version: 1, pages: [{ id: "pg-1", height: 5 }], nodes: [] }],
 ])("migrate rejects malformed input: %s", (_name, json) => expect(() => migrate(json)).toThrow(FormatError));
+
+// --- adjustments
+const withAdjustments = (value: string) => loadDocument(FILE.replace('"frame":null}', `"frame":null,"adjustments":${value}}`));
+test("a file node with no adjustments parses to an empty list", () => expect((loadDocument(FILE).doc.nodes[0] as FileNode).adjustments).toEqual([]));
+test("adjustments that are not a list of entries with a string type are a FormatError", () => {
+  const message = 'Node p-3f9a: "adjustments" must be a list of { type, enabled, params }';
+  for (const bad of ['"nope"', '[{"enabled":true}]', '[{"type":3}]', '[null]', '[{"type":"a","enabled":"yes"}]', '[{"type":"a","params":[]}]']) expect(() => withAdjustments(bad)).toThrow(new FormatError(message));
+});
+test("an adjustment with no enabled or params reads as enabled with empty params", () => expect((withAdjustments('[{"type":"x.future"}]').doc.nodes[0] as FileNode).adjustments).toEqual([{ type: "x.future", enabled: true, params: {} }]));

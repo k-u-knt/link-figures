@@ -55,6 +55,13 @@ export interface NodeBase {
 
 export type Range16 = { min: number; max: number };
 
+/** One non-destructive step applied to a panel's image; `type` is a registered adjustment id (an unknown one is kept as is). */
+export interface Adjustment {
+  type: string;
+  enabled: boolean;
+  params: Record<string, unknown>;
+}
+
 export interface FileNode extends NodeBase {
   type: "file";
   file: string;
@@ -67,6 +74,7 @@ export interface FileNode extends NodeBase {
   range: Range16 | "auto";
   scale: number;
   frame: Stroke | null;
+  adjustments: Adjustment[];
 }
 
 export interface Font {

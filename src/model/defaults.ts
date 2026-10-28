@@ -63,6 +63,7 @@ export function fileNodeDefaults(
     range: "auto",
     scale: 1,
     frame: null,
+    adjustments: [],
     ...partial,
   };
 }

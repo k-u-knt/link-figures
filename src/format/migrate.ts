@@ -22,6 +22,7 @@ const NODE_DEFAULTS: Record<string, () => Json> = {
     range: "auto",
     scale: 1,
     frame: null,
+    adjustments: [],
   }),
   text: () => ({ ...COMMON_DEFAULTS(), text: "", font: { ...DEFAULT_FONT } }),
 };
@@ -49,6 +50,18 @@ function migratePage(raw: unknown, index: number): Json {
   return page;
 }
 
+/** Each entry needs a string `type`; a missing `enabled` reads as true and a missing `params` as `{}`. Unknown types and extra keys are kept. */
+function migrateAdjustments(nodeId: string, raw: unknown): Json[] {
+  const bad = () => new FormatError(`Node ${nodeId}: "adjustments" must be a list of { type, enabled, params }`);
+  if (!Array.isArray(raw)) throw bad();
+  return raw.map((entry) => {
+    if (!isRecord(entry) || typeof entry.type !== "string") throw bad();
+    const out = fill(entry, { enabled: true, params: {} });
+    if (typeof out.enabled !== "boolean" || !isRecord(out.params)) throw bad();
+    return out;
+  });
+}
+
 function migrateNode(raw: unknown, index: number): Json {
   if (!isRecord(raw)) throw new FormatError(`Node ${index + 1} is not an object`);
   const { id, type, page } = raw;
@@ -60,6 +73,7 @@ function migrateNode(raw: unknown, index: number): Json {
   }
   if (!Object.hasOwn(NODE_DEFAULTS, type)) throw new FormatError(`Node ${id} has unsupported type "${type}"`);
   const node = fill(raw, NODE_DEFAULTS[type]());
+  if (type === "file") node.adjustments = migrateAdjustments(id, node.adjustments);
   if (type === "text") {
     if (!isRecord(node.font)) throw new FormatError(`Node ${id}: "font" must be an object`);
     node.font = { ...DEFAULT_FONT, ...node.font };

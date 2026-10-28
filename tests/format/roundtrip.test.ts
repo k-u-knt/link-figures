@@ -36,3 +36,10 @@ test("the marker is ensured in the frontmatter", () => {
   expect(serializeFigureFile(doc, { ...emptyParsed(), frontmatter: "" }).startsWith("---\nlink-figures: 1\n---\n")).toBe(true);
 });
 test("a frontmatter whose closing fence ends the file is readable and written back with a newline", () => { const text = "---\nlink-figures: 1\n---"; expect(isFigureText(text)).toBe(true); const { doc, parsed } = loadDocument(text); expect(serializeFigureFile(doc, parsed).startsWith("---\nlink-figures: 1\n---\n## Links\n\n## Figure\n")).toBe(true); });
+test("an adjustment of an unknown type round-trips byte-identically", () => {
+  const entry = { type: "x.future", enabled: true, params: { a: 1, nested: { b: [2, 3] } } };
+  const { doc, parsed } = loadDocument(FILE.replace('"frame":null}', `"frame":null,"adjustments":${JSON.stringify([entry])}}`));
+  const out = serializeFigureFile(doc, parsed);
+  expect(JSON.parse(parseFigureFile(out).bodyJson!).nodes[0].adjustments).toEqual([entry]);
+  expect(JSON.stringify(JSON.parse(parseFigureFile(out).bodyJson!).nodes[0].adjustments)).toBe(JSON.stringify([entry]));
+});

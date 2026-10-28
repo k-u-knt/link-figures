@@ -457,8 +457,8 @@ export class PointerController {
   private draw(host: HTMLElement, node: Node): SelectionParts {
     const doc = host.ownerDocument;
     const box = doc.createElement("div");
-    box.className = "lf-selection lf-selected";
-    // A locked node can be selected (by a command) but not reshaped, so it gets no handles.
+    box.className = node.locked ? "lf-selection lf-selected is-locked" : "lf-selection lf-selected";
+    // A locked node can be selected (so that the inspector can unlock it) but not reshaped: it gets no handles, and a dashed outline.
     if (!node.locked) {
       for (const handle of HANDLES) {
         const el = doc.createElement("div");

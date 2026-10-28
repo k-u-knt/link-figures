@@ -121,12 +121,19 @@ test("marquee keeps the items' order and returns nothing for no items", () => {
   expect(marqueeSelect([], { x: 0, y: 0, width: 200, height: 200 })).toEqual([]);
 });
 
-test("hitTest skips locked nodes even when they are on top, and edges are inclusive", () => {
-  const items = [{ id: "low", rect: r, z: 0, locked: false }, { id: "locked", rect: r, z: 9, locked: true }];
-  expect(hitTest(items, { x: 20, y: 20 })).toBe("low");
-  expect(hitTest(items, { x: 10, y: 10 })).toBe("low");
-  expect(hitTest(items, { x: 110, y: 60 })).toBe("low");
-  expect(hitTest([items[1]], { x: 20, y: 20 })).toBeNull();
+test("hitTest: a locked item is hit like any other, and the top one wins locked or not", () => {
+  const unlocked = { id: "unlocked", rect: r, z: 0, locked: false };
+  // Alone, a locked item is found, so that it can be selected and unlocked.
+  expect(hitTest([{ id: "locked", rect: r, z: 0, locked: true }], { x: 20, y: 20 })).toBe("locked");
+  // Locked over unlocked by z: the locked one is on top, so it is the one hit.
+  expect(hitTest([unlocked, { id: "locked", rect: r, z: 9, locked: true }], { x: 20, y: 20 })).toBe("locked");
+  // Unlocked over locked: the unlocked one.
+  expect(hitTest([{ id: "locked", rect: r, z: 0, locked: true }, { ...unlocked, z: 9 }], { x: 20, y: 20 })).toBe("unlocked");
+  // A locked item has the same inclusive edges as any other, and a miss is still a miss.
+  const locked = [{ id: "locked", rect: r, z: 0, locked: true }];
+  expect(hitTest(locked, { x: 10, y: 10 })).toBe("locked");
+  expect(hitTest(locked, { x: 110, y: 60 })).toBe("locked");
+  expect(hitTest(locked, { x: 111, y: 60 })).toBeNull();
 });
 
 test("hitTest breaks a z tie in favour of the later item", () => {
@@ -190,10 +197,10 @@ test("hitTest prefers a later page's node over an earlier page's node with a hig
   expect(hitTest([...items].reverse(), { x: 20, y: 20 })).toBe("late-low");
 });
 
-test("hitTest falls through a locked node of a later page to the unlocked one below it", () => {
+test("hitTest finds a locked node of a later page over the unlocked one below it", () => {
   const items = [
     { id: "early", rect: r, z: 0, locked: false, layer: 0 },
     { id: "late-locked", rect: r, z: 0, locked: true, layer: 1 },
   ];
-  expect(hitTest(items, { x: 20, y: 20 })).toBe("early");
+  expect(hitTest(items, { x: 20, y: 20 })).toBe("late-locked");
 });

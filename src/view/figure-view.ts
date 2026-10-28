@@ -328,6 +328,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return this.pointer.deleteSelected();
   }
 
+  /** The natural size of the image a node shows (waiting for it to load); rejects for a node that shows no image. */
+  imageSize(id: NodeId): Promise<{ width: number; height: number }> {
+    return this.nodeHost.naturalSize(id);
+  }
+
   /** Opens a link target from this figure's place in the vault, in a new tab when asked to (the badge on a node, and the Open source command). */
   openLink(linktext: string, newLeaf: PaneType | boolean = false): void {
     void this.app.workspace.openLinkText(linktext, this.file?.path ?? "", newLeaf);

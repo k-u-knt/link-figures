@@ -100,15 +100,17 @@ test("a file node is told as well: what a double-click does is its type's busine
   expect(told()).toEqual([["p-file", "lf-activate", false]]);
 });
 
-test("nothing is told for a double-click on empty canvas or paper, or on a locked node", () => {
-  const { dblclick, told } = setup((d) => {
-    text(d, { id: "p-aaaa", x: 10, y: 20, width: 100, height: 40 });
-    text(d, { id: "p-lock", x: 300, y: 300, width: 50, height: 50, locked: true });
-  });
+test("nothing is told for a double-click on empty canvas or paper", () => {
+  const { dblclick, told } = setup((d) => { text(d, { id: "p-aaaa", x: 10, y: 20, width: 100, height: 40 }); });
   dblclick(500, 20);
   dblclick(-30, -30);
-  dblclick(320, 320);
   expect(told()).toEqual([]);
+});
+
+test("a locked node is told like any other: whether it edits is its type's business (the text node refuses)", () => {
+  const { dblclick, told } = setup((d) => { text(d, { id: "p-lock", x: 300, y: 300, width: 50, height: 50, locked: true }); });
+  dblclick(320, 320);
+  expect(told()).toEqual([["p-lock", "lf-activate", false]]);
 });
 
 test("nothing is told in a read-only view, or for a double-click inside text being edited", () => {

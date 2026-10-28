@@ -327,6 +327,11 @@
   outline: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
 }
 
+/* A locked panel can be selected, to be unlocked in the inspector, but not reshaped: its outline is dashed and it has no handles. */
+.lf-selection.is-locked {
+  outline-style: dashed;
+}
+
 /* Handles opt back in to pointer events (for their cursor); the pointer controller finds them in the model. */
 .lf-handle {
   position: absolute;

@@ -77,8 +77,9 @@ export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean }
 }
 
 /**
- * The unlocked item under `p` that is drawn on top: the highest `layer` (the position of its page, later pages being
- * drawn over earlier ones; 0 when not given), then the highest `z`, then the later item.
+ * The item under `p` that is drawn on top: the highest `layer` (the position of its page, later pages being drawn over
+ * earlier ones; 0 when not given), then the highest `z`, then the later item. Locked items count, so that they can be
+ * selected and unlocked (what may then be done to them is for the callers to refuse).
  */
 export function hitTest(
   items: { id: NodeId; rect: Rect; z: number; locked: boolean; layer?: number }[],
@@ -86,7 +87,7 @@ export function hitTest(
 ): NodeId | null {
   let top: { id: NodeId; z: number; layer: number } | null = null;
   for (const item of items) {
-    if (item.locked || !rectContainsPt(item.rect, p)) continue;
+    if (!rectContainsPt(item.rect, p)) continue;
     const layer = item.layer ?? 0;
     if (!top || layer > top.layer || (layer === top.layer && item.z >= top.z)) top = { id: item.id, z: item.z, layer };
   }

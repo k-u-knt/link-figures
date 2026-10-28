@@ -1,4 +1,5 @@
 import { registerBuiltinCommands, restack, type EditorView } from "../../src/commands/builtin";
+import { MIN_NODE_PX } from "../../src/constants";
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
@@ -13,6 +14,8 @@ class FakeView implements EditorView {
   selection: NodeId[] = [];
   readOnly = false;
   calls: string[] = [];
+  /** The natural size of the image each node shows; a node without an entry shows no image. */
+  sizes: Record<NodeId, { width: number; height: number }> = {};
   constructor(public store: DocumentStore, public pageIndex = 0) {}
   selectedIds(): NodeId[] { return [...this.selection]; }
   /** The page the stage is centred on (`pageIndex`). */
@@ -25,6 +28,7 @@ class FakeView implements EditorView {
   requestExport(): void { this.calls.push("export"); }
   deleteSelection(): boolean { this.calls.push("delete"); return true; }
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
+  imageSize = (id: NodeId) => (this.sizes[id] ? Promise.resolve(this.sizes[id]) : Promise.reject(new Error("no image")));
   commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
 }
@@ -57,6 +61,7 @@ test("the built-in commands, in toolbar order, with the icons and groups of the 
     "insert/insert-text/type",
     "arrange/bring-forward/arrow-up",
     "arrange/send-backward/arrow-down",
+    "arrange/reset-aspect/ratio",
     "page/add-page/file-plus",
     "page/delete-page/file-minus",
     "view/fit-page/maximize",
@@ -117,6 +122,7 @@ test("selection commands apply only with a selection; an empty figure runs every
   const { command, ctx, view } = setup();
   for (const id of ["delete", "duplicate", "bring-forward", "send-backward", "open-source"]) expect(command(id).applies(ctx())).toBe(false);
   for (const id of ["duplicate", "bring-forward", "send-backward", "open-source"]) expect(() => command(id).run(ctx())).not.toThrow();
+  expect(command("reset-aspect").applies(ctx())).toBe(false);
   expect(view.store.doc.nodes).toEqual([]);
 });
 
@@ -285,6 +291,131 @@ test("bring forward and send backward swap with the nearest node on the same pag
   const doc = store.doc;
   command("send-backward").run(ctx());
   expect(store.doc).toBe(doc);
+});
+
+describe("reset-aspect", () => {
+  const crop = { x: 0.5, y: 0, w: 0.5, h: 1 };
+  const heights = (store: DocumentStore) => Object.fromEntries(store.doc.nodes.map((n) => [n.id, n.height]));
+
+  test("is in the palette and the toolbar's arrange group, after Send backward, with no hotkey", () => {
+    const { plugin } = setup();
+    expect(plugin.commands.find((c) => c.id === "lf-reset-aspect").name).toBe("Reset aspect ratio");
+    expect(plugin.registries.commands.get("reset-aspect")).toMatchObject({ name: "Reset aspect ratio", group: "arrange", icon: "ratio" });
+    expect(plugin.registries.commands.get("reset-aspect")!.hotkeys).toBeUndefined();
+  });
+
+  test("keeps the width and sets the height from the image and its crop", async () => {
+    const { command, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-a", width: 100, height: 100 }); });
+    view.sizes = { "p-a": { width: 200, height: 100 } };
+    view.selection = ["p-a"];
+
+    await command("reset-aspect").run(ctx());
+    expect(store.doc.nodes[0]).toMatchObject({ width: 100, height: 50 });
+
+    // The same node cropped to the right half of the image: 100 × 100 px of it, a square.
+    store.commit("crop", (d) => { (d.nodes[0] as Extract<Node, { type: "file" }>).crop = crop; });
+    await command("reset-aspect").run(ctx());
+    expect(store.doc.nodes[0]).toMatchObject({ width: 100, height: 100 });
+  });
+
+  test("rounds the height to hundredths and never takes it under the least a node may be", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-odd", width: 100, height: 10 });
+      fileNode(d, { id: "p-thin", width: 100, height: 10 });
+    });
+    view.sizes = { "p-odd": { width: 3, height: 2 }, "p-thin": { width: 100000, height: 1 } };
+    view.selection = ["p-odd", "p-thin"];
+    await command("reset-aspect").run(ctx());
+    expect(store.doc.nodes[0].height).toBe(66.67);
+    expect(store.doc.nodes[1].height).toBe(MIN_NODE_PX);
+  });
+
+  test("applies to unlocked image panels only, skips a node whose size is unknown, and is one undo step", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-a", width: 100, height: 100 });
+      fileNode(d, { id: "p-b", width: 80, height: 100 });
+      fileNode(d, { id: "p-unknown", width: 100, height: 100 });
+      fileNode(d, { id: "p-locked", width: 100, height: 100, locked: true });
+      fileNode(d, { id: "p-content", width: 100, height: 100, show: "content" } as Partial<Node>);
+      d.nodes.push(textNodeDefaults(d.pages[0], { id: "p-text", width: 100, height: 100 }, d.nodes.map((n) => n.id)));
+    });
+    view.sizes = {
+      "p-a": { width: 200, height: 100 },
+      "p-b": { width: 100, height: 100 },
+      "p-locked": { width: 200, height: 100 },
+      "p-content": { width: 200, height: 100 },
+      "p-text": { width: 200, height: 100 },
+    };
+    const reset = command("reset-aspect");
+
+    // Nothing selected, or only what it does not apply to.
+    expect(reset.applies(ctx())).toBe(false);
+    for (const only of ["p-locked", "p-content", "p-text"]) {
+      view.selection = [only];
+      expect(reset.applies(ctx())).toBe(false);
+    }
+    // One image panel among others is enough; a node of unknown size is still an image panel.
+    view.selection = ["p-locked", "p-content", "p-text", "p-a"];
+    expect(reset.applies(ctx())).toBe(true);
+    view.selection = ["p-unknown"];
+    expect(reset.applies(ctx())).toBe(true);
+
+    view.selection = ["p-a", "p-b", "p-unknown", "p-locked", "p-content", "p-text"];
+    await reset.run(ctx());
+    expect(heights(store)).toEqual({ "p-a": 50, "p-b": 80, "p-unknown": 100, "p-locked": 100, "p-content": 100, "p-text": 100 });
+
+    // One commit for all of them.
+    store.undo();
+    expect(heights(store)).toEqual({ "p-a": 100, "p-b": 100, "p-unknown": 100, "p-locked": 100, "p-content": 100, "p-text": 100 });
+    expect(store.canUndo()).toBe(false);
+  });
+
+  test("leaves a panel whose crop has no area as it is, rather than writing a height that is not a number", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-flat", width: 100, height: 70, crop: { x: 0.2, y: 0.2, w: 0, h: 0.5 } } as Partial<Node>);
+    });
+    view.sizes = { "p-flat": { width: 200, height: 100 } };
+    view.selection = ["p-flat"];
+    await command("reset-aspect").run(ctx());
+    expect(store.doc.nodes[0].height).toBe(70);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  test("leaves a panel that was locked while its size was awaited as it was", async () => {
+    const { command, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-a", width: 100, height: 100 }); });
+    view.sizes = { "p-a": { width: 200, height: 100 } };
+    view.selection = ["p-a"];
+    const done = command("reset-aspect").run(ctx());
+    store.commit("inspector", (d) => { d.nodes[0].locked = true; });
+    await done;
+    expect(store.doc.nodes[0].height).toBe(100);
+  });
+
+  test("makes no commit when no height changes, or when no size is known", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-fits", width: 100, height: 50 });
+      fileNode(d, { id: "p-unknown", width: 100, height: 100 });
+    });
+    view.sizes = { "p-fits": { width: 200, height: 100 } };
+    const doc = store.doc;
+    view.selection = ["p-fits", "p-unknown"];
+    await command("reset-aspect").run(ctx());
+    expect(store.doc).toBe(doc);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  test("leaves out a node that went from the document while its size was awaited", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-gone", width: 100, height: 100 });
+      fileNode(d, { id: "p-here", width: 100, height: 100 });
+    });
+    view.sizes = { "p-gone": { width: 200, height: 100 }, "p-here": { width: 200, height: 100 } };
+    view.selection = ["p-gone", "p-here"];
+    const done = command("reset-aspect").run(ctx());
+    store.commit("delete", (d) => { d.nodes = d.nodes.filter((n) => n.id !== "p-gone"); });
+    await done;
+    expect(heights(store)).toEqual({ "p-here": 50 });
+  });
 });
 
 test("add page puts a page of the same preset after the current one", () => {

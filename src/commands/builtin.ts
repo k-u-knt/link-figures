@@ -1,8 +1,9 @@
+import { MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, pageSizePx } from "../model/geometry";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
-import type { Node, NodeId, Page, PageId } from "../model/types";
+import type { FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
 import type { Command, CommandContext, FigureViewLike } from "../registry/command";
 import { roundPx } from "../view/pointer-math";
@@ -19,6 +20,8 @@ export interface EditorView extends FigureViewLike {
   deleteSelection(): boolean;
   /** Opens a link target (`file`, `file#subpath`) from the figure's own place in the vault, as the badge on a node does. */
   openLink(linktext: string, newLeaf?: boolean): void;
+  /** The natural size of the image a node shows, once it has loaded; rejects for a node that shows no image. */
+  imageSize(id: NodeId): Promise<{ width: number; height: number }>;
 }
 
 const editor = (ctx: CommandContext): EditorView => ctx.view as EditorView;
@@ -164,6 +167,44 @@ function linkedFileNode(ctx: CommandContext): Extract<Node, { type: "file" }> | 
   return node?.type === "file" && node.file !== "" ? node : undefined;
 }
 
+/** Whether `node` is a file node that shows an image and may be changed: the kind of panel whose box can follow its image. */
+function isUnlockedImage(node: Node | undefined): node is FileNode {
+  return node?.type === "file" && node.show === "image" && !node.locked;
+}
+
+/**
+ * Gives each selected image panel the height its image has at the panel's width: the image's own aspect ratio, or the
+ * crop's when the panel shows a part of it. A panel whose image size is not known (it is missing, or could not be
+ * loaded) is left as it is. One commit, so one undo step; none when no height changes.
+ */
+async function resetAspect(ctx: CommandContext): Promise<void> {
+  const view = editor(ctx);
+  const selected = new Set(ctx.selection);
+  const panels = ctx.store.doc.nodes.filter((n): n is FileNode => selected.has(n.id) && isUnlockedImage(n));
+  const sizes = new Map<NodeId, { width: number; height: number }>();
+  await Promise.all(
+    panels.map(async (panel) => {
+      try {
+        sizes.set(panel.id, await view.imageSize(panel.id));
+      } catch {
+        // No image to take the aspect ratio from.
+      }
+    }),
+  );
+  if (sizes.size === 0) return;
+  // The image can take a while to load, so the panels are looked up again: one may have been deleted, locked or reshaped meanwhile.
+  ctx.store.commit("reset-aspect", (draft) => {
+    for (const node of draft.nodes) {
+      const size = sizes.get(node.id);
+      if (!size || !isUnlockedImage(node)) continue;
+      const aspect = ((node.crop?.w ?? 1) * size.width) / ((node.crop?.h ?? 1) * size.height);
+      // A crop with no area has no aspect ratio.
+      if (!Number.isFinite(aspect) || aspect <= 0) continue;
+      node.height = Math.max(MIN_NODE_PX, roundPx(node.width / aspect));
+    }
+  });
+}
+
 /** Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). */
 function builtinCommands(): Command[] {
   return [
@@ -181,6 +222,14 @@ function builtinCommands(): Command[] {
     { id: "insert-text", name: "Text", icon: "type", group: "insert", applies: (ctx) => !!ctx.page, run: insertText },
     stackCommand("bring-forward", "Bring forward", "arrow-up", "forward"),
     stackCommand("send-backward", "Send backward", "arrow-down", "backward"),
+    {
+      id: "reset-aspect",
+      name: "Reset aspect ratio",
+      icon: "ratio",
+      group: "arrange",
+      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(n)),
+      run: resetAspect,
+    },
     { id: "add-page", name: "Add page", icon: "file-plus", group: "page", applies: () => true, run: addPage },
     { id: "delete-page", name: "Delete page", icon: "file-minus", group: "page", applies: (ctx) => ctx.store.doc.pages.length > 1, run: deletePage },
     { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", applies: () => true, run: (ctx) => ctx.view.fitPage() },

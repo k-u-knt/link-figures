@@ -119,6 +119,18 @@ export class DocumentStore {
     });
   }
 
+  /**
+   * Follows a renamed source into history. `renames` maps the `file` a link names a renamed source by to the one it names
+   * it by now; every node value that undo or redo would bring back, and every edit of a link, with such a `file` is given
+   * the new one (its subpath stays). This is for the nodes that are in no file for Obsidian to rewrite (a deleted panel);
+   * the current document is left as it is, as Obsidian rewrites the figure's own links, and no event is emitted.
+   */
+  rebasePaths(renames: ReadonlyMap<string, string>): void {
+    if (renames.size === 0) return;
+    for (const entry of this.undoStack) rebasePathsIn(entry, renames);
+    for (const entry of this.redoStack) rebasePathsIn(entry, renames);
+  }
+
   subscribe(fn: (ev: ChangeEvent) => void): () => void {
     this.listeners.add(fn);
     return () => { this.listeners.delete(fn); };
@@ -224,6 +236,35 @@ function relinkValue(value: unknown, links: ReadonlyMap<NodeId, Link>): unknown 
   const id = typeof value === "object" && value !== null ? (value as { id?: unknown }).id : undefined;
   const link = typeof id === "string" ? links.get(id) : undefined;
   return link ? { ...(value as object), ...link } : value;
+}
+
+/**
+ * What `rebaseHistory` does by node id, by link instead: a node value (or list of them) at `["nodes"]` or `["nodes", i]`
+ * whose `file` is in `renames`, and a `["nodes", i, "file"]` patch whose value is, get the new `file`.
+ */
+function rebasePathsIn(entry: HistoryEntry, renames: ReadonlyMap<string, string>): void {
+  const rebase = (patches: Patch[]): Patch[] =>
+    patches.map(patch => {
+      if (patch.path[0] !== "nodes" || !("value" in patch)) return patch;
+      let value: unknown = patch.value;
+      if (patch.path.length <= 2) value = renameInValue(patch.value, renames);
+      else if (patch.path.length === 3 && patch.path[2] === "file" && typeof patch.value === "string") value = renames.get(patch.value) ?? patch.value;
+      return value === patch.value ? patch : { ...patch, value };
+    });
+  entry.patches = rebase(entry.patches);
+  entry.inversePatches = rebase(entry.inversePatches);
+}
+
+/** `value` (a node, or a list of nodes) with each file node's `file` that is in `renames` replaced; the same object when none is. */
+function renameInValue(value: unknown, renames: ReadonlyMap<string, string>): unknown {
+  if (Array.isArray(value)) {
+    const renamed = value.map(item => renameInValue(item, renames));
+    return renamed.some((item, i) => item !== value[i]) ? renamed : value;
+  }
+  if (typeof value !== "object" || value === null) return value;
+  const node = value as { type?: unknown; file?: unknown };
+  const file = node.type === "file" && typeof node.file === "string" ? renames.get(node.file) : undefined;
+  return file === undefined ? value : { ...node, file };
 }
 
 /** The ids of the nodes that are in only one of the lists, or are in both and differ. */

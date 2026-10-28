@@ -465,3 +465,65 @@ describe("replace keeping history: what history holds of a node follows the node
     expect(next).toEqual(snapshot);
   });
 });
+
+describe("rebasePaths: a source renamed while a node that links to it is only in history", () => {
+  type Linked = { file: string; subpath: string };
+  const linkOf = (d: Document, id: string): string => {
+    const n = d.nodes.find(x => x.id === id) as unknown as Linked | undefined;
+    return n ? `${n.file}${n.subpath}` : "(absent)";
+  };
+  const deleted = (file: string, subpath = "") => {
+    const d = docWith(2);
+    Object.assign(d.nodes[1], { file, subpath });
+    const s = new DocumentStore(d);
+    const [a, b] = s.doc.nodes.map(n => n.id);
+    s.commit("delete", d => { d.nodes = d.nodes.filter(n => n.id !== b); });
+    return { s, a, b };
+  };
+
+  test("undo brings a deleted panel back with the renamed file", () => {
+    const { s, b } = deleted("only-here.svg");
+    s.rebasePaths(new Map([["only-here.svg", "only-here-2.svg"]]));
+    s.undo();
+    expect(linkOf(s.doc, b)).toBe("only-here-2.svg");
+  });
+
+  test("redo after undo after the rename keeps the new name", () => {
+    const { s, a, b } = deleted("only-here.svg");
+    s.rebasePaths(new Map([["only-here.svg", "only-here-2.svg"]]));
+    s.undo();
+    s.redo();
+    expect(s.doc.nodes.map(n => n.id)).toEqual([a]);
+    s.undo();
+    expect(linkOf(s.doc, b)).toBe("only-here-2.svg");
+  });
+
+  test("the redo stack is rebased too, and an edit of the link itself", () => {
+    const s = new DocumentStore(docWith(1));
+    const [a] = s.doc.nodes.map(n => n.id);
+    s.commit("relink", d => { (d.nodes[0] as unknown as Linked).file = "only-here.svg"; });
+    s.undo();
+    s.rebasePaths(new Map([["only-here.svg", "only-here-2.svg"]]));
+    s.redo();
+    expect(linkOf(s.doc, a)).toBe("only-here-2.svg");
+  });
+
+  test("the subpath is kept", () => {
+    const { s, b } = deleted("analysis", "#Legend");
+    s.rebasePaths(new Map([["analysis", "results"]]));
+    s.undo();
+    expect(linkOf(s.doc, b)).toBe("results#Legend");
+  });
+
+  test("a rename of an unrelated file changes nothing, and the current document is untouched", () => {
+    const { s, a, b } = deleted("only-here.svg");
+    const current = s.doc;
+    const events = record(s);
+    s.rebasePaths(new Map([["other.svg", "other-2.svg"]]));
+    expect(s.doc).toBe(current);
+    expect(linkOf(s.doc, a)).toBe("0.png");
+    expect(events).toEqual([]);
+    s.undo();
+    expect(linkOf(s.doc, b)).toBe("only-here.svg");
+  });
+});

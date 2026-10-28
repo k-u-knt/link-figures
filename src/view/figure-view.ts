@@ -1,4 +1,4 @@
-import { Notice, TextFileView, type PaneType, type WorkspaceLeaf } from "obsidian";
+import { Notice, TextFileView, TFile, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
 import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
@@ -9,6 +9,7 @@ import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
 import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
+import { renamedLinkFiles } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
@@ -127,6 +128,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
         if (file.path === this.file?.path) void this.onExternalModify();
       }),
     );
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onVaultRename(file, oldPath)));
   }
 
   async onClose(): Promise<void> {
@@ -204,6 +206,20 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     const { doc, changedIds } = applyLinkEntries(this.store.doc, links);
     // The store tells the node host, which resolves just these nodes, and the view does not save: the file already says this.
     if (changedIds.length > 0) this.store.replace(doc, "links", { keepHistory: true });
+  }
+
+  /**
+   * A file in the vault was renamed. Obsidian rewrites the links of the figure's nodes (see `reloadLinks`), but a node that
+   * is only in the undo history, such as a deleted panel, is in no file for it to rewrite: its link is rewritten here, so
+   * that undo brings it back linked to the file's new name.
+   */
+  private onVaultRename(file: TAbstractFile, oldPath: string): void {
+    const figurePath = this.file?.path;
+    if (!(file instanceof TFile) || !figurePath || !this.loaded || this.readOnly) return;
+    const renames = renamedLinkFiles(oldPath, file.path, figurePath, this.plugin.access, (omitMd) =>
+      this.app.metadataCache.fileToLinktext(file, figurePath, omitMd),
+    );
+    this.store.rebasePaths(renames);
   }
 
   /** The figure file was modified. Whoever wrote it, if it was not this view, its Links section may have been rewritten. */

@@ -87,3 +87,32 @@ export async function resolveFileNode(
   }
   return missing("no-image", deps);
 }
+
+/**
+ * For a file renamed from `oldPath` to `newPath`, the `file` a node in the figure at `figurePath` may have named it by
+ * (its full path or any shorter tail of it, and for a note each without `.md`), mapped to what to name it by now. A
+ * name counts only if it finds no file now: one that still does named that file before the rename as well, or (a
+ * folder move) names the renamed file still. A full path stays a full path; a shorter name becomes `linktext`'s, which
+ * is Obsidian's own linktext for the renamed file (without `.md` when asked to omit it).
+ */
+export function renamedLinkFiles(
+  oldPath: string,
+  newPath: string,
+  figurePath: string,
+  access: Pick<VaultAccess, "resolveLink">,
+  linktext: (omitMdExtension: boolean) => string,
+): Map<string, string> {
+  const renames = new Map<string, string>();
+  const isNote = /\.md$/i.test(oldPath);
+  const parts = oldPath.split("/");
+  for (let i = 0; i < parts.length; i++) {
+    const tail = parts.slice(i).join("/");
+    const forms: [string, boolean][] = [[tail, false]];
+    if (isNote) forms.push([tail.replace(/\.md$/i, ""), true]);
+    for (const [name, omitMd] of forms) {
+      if (renames.has(name) || access.resolveLink(name, figurePath) !== null) continue;
+      renames.set(name, i > 0 ? linktext(omitMd) : omitMd ? newPath.replace(/\.md$/i, "") : newPath);
+    }
+  }
+  return renames;
+}

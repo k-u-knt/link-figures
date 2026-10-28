@@ -5,6 +5,7 @@ import type { ChangeEvent } from "../../src/model/store";
 import type { Document, FileNode } from "../../src/model/types";
 import type { Command } from "../../src/registry/command";
 import { LinkFiguresView } from "../../src/view/figure-view";
+import { TFile } from "obsidian";
 
 // The view's base class and everything it draws with are stubs: what is tested is how the view takes up a changed file.
 vi.mock("obsidian", () => {
@@ -64,8 +65,12 @@ function setup(initial: Document = figure()) {
     return { name, cb };
   };
   const disk = { text: "" };
-  const app = { vault: { on, cachedRead: vi.fn(async () => disk.text) }, metadataCache: { on } };
-  const plugin = { app, registries: { nodeTypes: {} }, access: {}, decoders: {} };
+  // Obsidian's own linktext for a file: its name alone, as when the name is unique in the vault.
+  const fileToLinktext = vi.fn((file: { name: string }, _from: string, omitMd = true) => (omitMd ? file.name.replace(/\.md$/, "") : file.name));
+  const app = { vault: { on, cachedRead: vi.fn(async () => disk.text) }, metadataCache: { on, fileToLinktext } };
+  /** The files that a linktext finds, the figure's own folder aside: by default none. */
+  const resolveLink = vi.fn((_path: string, _from: string): { path: string; extension: string } | null => null);
+  const plugin = { app, registries: { nodeTypes: {} }, access: { resolveLink }, decoders: {} };
   const view = new LinkFiguresView({ app } as never, plugin as never);
   const internals = view as unknown as Record<string, unknown>;
 
@@ -122,7 +127,7 @@ function setup(initial: Document = figure()) {
     (view.app.vault.cachedRead as ReturnType<typeof vi.fn>).mockClear();
     events.length = 0;
   };
-  return { view, nodeHost, pointer, selection, toolbar, inspector, disk, text0, events, obsidianLoads, vaultModifies, resetCalls, vaultHandlers, rewatch: () => { unwatch(); unwatch = watch(); } };
+  return { resolveLink, view, nodeHost, pointer, selection, toolbar, inspector, disk, text0, events, obsidianLoads, vaultModifies, resetCalls, vaultHandlers, rewatch: () => { unwatch(); unwatch = watch(); } };
 }
 
 const link = (view: LinkFiguresView, index: number) => {
@@ -596,4 +601,78 @@ test("the node a text label stands for is never reloaded as a file", () => {
   t.obsidianLoads(t.text0.replace("![[plot.png]]", "![[plot2.png]]"));
   expect(t.view.store.doc.nodes[2]).toBe(label);
   expect(loadDocument(t.view.getViewData()).doc.nodes[2]).toEqual(label);
+});
+
+describe("a source renamed while a panel that links to it is deleted", () => {
+  /** A vault file as the rename event hands it over: already at its new path. */
+  const vaultFile = (path: string) => {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return Object.assign(new TFile(), { path, name, extension: name.slice(name.lastIndexOf(".") + 1) });
+  };
+  async function deleted(file: string, subpath = "", show: "image" | "content" = "image") {
+    const doc = figure();
+    doc.nodes.push(fileNodeDefaults(doc.pages[0], { file, subpath, show }, doc.nodes.map((n) => n.id)));
+    const t = setup(doc);
+    await t.view.onOpen();
+    const store = t.view.store;
+    const gone = store.doc.nodes[3];
+    store.commit("delete", (d) => void (d.nodes = d.nodes.filter((n) => n.id !== gone.id)));
+    const renames = (newPath: string, oldPath: string) => {
+      for (const cb of t.vaultHandlers.get("rename") ?? []) cb(vaultFile(newPath), oldPath);
+    };
+    return { ...t, store, gone, renames };
+  }
+  const restored = (t: { store: LinkFiguresView["store"] }, id: string) => {
+    const node = t.store.doc.nodes.find((n) => n.id === id) as FileNode | undefined;
+    return node ? `${node.file}${node.subpath}` : "(absent)";
+  };
+
+  test("undo brings the panel back with the new name, in the figure and in what is saved", async () => {
+    const t = await deleted("only-here.svg");
+    t.renames("only-here-2.svg", "only-here.svg");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("only-here-2.svg");
+    expect(t.view.getViewData()).toContain("![[only-here-2.svg]]");
+    expect(t.view.getViewData()).not.toContain("![[only-here.svg]]");
+  });
+
+  test("redo after undo after the rename keeps the new name", async () => {
+    const t = await deleted("only-here.svg");
+    t.renames("only-here-2.svg", "only-here.svg");
+    t.store.undo();
+    t.store.redo();
+    expect(restored(t, t.gone.id)).toBe("(absent)");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("only-here-2.svg");
+  });
+
+  test("a rename of an unrelated file changes nothing", async () => {
+    const t = await deleted("only-here.svg");
+    t.renames("other-2.svg", "other.svg");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("only-here.svg");
+    expect(link(t.view, 0)).toBe("plot.png");
+  });
+
+  test("a link written as the full path keeps that form, and a note's subpath stays", async () => {
+    const t = await deleted("notes/results", "#Legend", "content");
+    t.renames("notes/findings.md", "notes/results.md");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("notes/findings#Legend");
+  });
+
+  test("a short name is matched against the renamed file's own path, and given Obsidian's linktext for the new one", async () => {
+    const t = await deleted("only-here.svg");
+    t.renames("plots/only-here-2.svg", "plots/only-here.svg");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("only-here-2.svg");
+  });
+
+  test("a name that still finds another file is not taken for the renamed one", async () => {
+    const t = await deleted("only-here.svg");
+    t.resolveLink.mockImplementation((path) => (path === "only-here.svg" ? { path: "elsewhere/only-here.svg", extension: "svg" } : null));
+    t.renames("plots/only-here-2.svg", "plots/only-here.svg");
+    t.store.undo();
+    expect(restored(t, t.gone.id)).toBe("only-here.svg");
+  });
 });

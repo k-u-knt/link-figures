@@ -1,4 +1,5 @@
 import { decodePDFRawStream, degrees, PDFDict, PDFDocument, PDFName, PDFPage, PDFRawStream, type PDFContext } from "@cantoo/pdf-lib";
+import { readFileSync } from "node:fs";
 import { PX_TO_PT } from "../../src/constants";
 import type { PdfAsset } from "../../src/export/asset-types";
 import { pdfExporter } from "../../src/export/exporters/pdf";
@@ -40,16 +41,20 @@ const own = (bytes: Uint8Array): ArrayBuffer => bytes.buffer.slice(bytes.byteOff
  */
 async function pdfWith(
   content: string,
-  resources: (make: Makers) => Record<string, unknown> = () => ({}),
-  options: { size?: [number, number]; cropBox?: [number, number, number, number]; rotate?: number; filter?: string; pages?: number } = {},
+  resources: (make: Makers, context: PDFContext) => Record<string, unknown> = () => ({}),
+  options: { size?: [number, number]; cropBox?: [number, number, number, number]; rotate?: number; filter?: string; decodeParms?: Record<string, unknown>; userUnit?: number; pages?: number } = {},
 ): Promise<ArrayBuffer> {
   const doc = await PDFDocument.create();
   const context = doc.context;
   const make = makers(context);
   for (let i = 0; i < (options.pages ?? 1); i++) {
     const page = doc.addPage(options.size ?? [200, 200]);
-    page.node.set(PDFName.of("Resources"), context.obj(resources(make) as never));
-    const stream = context.stream(content, options.filter ? { Filter: options.filter } : {});
+    page.node.set(PDFName.of("Resources"), context.obj(resources(make, context) as never));
+    const stream = context.stream(content, {
+      ...(options.filter ? { Filter: options.filter } : {}),
+      ...(options.decodeParms ? { DecodeParms: options.decodeParms as never } : {}),
+    });
+    if (options.userUnit !== undefined) page.node.set(PDFName.of("UserUnit"), context.obj(options.userUnit));
     page.node.set(PDFName.of("Contents"), context.register(stream));
     if (options.cropBox) page.setCropBox(...options.cropBox);
     if (options.rotate) page.setRotation(degrees(options.rotate));
@@ -146,14 +151,15 @@ test("the page asked for is the one trimmed, and the result has that page only",
   expect((await read(trimmed.bytes)).doc.getPageCount()).toBe(1);
 });
 
-test("an image and a font used only by removed drawings leave the resources; the others stay", async () => {
+test("an image, a font and a graphics state used only by removed drawings leave the resources; the others stay", async () => {
   const source = await pdfWith(
-    `q 20 0 0 20 10 150 cm /ImIn Do Q q 20 0 0 20 150 20 cm /ImOut Do Q ` +
+    `q /GSIn gs 20 0 0 20 10 150 cm /ImIn Do Q q 20 0 0 20 150 20 cm /ImOut Do Q ` +
       `BT /FIn 10 Tf 10 120 Td (Hi) Tj ET BT /FOut 10 Tf 150 50 Td (Hi) Tj ET`,
     (make) => ({
       XObject: { ImIn: make.image(), ImOut: make.image() },
       Font: { FIn: make.font(), FOut: make.font("Times-Roman") },
-      ExtGState: { GSUnused: { CA: 0.5 } },
+      ExtGState: { GSIn: { CA: 0.5 }, GSUnused: { CA: 0.5 } },
+      ColorSpace: { CSUnused: "DeviceRGB" },
     }),
   );
   const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
@@ -161,8 +167,9 @@ test("an image and a font used only by removed drawings leave the resources; the
   const out = await read(trimmed.bytes);
   expect(namesIn(out.resources, "XObject")).toEqual(["ImIn"]);
   expect(namesIn(out.resources, "Font")).toEqual(["FIn"]);
-  // Categories that are not pruned are copied as they are.
-  expect(namesIn(out.resources, "ExtGState")).toEqual(["GSUnused"]);
+  expect(namesIn(out.resources, "ExtGState")).toEqual(["GSIn"]);
+  // Colour spaces (and marked-content properties) are not pruned: they are copied as they are.
+  expect(namesIn(out.resources, "ColorSpace")).toEqual(["CSUnused"]);
 });
 
 test("a drawing wrapped whole in one form is trimmed inside the form, and the page draws the trimmed copy", async () => {
@@ -245,14 +252,94 @@ test("a form nested deeper than 8 is kept whole, and said so", async () => {
   expect(trimmed.notes).toEqual(["a nested drawing deeper than 8 levels was kept whole"]);
 });
 
-test("when a form borrows the page's resources, the page's resources are not pruned", async () => {
-  // Fm0 has no Resources of its own: its /Im0 is the page's.
-  const source = await pdfWith(`/Fm0 Do ${OUTSIDE} q 20 0 0 20 150 20 cm /ImOut Do Q`, (make) => ({
-    XObject: { Fm0: make.form("q 20 0 0 20 10 150 cm /Im0 Do Q", [0, 0, 200, 200]), Im0: make.image(), ImOut: make.image() },
-  }));
-  const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
-  expect(trimmed.removed).toBe(2);
-  expect(namesIn((await read(trimmed.bytes)).resources, "XObject")).toEqual(["Fm0", "Im0", "ImOut"]);
+describe("drawings that read the page's resources (no Resources of their own)", () => {
+  // OUTSIDE_IMAGE is the only use of /ImOut, so it goes; what the borrowing drawing names must stay.
+  const OUTSIDE_IMAGE = "q 20 0 0 20 150 20 cm /ImOut Do Q";
+
+  test("a marker form: its names stay, an image only drawn outside goes", async () => {
+    const source = await pdfWith(`q 1 0 0 1 10 150 cm /M0 Do Q ${OUTSIDE_IMAGE}`, (make) => ({
+      XObject: { M0: make.form("/GSm gs q 5 0 0 5 0 0 cm /ImM Do Q", [0, 0, 5, 5]), ImM: make.image(), ImOut: make.image() },
+      ExtGState: { GSm: { CA: 0.5 } },
+    }));
+    const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
+    expect(trimmed.removed).toBe(1);
+    expect(trimmed.notes).toEqual([]);
+    const out = await read(trimmed.bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual(["ImM", "M0"]);
+    expect(namesIn(out.resources, "ExtGState")).toEqual(["GSm"]);
+  });
+
+  test("a marker form drawn only outside takes its names with it", async () => {
+    const source = await pdfWith(`${INSIDE} q 1 0 0 1 150 20 cm /M0 Do Q`, (make) => ({
+      XObject: { M0: make.form("/GSm gs 0 0 5 5 re f", [0, 0, 5, 5]) },
+      ExtGState: { GSm: { CA: 0.5 } },
+    }));
+    const out = await read((await trimPdfPage(source, 0, TOP_LEFT)).bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual([]);
+    expect(namesIn(out.resources, "ExtGState")).toEqual([]);
+  });
+
+  test("a Type 3 font whose glyph draws an XObject keeps it", async () => {
+    const source = await pdfWith(`BT /T3 10 Tf 10 150 Td (a) Tj ET ${OUTSIDE_IMAGE}`, (make, context) => ({
+      Font: {
+        T3: {
+          Type: "Font",
+          Subtype: "Type3",
+          FontBBox: [0, 0, 1, 1],
+          FontMatrix: [1, 0, 0, 1, 0, 0],
+          FirstChar: 97,
+          LastChar: 97,
+          Widths: [1],
+          Encoding: { Type: "Encoding", Differences: [97, "a"] },
+          CharProcs: { a: context.register(context.stream("1 0 0 0 1 1 d1 /ImG Do")) },
+        },
+      },
+      XObject: { ImG: make.image(), ImOut: make.image() },
+    }));
+    const out = await read((await trimPdfPage(source, 0, TOP_LEFT)).bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual(["ImG"]);
+    expect(namesIn(out.resources, "Font")).toEqual(["T3"]);
+  });
+
+  test("a tiling pattern and a soft mask group keep what they draw", async () => {
+    const source = await pdfWith(`q /GSs gs /Pattern cs /P0 scn ${INSIDE} Q ${OUTSIDE_IMAGE}`, (make, context) => ({
+      Pattern: {
+        P0: context.register(
+          context.stream("/ImP Do", { PatternType: 1, PaintType: 1, TilingType: 1, BBox: [0, 0, 1, 1], XStep: 1, YStep: 1 }),
+        ),
+      },
+      ExtGState: { GSs: { SMask: { S: "Luminosity", G: make.form("/ImS Do", [0, 0, 200, 200]) } } },
+      XObject: { ImP: make.image(), ImS: make.image(), ImOut: make.image() },
+    }));
+    const out = await read((await trimPdfPage(source, 0, TOP_LEFT)).bytes);
+    expect(namesIn(out.resources, "XObject")).toEqual(["ImP", "ImS"]);
+    expect(namesIn(out.resources, "Pattern")).toEqual(["P0"]);
+  });
+
+  test("a borrowing drawing that cannot be read keeps every resource, and says so", async () => {
+    const source = await pdfWith(`q 1 0 0 1 10 150 cm /M0 Do Q ${OUTSIDE_IMAGE}`, (make, context) => ({
+      XObject: {
+        M0: context.register(context.stream("garbage", { Type: "XObject", Subtype: "Form", BBox: [0, 0, 5, 5], Filter: "DCTDecode" })),
+        ImOut: make.image(),
+      },
+    }));
+    const trimmed = await trimPdfPage(source, 0, TOP_LEFT);
+    expect(trimmed.removed).toBe(1);
+    expect(trimmed.notes).toEqual(["unused resources could not be dropped"]);
+    expect(namesIn((await read(trimmed.bytes)).resources, "XObject")).toEqual(["ImOut", "M0"]);
+  });
+
+  test("a matplotlib plot (markers as forms, a Type 3 font): the image drawn only outside is dropped", async () => {
+    // Scatter, imshow and text on a 288 × 288 pt page; the image /I1 lies wholly outside its top-left quarter.
+    const file = readFileSync(new URL("./fixtures/matplotlib-scatter.pdf", import.meta.url));
+    const trimmed = await trimPdfPage(own(file), 0, { x: 0, y: 0, width: 144, height: 144 });
+    expect(trimmed.removed).toBeGreaterThan(0);
+    expect(trimmed.notes).toEqual([]);
+    const out = await read(trimmed.bytes);
+    expect(out.content).not.toContain("/I1 Do");
+    expect(namesIn(out.resources, "XObject")).toEqual(["M0"]);
+    expect(namesIn(out.resources, "Font")).toEqual(["F1"]);
+  });
 });
 
 test("a file with only an owner password is trimmed, and the result is not encrypted", async () => {
@@ -274,6 +361,22 @@ describe("pages that cannot be trimmed safely", () => {
     const source = await pdfWith(`${INSIDE} BT ${OUTSIDE}`);
     await expect(trimPdfPage(source, 0, TOP_LEFT)).rejects.toThrow(TrimFallback);
     await expect(trimPdfPage(source, 0, TOP_LEFT)).rejects.toThrow(/could not be read/);
+  });
+
+  test("a content stream with a predictor, which pdf-lib would not undo", async () => {
+    const source = await pdfWith(INSIDE, () => ({}), { filter: "FlateDecode", decodeParms: { Predictor: 12, Columns: 4 } });
+    await expect(trimPdfPage(source, 0, TOP_LEFT)).rejects.toThrow(new TrimFallback("a content stream uses a predictor, which cannot be decoded"));
+  });
+
+  test("a filter by its abbreviated name, which pdf-lib does not know", async () => {
+    const source = await pdfWith(INSIDE, () => ({}), { filter: "Fl" });
+    await expect(trimPdfPage(source, 0, TOP_LEFT)).rejects.toThrow(new TrimFallback("a content stream is encoded with Fl, which cannot be decoded"));
+  });
+
+  test("a page with a UserUnit other than 1; a UserUnit of 1 is trimmed", async () => {
+    const source = await pdfWith(`${INSIDE} ${OUTSIDE}`, () => ({}), { userUnit: 2 });
+    await expect(trimPdfPage(source, 0, TOP_LEFT)).rejects.toThrow(new TrimFallback("the page uses a UserUnit"));
+    expect((await trimPdfPage(await pdfWith(`${INSIDE} ${OUTSIDE}`, () => ({}), { userUnit: 1 }), 0, TOP_LEFT)).removed).toBe(1);
   });
 
   test("a page with a rotation of its own", async () => {

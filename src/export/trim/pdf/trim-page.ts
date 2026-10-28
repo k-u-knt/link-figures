@@ -35,8 +35,9 @@ export class TrimFallback extends Error {
 const MAX_DEPTH = 8;
 const DEPTH_NOTE = `a nested drawing deeper than ${MAX_DEPTH} levels was kept whole`;
 
-/** The resource categories pruned to what the content names; the others are copied as they are. */
-const PRUNED = new Set(["Font", "XObject", "Shading", "Pattern"]);
+/** The resource categories pruned to what the content names; the others (ColorSpace, Properties…) are copied as they are. */
+const PRUNED = new Set(["Font", "XObject", "Shading", "Pattern", "ExtGState"]);
+const PRUNE_NOTE = "unused resources could not be dropped";
 
 /** The filters pdf-lib decodes (by their full names; it does not know the abbreviations). */
 const DECODABLE = new Set(["FlateDecode", "LZWDecode", "ASCII85Decode", "ASCIIHexDecode", "RunLengthDecode"]);
@@ -54,8 +55,6 @@ interface TrimState {
   /** The visible region in the page's user space. */
   visible: Rect;
   pageResources: PDFDict | undefined;
-  /** False when some drawing reads the page's resources from inside another stream: the page's are then kept whole. */
-  prune: boolean;
   notes: Set<string>;
   /** Trimmed form copies made so far, for their names. */
   copies: number;
@@ -93,6 +92,9 @@ async function trim(doc: PDFDocument, pageIndex: number, visible: Rect): Promise
   const page = doc.getPage(pageIndex);
   // The visible region is measured on the page as shown, which a rotation of its own would turn.
   if (page.getRotation().angle % 360 !== 0) throw new TrimFallback("the page has a rotation of its own");
+  // A UserUnit scales the page's user space, which neither the panel's size in points nor the embedding allow for.
+  const userUnit = page.node.lookup(PDFName.of("UserUnit"));
+  if (userUnit !== undefined && !(userUnit instanceof PDFNumber && userUnit.asNumber() === 1)) throw new TrimFallback("the page uses a UserUnit");
 
   const media = page.getMediaBox();
   const crop = page.getCropBox();
@@ -103,7 +105,7 @@ async function trim(doc: PDFDocument, pageIndex: number, visible: Rect): Promise
   // From the CropBox's top-left corner, y down, to user space, y up: as `pdfPanelPlacement` and the exporter measure it.
   const target: Rect = { x: crop.x + visible.x, y: crop.y + crop.height - visible.y - visible.height, width: visible.width, height: visible.height };
   const pageResources = page.node.Resources();
-  const state: TrimState = { doc, visible: target, pageResources, prune: !borrowsPageResources(pageResources), notes: new Set(), copies: 0 };
+  const state: TrimState = { doc, visible: target, pageResources, notes: new Set(), copies: 0 };
   const trimmed = trimStream(state, pageContent(page.node.lookup(PDFName.of("Contents"))), pageResources, IDENTITY, 0);
 
   const out = await PDFDocument.create();
@@ -194,7 +196,9 @@ function trimStream(
     edits.push({ start: unit.start, end: unit.end, text: `${encodeName(name)} Do` });
   }
   const bytes = splice(content, edits);
-  return { bytes, resources: prunedResources(state, resources, namesUsed(bytes), copies), removed };
+  const used = withBorrowedNames(resources, namesUsed(bytes));
+  if (!used) state.notes.add(PRUNE_NOTE);
+  return { bytes, resources: prunedResources(state, resources, used, copies), removed };
 }
 
 /** Touching the region counts as inside. */
@@ -230,11 +234,11 @@ function copyName(state: TrimState, name: string, resources: PDFDict | undefined
 }
 
 /**
- * New resources for a rewritten stream: the pruned categories keep only the names the stream uses (any name token
- * counts, whatever operator it is for, which errs on keeping), with the trimmed copies added to the XObjects; the other
- * categories are copied as they are. When pruning is off, every name is kept.
+ * New resources for a rewritten stream: the pruned categories keep only the names in `used` (any name token counts,
+ * whatever operator it is for, which errs on keeping), with the trimmed copies added to the XObjects; the other
+ * categories are copied as they are. When `used` is null (what the stream uses is not known), every name is kept.
  */
-function prunedResources(state: TrimState, resources: PDFDict | undefined, used: Set<string>, copies: Map<string, PDFRef>): PDFDict {
+function prunedResources(state: TrimState, resources: PDFDict | undefined, used: Set<string> | null, copies: Map<string, PDFRef>): PDFDict {
   const context = state.doc.context;
   const out = context.obj({});
   for (const [key, value] of resources?.entries() ?? []) {
@@ -245,7 +249,7 @@ function prunedResources(state: TrimState, resources: PDFDict | undefined, used:
       continue;
     }
     const kept = context.obj({});
-    for (const [name, object] of names.entries()) if (!state.prune || used.has(name.decodeText())) kept.set(name, object);
+    for (const [name, object] of names.entries()) if (!used || used.has(name.decodeText())) kept.set(name, object);
     if (kept.keys().length) out.set(key, kept);
   }
   if (copies.size) {
@@ -257,33 +261,50 @@ function prunedResources(state: TrimState, resources: PDFDict | undefined, used:
 }
 
 /**
- * Whether a drawing reachable from the page's resources (a form, a Type 3 font, a tiling pattern) has no resources of
- * its own and so reads the page's (allowed by older PDFs). The names it uses are then not in the page's content, so the
- * page's resources must not be pruned.
+ * `used` with the names read from the same resources by the drawings it names that have no resources of their own (a
+ * form, a Type 3 font's glyphs, a tiling pattern, an ExtGState's soft-mask group; older PDFs allow it, and matplotlib
+ * writes its markers and fonts so), followed until nothing new is named. Null when one of those drawings cannot be read.
  */
-function borrowsPageResources(resources: PDFDict | undefined, seen = new Set<PDFDict>()): boolean {
-  if (!resources || seen.has(resources)) return false;
-  seen.add(resources);
-  for (const category of ["XObject", "Font", "Pattern"]) {
-    const names = resources.lookupMaybe(PDFName.of(category), PDFDict);
-    for (const name of names?.keys() ?? []) {
-      const object = names!.lookup(name);
-      const dict = object instanceof PDFStream ? object.dict : object instanceof PDFDict ? object : undefined;
-      if (!dict) continue;
-      if (!drawsWithResources(category, dict)) continue;
-      const own = dict.lookupMaybe(RESOURCES, PDFDict);
-      if (!own || borrowsPageResources(own, seen)) return true;
+function withBorrowedNames(resources: PDFDict | undefined, used: Set<string>): Set<string> | null {
+  const read = new Set<PDFObject>();
+  const queue = [...used];
+  try {
+    while (queue.length) {
+      for (const stream of borrowingStreams(resources, queue.pop()!)) {
+        if (read.has(stream)) continue;
+        read.add(stream);
+        for (const name of namesUsed(decodeStream(stream))) {
+          if (used.has(name)) continue;
+          used.add(name);
+          queue.push(name);
+        }
+      }
     }
+  } catch {
+    return null;
   }
-  return false;
+  return used;
 }
 
-/** Whether a resource is drawn from a content stream of its own: a form, a Type 3 font, a tiling pattern. */
-function drawsWithResources(category: string, dict: PDFDict): boolean {
-  if (category === "XObject") return subtype(dict) === "Form";
-  if (category === "Font") return subtype(dict) === "Type3";
-  const patternType = dict.lookup(PDFName.of("PatternType"));
-  return patternType instanceof PDFNumber && patternType.asNumber() === 1;
+/** The content streams of whatever `name` names in `resources` that read their names from `resources` too. */
+function borrowingStreams(resources: PDFDict | undefined, name: string): PDFObject[] {
+  const streams: PDFObject[] = [];
+  const borrows = (dict: PDFDict) => dict.lookup(RESOURCES) === undefined;
+  const form = entry(resources, "XObject", name);
+  if (form instanceof PDFStream && subtype(form.dict) === "Form" && borrows(form.dict)) streams.push(form);
+  const font = entry(resources, "Font", name);
+  if (font instanceof PDFDict && subtype(font) === "Type3" && borrows(font)) {
+    const procs = font.lookup(PDFName.of("CharProcs"));
+    if (!(procs instanceof PDFDict)) throw new TrimFallback("a Type 3 font has no glyphs to read");
+    for (const key of procs.keys()) streams.push(procs.lookup(key)!);
+  }
+  const pattern = entry(resources, "Pattern", name);
+  if (pattern instanceof PDFStream && borrows(pattern.dict)) streams.push(pattern);
+  const gstate = entry(resources, "ExtGState", name);
+  const mask = gstate instanceof PDFDict ? gstate.lookup(PDFName.of("SMask")) : undefined;
+  const group = mask instanceof PDFDict ? mask.lookup(PDFName.of("G")) : undefined;
+  if (group instanceof PDFStream && borrows(group.dict)) streams.push(group);
+  return streams;
 }
 
 /**

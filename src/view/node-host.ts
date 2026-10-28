@@ -24,7 +24,7 @@ interface Entry {
 
 /** Everything about a file node that decides what its link resolves to; a change to any of it needs a new resolution. */
 function linkKey(node: FileNode): string {
-  return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex, node.pageIndex, node.range]);
+  return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex, node.pageIndex, node.range, node.adjustments]);
 }
 
 /**
@@ -38,6 +38,8 @@ export class NodeHost {
   /** The newest resolution started for each node. A result that is no longer the newest, or whose node is gone, is dropped. */
   private readonly tokens = new Map<NodeId, number>();
   private nextToken = 0;
+  /** Adjustment types already warned about as not registered: one warning per type per view. */
+  private readonly warnedUnknown = new Set<string>();
   private readonly ctx: RenderContext;
 
   constructor(
@@ -148,6 +150,7 @@ export class NodeHost {
     const token = ++this.nextToken;
     this.tokens.set(node.id, token);
     this.resolvedKeys.set(node.id, linkKey(node));
+    this.warnUnknownAdjustments(node);
 
     let resolved: Resolved;
     try {
@@ -166,6 +169,16 @@ export class NodeHost {
     this.view.index.track(node.id, resolved.deps);
     const entry = this.entries.get(node.id);
     if (entry) this.updateEntry(entry, current);
+  }
+
+  /** Warns once per view about each enabled adjustment type that is not registered; the drawing skips it. */
+  private warnUnknownAdjustments(node: FileNode): void {
+    const registry = this.view.plugin.registries.adjustments;
+    for (const { type, enabled } of node.adjustments) {
+      if (!enabled || registry.get(type) || this.warnedUnknown.has(type)) continue;
+      this.warnedUnknown.add(type);
+      console.warn(`Link Figures: no adjustment "${type}" is registered, so it is skipped when drawing (it stays in the file)`);
+    }
   }
 
   private mountNode(node: Node): void {

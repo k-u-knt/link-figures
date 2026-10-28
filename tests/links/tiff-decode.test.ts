@@ -1,5 +1,7 @@
 import { DecodeLimitError } from "../../src/links/decoders/budget";
 import { decodeTiffPage } from "../../src/links/decoders/tiff";
+import { renderSamples } from "../../src/adjust/render";
+import { step, testRegistry } from "../adjust/fixtures";
 
 /** A TIFF of 16-bit greyscale pages, one row of `values.length` pixels each, in the given byte order. */
 function buildTiff(pages: number[][], littleEndian: boolean, photometric = 1): ArrayBuffer {
@@ -62,4 +64,12 @@ test("a page over the decode budget is refused before its pixels are decoded, na
   view.setUint16(8 + 2 + 12 + 8, 8000, true);
   expect(() => decodeTiffPage(bytes, 0)).toThrow(DecodeLimitError);
   expect(() => decodeTiffPage(bytes, 0)).toThrow("TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP");
+});
+
+test.each([["little-endian", true], ["big-endian", false]])("decoding and rendering with adjustments leaves the %s source bytes as they were", (_name, littleEndian) => {
+  const bytes = buildTiff([[10000, 258]], littleEndian);
+  const before = new Uint8Array(bytes.slice(0));
+  const { plane } = decodeTiffPage(bytes, 0);
+  renderSamples(plane, { range: "auto", adjustments: [step("test.mapRed"), step("test.invert"), step("test.double")] }, testRegistry());
+  expect(new Uint8Array(bytes)).toEqual(before);
 });

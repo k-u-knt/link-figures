@@ -1,4 +1,4 @@
-import type { Range16 } from "../model/types";
+import type { PixelRecipe } from "../adjust/render";
 
 export interface FileRef {
   path: string;
@@ -35,7 +35,10 @@ export interface DecodedImage {
 export interface Decoders {
   /** `scale` 1 is 72 dpi. */
   pdf(bytes: ArrayBuffer, pageIndex: number, scale: number): Promise<DecodedImage>;
-  tiff(bytes: ArrayBuffer, pageIndex: number, range: Range16 | "auto"): Promise<DecodedImage>;
+  /** One page's native samples drawn through the panel's recipe (see `renderSamples`). */
+  tiff(bytes: ArrayBuffer, pageIndex: number, recipe: PixelRecipe): Promise<DecodedImage>;
+  /** A PNG, JPEG or other browser-decodable image drawn through the panel's recipe; used only when an adjustment is on. */
+  raster(bytes: ArrayBuffer, recipe: PixelRecipe): Promise<DecodedImage>;
 }
 
 /** `deps` are the vault paths whose change should trigger re-resolution. */

@@ -1,8 +1,10 @@
 import UTIF from "utif";
-import type { Range16 } from "../../model/types";
+import { renderSamples, type PixelRecipe } from "../../adjust/render";
+import type { AdjustmentRegistry } from "../../registry/adjustment";
 import type { DecodedImage } from "../types";
 import { checkDecodeBudget } from "./budget";
-import { ifdToPlane, planeToRgba, type Plane } from "./tiff-convert";
+import { rgbaToPngDataUrl } from "./raster";
+import { ifdToPlane, type Plane } from "./tiff-convert";
 
 /**
  * UTIF decode of one page (index clamped into range) as a `Plane`, plus the file's page count. No DOM. A page over the
@@ -21,15 +23,9 @@ export function decodeTiffPage(bytes: ArrayBuffer, pageIndex: number): { plane: 
   return { plane: ifdToPlane({ ...ifd, isLE: true }), pageCount: ifds.length };
 }
 
-/** One TIFF page as a PNG data URL, 16-bit data stretched to 8 bits by `range`. */
-export async function decodeTiff(bytes: ArrayBuffer, pageIndex: number, range: Range16 | "auto"): Promise<DecodedImage> {
+/** One TIFF page as a PNG data URL, its native samples drawn through `renderSamples` (by default 16-bit data is stretched to 8 bits by `recipe.range`). */
+export async function decodeTiff(bytes: ArrayBuffer, pageIndex: number, recipe: PixelRecipe, adjustments: AdjustmentRegistry): Promise<DecodedImage> {
   const { plane, pageCount } = decodeTiffPage(bytes, pageIndex);
-  const { rgba } = planeToRgba(plane, range);
-  const canvas = document.createElement("canvas");
-  canvas.width = plane.width;
-  canvas.height = plane.height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas 2D context unavailable");
-  context.putImageData(new ImageData(rgba, plane.width, plane.height), 0, 0);
-  return { dataUrl: canvas.toDataURL("image/png"), width: plane.width, height: plane.height, pageCount };
+  const rendered = renderSamples(plane, recipe, adjustments);
+  return { dataUrl: rgbaToPngDataUrl(rendered), width: rendered.width, height: rendered.height, pageCount };
 }

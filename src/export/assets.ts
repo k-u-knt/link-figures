@@ -2,8 +2,8 @@ import type { App } from "obsidian";
 import { MAX_DECODE_MEGAPIXELS } from "../constants";
 import { DecodeLimitError } from "../links/decoders/budget";
 import { decodePdf, pdfPageSizePt } from "../links/decoders/pdf";
-import { decodeTiff } from "../links/decoders/tiff";
-import type { Resolved } from "../links/types";
+import { hasActiveAdjustments, recipeOf } from "../adjust/render";
+import type { Decoders, Resolved } from "../links/types";
 import { nodeLabel } from "../model/labels";
 import type { Document, FileNode, NodeId, Page } from "../model/types";
 import type { AssetMap, FileAsset, RasterAsset } from "./asset-types";
@@ -68,6 +68,8 @@ export interface AssetDeps {
   /** Both take a vault path and reject when the file is gone. */
   readBinary: (path: string) => Promise<ArrayBuffer>;
   readText: (path: string) => Promise<string>;
+  /** The stage's decoders: a TIFF or adjusted raster panel is drawn by the same code, with the same recipe, as on the stage. */
+  decoders: Decoders;
   /** Resolution of everything that has to be rasterised: PDF pages and note content. */
   dpi: number;
   /** Where the reason goes when one node's asset could not be made: `{label}: {reason}`. */
@@ -108,6 +110,11 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
   const path = resolved.file.path;
   switch (resolved.source) {
     case "raster": {
+      if (hasActiveAdjustments(node)) {
+        // Drawn as a PNG: the AVIF limit of the PDF export does not apply to it.
+        const decoded = await deps.decoders.raster(await deps.readBinary(path), recipeOf(node));
+        return { kind: "image", dataUri: decoded.dataUrl, naturalWidth: decoded.width, naturalHeight: decoded.height };
+      }
       const mime = MIME_BY_EXTENSION[extensionOf(path)];
       if (!mime) throw new Error(`"${path}" is not an image type that can be embedded`);
       const dataUri = bytesToDataUri(await deps.readBinary(path), mime);
@@ -139,8 +146,8 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
       };
     }
     case "tiff": {
-      // Full resolution: 16-bit data is stretched to 8 bits by the node's range, as on the stage.
-      const decoded = await decodeTiff(await deps.readBinary(path), node.pageIndex, node.range);
+      // Full resolution, drawn through the node's range and adjustments as on the stage.
+      const decoded = await deps.decoders.tiff(await deps.readBinary(path), node.pageIndex, recipeOf(node));
       return { kind: "image", dataUri: decoded.dataUrl, naturalWidth: decoded.width, naturalHeight: decoded.height };
     }
   }

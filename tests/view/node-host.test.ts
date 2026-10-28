@@ -6,6 +6,7 @@ import type { Document, FileNode, Node, NodeId } from "../../src/model/types";
 import type { NodeRenderer, NodeType, NodeTypeRegistry } from "../../src/registry/node-type";
 import { NodeHost } from "../../src/view/node-host";
 import { FakeAccess } from "../links/fake-access";
+import { step, testRegistry } from "../adjust/fixtures";
 
 vi.mock("obsidian", () => ({ Keymap: { isModEvent: () => false } }));
 
@@ -76,6 +77,7 @@ function setup() {
       return { dataUrl: `data:page-${pageIndex}`, width: 10, height: 10, pageCount: 2 };
     }),
     tiff: vi.fn(),
+    raster: vi.fn(),
   };
 
   const view = {
@@ -84,7 +86,7 @@ function setup() {
     store: new DocumentStore(doc),
     resolvedCache: new Map<NodeId, Resolved>(),
     index: new InvalidationIndex(),
-    plugin: { access, decoders },
+    plugin: { access, decoders, registries: { adjustments: testRegistry() } },
     openLink: vi.fn(),
   };
   const hosts = new Map<string, FakeHost>([[page.id, new FakeHost()]]);
@@ -218,6 +220,51 @@ describe("renderAll then resolveStale", () => {
     await Promise.all([first, second]);
     expect(t.view.resolvedCache.get(t.a.id)).toMatchObject({ kind: "image", file: { path: "e.png" } });
     expect(t.view.index.nodesFor("a.pdf")).toEqual([]);
+  });
+});
+
+describe("adjustments", () => {
+  const adjust = (t: ReturnType<typeof setup>, id: NodeId, adjustments: FileNode["adjustments"]): Document => {
+    const next: Document = { ...t.view.store.doc, nodes: t.view.store.doc.nodes.map((n) => (n.id === id ? ({ ...n, adjustments } as Node) : n)) };
+    t.view.store = new DocumentStore(next);
+    return next;
+  };
+
+  test("a change to a node's adjustments resolves it again", async () => {
+    const t = setup();
+    t.nodeHost.renderAll(t.doc);
+    await t.nodeHost.resolveStale();
+    t.reads.length = 0;
+    t.nodeHost.applyChange(adjust(t, t.a.id, [step("test.invert")]), new Set([t.a.id]));
+    await settle();
+    expect(t.reads).toEqual(["a.pdf"]);
+    // Switching one off is a change too.
+    t.reads.length = 0;
+    t.nodeHost.applyChange(adjust(t, t.a.id, [step("test.invert", false)]), new Set([t.a.id]));
+    await settle();
+    expect(t.reads).toEqual(["a.pdf"]);
+  });
+
+  test("an unregistered type is warned about once per type per view, and the node still resolves", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const t = setup();
+    adjust(t, t.a.id, [step("future.one"), step("future.one"), step("test.invert"), step("future.off", false)]);
+    adjust(t, t.b.id, [step("future.one"), step("future.two")]);
+    t.nodeHost.renderAll(t.view.store.doc);
+    await t.nodeHost.resolveStale();
+    await t.nodeHost.resolve([t.a.id, t.b.id]);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      expect.stringContaining('"future.one"'),
+      expect.stringContaining('"future.two"'),
+    ]);
+    expect(t.view.resolvedCache.get(t.a.id)).toMatchObject({ kind: "image" });
+    // Another view warns afresh.
+    const other = setup();
+    adjust(other, other.a.id, [step("future.one")]);
+    other.nodeHost.renderAll(other.view.store.doc);
+    await other.nodeHost.resolveStale();
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
   });
 });
 

@@ -1,6 +1,6 @@
 import { Modal, Notice, Setting, type App, type ButtonComponent } from "obsidian";
 import { MAX_DPI, MIN_DPI } from "../constants";
-import type { Resolved } from "../links/types";
+import type { Decoders, Resolved } from "../links/types";
 import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { NodeTypeRegistry } from "../registry/node-type";
 import type { Exporter } from "../registry/exporter";
@@ -32,6 +32,8 @@ export interface ExportDeps {
   nodeTypes: NodeTypeRegistry;
   resolved: (id: NodeId) => Resolved | undefined;
   elementFor: (id: NodeId) => HTMLElement | undefined;
+  /** The stage's decoders, so panels are drawn in the export as they are on the stage. */
+  decoders: Decoders;
   /** True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). */
   isProtected: (path: string) => boolean;
 }
@@ -63,6 +65,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       elementFor: deps.elementFor,
       readBinary: (path) => app.vault.readBinary(fileAt(path)),
       readText: (path) => app.vault.cachedRead(fileAt(path)),
+      decoders: deps.decoders,
       dpi: run.dpi,
       warnings,
     });
@@ -224,6 +227,7 @@ export class ExportModal extends Modal {
           nodeTypes: plugin.registries.nodeTypes,
           resolved: (id) => view.resolvedCache.get(id),
           elementFor: (id) => view.nodeHost.elementFor(id),
+          decoders: plugin.decoders,
           isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
         },
       );

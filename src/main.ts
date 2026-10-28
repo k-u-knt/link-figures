@@ -24,7 +24,7 @@ export default class LinkFiguresPlugin extends Plugin {
   /** Paths the user chose to see as markdown this session; the open hook leaves them alone. */
   forcedMarkdown = new Set<string>();
   access = new ObsidianVaultAccess(this.app);
-  decoders: Decoders = createDecoders();
+  decoders: Decoders = createDecoders(this.registries.adjustments);
 
   async onload(): Promise<void> {
     await this.loadSettings();

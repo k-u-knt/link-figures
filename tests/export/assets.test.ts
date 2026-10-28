@@ -6,15 +6,20 @@ import type { Resolved } from "../../src/links/types";
 const mocks = vi.hoisted(() => ({
   decodePdf: vi.fn(),
   pdfPageSizePt: vi.fn(),
-  decodeTiff: vi.fn(),
+  tiff: vi.fn(),
+  raster: vi.fn(),
   snapdom: vi.fn(),
 }));
 // pdf.js and the DOM are not available here; what matters is what collectAssets asks of them.
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: mocks.decodePdf, pdfPageSizePt: mocks.pdfPageSizePt }));
-vi.mock("../../src/links/decoders/tiff", () => ({ decodeTiff: mocks.decodeTiff }));
 vi.mock("@zumer/snapdom", () => ({ snapdom: mocks.snapdom }));
 const { bytesToDataUri, collectAssets } = await import("../../src/export/assets");
 const { DecodeLimitError } = await import("../../src/links/decoders/budget");
+const { resolveFileNode } = await import("../../src/links/resolver");
+const { FakeAccess } = await import("../links/fake-access");
+
+/** The decoders collectAssets is given; only TIFF and raster go through them. */
+const decoders = { pdf: vi.fn(), tiff: mocks.tiff, raster: mocks.raster };
 
 /** An image decoder that reports 640 x 480 for any data URI, and fails for the bytes 0xff 0xff 0xff. */
 class FakeImage {
@@ -87,6 +92,7 @@ function setup(specs: { node?: Partial<FileNode>; resolved?: Resolved }[]): Setu
           if (typeof data !== "string") throw new Error(`File not found in vault: ${path}`);
           return data;
         },
+        decoders,
         dpi,
         warnings,
       }),
@@ -220,14 +226,47 @@ describe("pdf sources", () => {
 });
 
 describe("tiff sources", () => {
-  test("are decoded at full resolution with the node's page and range", async () => {
+  test("are decoded at full resolution with the node's page, range and adjustments", async () => {
     const range = { min: 100, max: 4000 };
-    const s = setup([{ node: { pageIndex: 2, range }, resolved: image("cells.tif", "tiff") }]);
+    const adjustments = [{ type: "test.invert", enabled: true, params: {} }];
+    const s = setup([{ node: { pageIndex: 2, range, adjustments }, resolved: image("cells.tif", "tiff") }]);
     const tiff = bytes(73, 73, 42, 0);
     s.files["cells.tif"] = tiff;
-    mocks.decodeTiff.mockResolvedValue({ dataUrl: "data:image/png;base64,VFQ=", width: 2048, height: 1536, pageCount: 3 });
+    mocks.tiff.mockResolvedValue({ dataUrl: "data:image/png;base64,VFQ=", width: 2048, height: 1536, pageCount: 3 });
     expect((await s.run()).get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: "data:image/png;base64,VFQ=", naturalWidth: 2048, naturalHeight: 1536 });
-    expect(mocks.decodeTiff).toHaveBeenCalledWith(tiff, 2, range);
+    expect(mocks.tiff).toHaveBeenCalledWith(tiff, 2, { range, adjustments });
+  });
+
+  test("are drawn by the same decoder with the same recipe as on the stage", async () => {
+    const adjustments = [{ type: "test.double", enabled: true, params: { k: 2 } }, { type: "test.invert", enabled: false, params: {} }];
+    const s = setup([{ node: { file: "cells.tif", pageIndex: 1, range: { min: 5, max: 50 }, adjustments }, resolved: image("cells.tif", "tiff") }]);
+    s.files["cells.tif"] = bytes(1, 2, 3);
+    mocks.tiff.mockResolvedValue({ dataUrl: "data:image/png;base64,VFQ=", width: 1, height: 1, pageCount: 2 });
+    await resolveFileNode(s.nodes[0], "f.lnkfig.md", new FakeAccess({ files: { "cells.tif": "BINARY" } }), decoders);
+    await s.run();
+    expect(mocks.tiff).toHaveBeenCalledTimes(2);
+    const [stage, exported] = mocks.tiff.mock.calls;
+    expect(exported.slice(1)).toEqual(stage.slice(1));
+  });
+});
+
+describe("raster sources with adjustments", () => {
+  test("are drawn by the raster decoder with the node's recipe, as a PNG", async () => {
+    const adjustments = [{ type: "test.invert", enabled: true, params: {} }];
+    const s = setup([{ node: { adjustments }, resolved: image("fig/a.avif", "raster") }]);
+    s.files["fig/a.avif"] = bytes(1, 2, 3);
+    mocks.raster.mockResolvedValue({ dataUrl: "data:image/png;base64,UE4=", width: 30, height: 20, pageCount: 1 });
+    expect((await s.run()).get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: "data:image/png;base64,UE4=", naturalWidth: 30, naturalHeight: 20 });
+    expect(mocks.raster).toHaveBeenCalledWith(s.files["fig/a.avif"], { range: "auto", adjustments });
+    // A PNG now, so the AVIF limit of the PDF export does not apply.
+    expect(s.warnings).toEqual([]);
+  });
+
+  test("with every entry disabled keep the file's own bytes", async () => {
+    const s = setup([{ node: { adjustments: [{ type: "test.invert", enabled: false, params: {} }] }, resolved: image("fig/a.png", "raster") }]);
+    s.files["fig/a.png"] = bytes(1, 2, 3);
+    expect((await s.run()).get(s.nodes[0].id)).toMatchObject({ dataUri: "data:image/png;base64,AQID" });
+    expect(mocks.raster).not.toHaveBeenCalled();
   });
 });
 

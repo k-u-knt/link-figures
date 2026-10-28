@@ -1,3 +1,4 @@
+import { nodeLabel } from "../../src/model/labels";
 import { degrees, PDFArray, PDFDict, PDFDocument, PDFName, PDFPage, PDFRawStream } from "@cantoo/pdf-lib";
 import { PX_TO_PT } from "../../src/constants";
 import type { PdfAsset } from "../../src/export/asset-types";
@@ -386,8 +387,8 @@ describe("fonts the PDF cannot set", () => {
     const { warnings } = await pdfExporter.run(i, {});
     expect(warnings).toEqual([
       "Node p-zzzz: link missing, skipped",
-      `Node ${calibri.id}: font "Calibri" substituted by Times in PDF`,
-      `Node ${courier.id}: font "Courier New" substituted by Times in PDF`,
+      `${nodeLabel(i.doc, calibri)}: font "Calibri" substituted by Times in PDF`,
+      `${nodeLabel(i.doc, courier)}: font "Courier New" substituted by Times in PDF`,
     ]);
   });
 
@@ -400,7 +401,7 @@ describe("fonts the PDF cannot set", () => {
     elsewhere.font = { ...elsewhere.font, family: "Georgia" };
     f.i.doc.nodes.push(georgia, elsewhere);
     const { warnings } = await pdfExporter.run({ ...f.i, pages: [f.first] }, {});
-    expect(warnings).toEqual([`Node ${georgia.id}: font "Georgia" substituted by Times in PDF`]);
+    expect(warnings).toEqual([`${nodeLabel(f.i.doc, georgia)}: font "Georgia" substituted by Times in PDF`]);
   });
 });
 

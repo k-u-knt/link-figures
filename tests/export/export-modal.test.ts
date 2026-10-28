@@ -1,3 +1,4 @@
+import { nodeLabel } from "../../src/model/labels";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { Resolved } from "../../src/links/types";
 import { NodeTypeRegistry } from "../../src/registry/node-type";
@@ -123,9 +124,9 @@ test("what could not be embedded comes back as warnings, from the collection and
   );
   expect(out.files).toBe(2);
   expect(out.warnings).toEqual([
-    `Node ${png.id}: File not found in vault: moved.png`,
-    `Node ${png.id}: link missing, skipped`,
-    `Node ${gone.id}: link missing, skipped`,
+    `${nodeLabel(doc, png)}: File not found in vault: moved.png`,
+    `${nodeLabel(doc, png)}: link missing, skipped`,
+    `${nodeLabel(doc, gone)}: link missing, skipped`,
   ]);
 });
 

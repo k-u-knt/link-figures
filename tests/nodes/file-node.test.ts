@@ -1,4 +1,4 @@
-import { createPage, fileNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
 
 // `obsidian` ships only typings, so this module cannot be loaded for real; the parts under test never touch it.
@@ -6,8 +6,9 @@ vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon:
 const { fileNodeType, fileNodeSvg } = await import("../../src/nodes/file-node");
 const { fileNodeSvg: pureFileNodeSvg } = await import("../../src/nodes/file-node-svg");
 
+const page = createPage("a4-portrait", []);
 const node = (over: Partial<FileNode> = {}): FileNode => ({
-  ...fileNodeDefaults(createPage("a4-portrait", []), { file: "a.png", subpath: "", show: "image" }, []),
+  ...fileNodeDefaults(page, { file: "a.png", subpath: "", show: "image" }, []),
   x: 10,
   y: 20,
   width: 100,
@@ -34,7 +35,7 @@ test("the inspector offers a Page field for pdf and tiff targets only", () => {
 test("file-node re-exports the pure SVG function", () => expect(fileNodeSvg).toBe(pureFileNodeSvg));
 
 describe("toSvg", () => {
-  const ctx = (assets: Map<string, any>) => ({ page: createPage("a4-portrait", []), assets, defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
+  const ctx = (assets: Map<string, any>) => ({ doc: { ...createDocument("a4-portrait"), pages: [page] }, page, assets, defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
 
   test("reads the node's file asset from the asset map", () => {
     const n = node();

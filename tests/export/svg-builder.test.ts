@@ -1,3 +1,4 @@
+import { nodeLabel } from "../../src/model/labels";
 import type { AssetMap, FileAsset } from "../../src/export/asset-types";
 import { buildPageSvg, escapeAttr } from "../../src/export/svg-builder";
 import { MM_TO_PX } from "../../src/constants";
@@ -115,7 +116,7 @@ test("a raster node without a raster asset is skipped with a warning", () => {
   const { svg, warnings } = buildPageSvg(d, d.pages[0], reg(), new Map());
   expect(svg).not.toContain("<image");
   expect(warnings).toHaveLength(1);
-  expect(warnings[0]).toContain(d.nodes[0].id);
+  expect(warnings[0]).toContain(nodeLabel(d, d.nodes[0]));
 });
 
 test("a missing link is reported once, not once by the node type and again by the builder", () => {

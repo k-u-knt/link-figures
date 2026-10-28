@@ -9,7 +9,7 @@ interface PdfViewport {
 }
 interface PdfPage {
   getViewport(params: { scale: number }): PdfViewport;
-  render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport }): { promise: Promise<void> };
+  render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport; background?: string }): { promise: Promise<void> };
 }
 interface PdfDocument {
   numPages: number;
@@ -53,7 +53,8 @@ export async function decodePdf(bytes: ArrayBuffer, pageIndex: number, scale: nu
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D context unavailable");
-    await page.render({ canvasContext: context, viewport }).promise;
+    await // Transparent, as in the PDF export (pdf.js paints white by default), so the stage shows what the export gives.
+    await page.render({ canvasContext: context, viewport, background: "rgba(0,0,0,0)" }).promise;
     return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height, pageCount };
   });
 }

@@ -1,6 +1,7 @@
 import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline-svg";
 import type { FileAsset } from "../export/asset-types";
 import { cropPlacement, type Rect } from "../model/geometry";
+import { nodeLabel } from "../model/labels";
 import type { FileNode } from "../model/types";
 import type { SvgContext } from "../registry/node-type";
 
@@ -41,7 +42,7 @@ function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   const dropped: string[] = [];
   const rootAttributes = svgRootAttributes(text, prefix, dropped);
   const content = inlineSvg(text, prefix, dropped);
-  for (const message of dropped) ctx.warnings.push(`Node ${node.id}: ${message}`);
+  for (const message of dropped) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${message}`);
   return (
     `<g clip-path="url(#${clip})">` +
     `<svg x="${node.x + fitted.x}" y="${node.y + fitted.y}" width="${fitted.width}" height="${fitted.height}" viewBox="${viewBox.join(" ")}" ` +
@@ -56,14 +57,14 @@ function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
 export function fileNodeSvg(node: FileNode, asset: FileAsset | undefined, ctx: SvgContext): string | "raster" {
   if (node.show === "content") return "raster";
   if (!asset) {
-    ctx.warnings.push(`Node ${node.id}: link missing, skipped`);
+    ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: link missing, skipped`);
     return "raster";
   }
   switch (asset.kind) {
     case "image":
       return clippedImage(node, asset.dataUri, { width: asset.naturalWidth, height: asset.naturalHeight }, ctx);
     case "pdf":
-      ctx.warnings.push(`Node ${node.id}: PDF panel rasterised`);
+      ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: PDF panel rasterised`);
       return clippedImage(node, asset.raster, { width: asset.rasterWidth, height: asset.rasterHeight }, ctx);
     case "svg":
       return nestedSvg(node, asset.text, ctx);

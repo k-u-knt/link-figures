@@ -124,7 +124,7 @@ describe("the type", () => {
 
   test("re-exports the pure SVG function and uses it for export", () => {
     expect(textNodeSvg).toBe(pureTextNodeSvg);
-    const ctx = { page: createDocument("a4-portrait").pages[0], assets: new Map(), defs: [], warnings: [], uid: (p: string) => p };
+    const ctx = { doc: createDocument("a4-portrait"), page: createDocument("a4-portrait").pages[0], assets: new Map(), defs: [], warnings: [], uid: (p: string) => p };
     expect(textNodeType.toSvg(base(), ctx)).toBe(pureTextNodeSvg(base(), ctx));
   });
 

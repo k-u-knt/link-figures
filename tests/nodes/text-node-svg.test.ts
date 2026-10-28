@@ -1,10 +1,10 @@
 import { DEFAULT_FONT, PT_TO_PX } from "../../src/constants";
-import { createPage, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, textNodeDefaults } from "../../src/model/defaults";
 import type { TextNode } from "../../src/model/types";
 import { textNodeSvg } from "../../src/nodes/text-node-svg";
 
 const page = createPage("a4-portrait", []);
-const ctx = () => ({ page, assets: new Map(), defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
+const ctx = () => ({ doc: { ...createDocument("a4-portrait"), pages: [page] }, page, assets: new Map(), defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
 const node = (over: Partial<TextNode> = {}): TextNode => ({ ...textNodeDefaults(page, {}, []), x: 10, y: 20, width: 100, height: 40, ...over });
 
 test("renders font attributes and one tspan per line", () => {

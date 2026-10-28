@@ -1,5 +1,5 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
-import { mmToPx, nodeWorldRect, rectContainsPt, type Pt, type Rect } from "../model/geometry";
+import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { LinkFiguresView } from "./figure-view";
@@ -279,6 +279,35 @@ export class PointerController {
     });
   }
 
+  /**
+   * The end of a move drag: each node moved goes to the page under its centre, keeping its place on the canvas. A node
+   * whose centre is over no page stays where it is. Committed while the drag still counts as under way, so that it is
+   * one undo step with the drag, and the selection then keeps only what is on its first node's page.
+   */
+  private movePagesToCentres(g: Moving): void {
+    const doc = this.store.doc;
+    const origins = pageOriginsPx(doc);
+    const moves = new Map<NodeId, { page: PageId; x: number; y: number }>();
+    for (const node of doc.nodes) {
+      if (!g.origins.has(node.id)) continue;
+      const from = origins.get(node.page);
+      if (!from) continue;
+      const centre = { x: from.x + node.x + node.width / 2, y: from.y + node.y + node.height / 2 };
+      const target = pageAt(doc, centre);
+      const to = target && origins.get(target.id);
+      if (!target || !to || target.id === node.page) continue;
+      moves.set(node.id, { page: target.id, x: roundPx(from.x + node.x - to.x), y: roundPx(from.y + node.y - to.y) });
+    }
+    if (moves.size === 0) return;
+    this.store.commit("move", (draft) => {
+      for (const node of draft.nodes) {
+        const to = moves.get(node.id);
+        if (to) Object.assign(node, to);
+      }
+    });
+    this.select([...this.view.selection.ids]);
+  }
+
   private resizeBy(g: Resizing, dx: number, dy: number, keepAspect: boolean): void {
     if (!this.store.doc.nodes.some((n) => n.id === g.id)) {
       this.endGesture();
@@ -319,6 +348,7 @@ export class PointerController {
     if (g.kind === "idle" || ev.pointerId !== g.pointerId) return;
     const selection = this.view.selection;
     if (g.kind === "pressed" && g.collapseTo !== null && selection.ids.length > 1) selection.set([g.collapseTo]);
+    if (g.kind === "moving") this.movePagesToCentres(g);
     this.endGesture();
   }
 

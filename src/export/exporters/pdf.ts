@@ -1,7 +1,8 @@
 import type { PDFDocument, PDFPage } from "@cantoo/pdf-lib";
 import type { jsPDF as JsPdf } from "jspdf";
-import type { FileNode, Node, NodeId, Page } from "../../model/types";
+import type { Document, FileNode, Node, NodeId, Page } from "../../model/types";
 import { pageSizePx } from "../../model/geometry";
+import { nodeLabel } from "../../model/labels";
 import { PX_TO_PT } from "../../constants";
 import type { Exporter, ExportInput } from "../../registry/exporter";
 import type { AssetMap, PdfAsset } from "../asset-types";
@@ -76,10 +77,10 @@ function pdfPanelsOf(nodes: Node[], assets: AssetMap): Map<NodeId, PdfPanel> {
 type PdfLib = typeof import("@cantoo/pdf-lib");
 
 /** One warning per text node whose font the PDF cannot set, naming the font it gets instead. */
-function fontWarnings(nodes: Node[]): string[] {
+function fontWarnings(doc: Document, nodes: Node[]): string[] {
   return nodes.flatMap((node) =>
     node.type === "text" && !PDF_FONT_FAMILIES.has(node.font.family.trim().toLowerCase())
-      ? [`Node ${node.id}: font "${node.font.family}" substituted by Times in PDF`]
+      ? [`${nodeLabel(doc, node)}: font "${node.font.family}" substituted by Times in PDF`]
       : [],
   );
 }
@@ -211,7 +212,7 @@ export const pdfExporter: Exporter = {
       const svg = input.svgs.get(page.id);
       if (svg === undefined) throw new Error(`No SVG was built for page "${page.name}"`);
       const nodes = input.doc.nodes.filter((n) => n.page === page.id);
-      fonts.push(...fontWarnings(nodes));
+      fonts.push(...fontWarnings(input.doc, nodes));
       const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
       return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id)) };
     });

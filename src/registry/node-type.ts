@@ -1,7 +1,7 @@
 import type { App, Component } from "obsidian";
 import type { AssetMap } from "../export/asset-types";
 import type { Rect } from "../model/geometry";
-import type { Node, NodeId, Page } from "../model/types";
+import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
 
@@ -19,6 +19,7 @@ export interface NodeRenderer {
 }
 
 export interface SvgContext {
+  doc: Document;
   page: Page;
   assets: AssetMap;
   defs: string[];

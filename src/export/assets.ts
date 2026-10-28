@@ -4,6 +4,7 @@ import { DecodeLimitError } from "../links/decoders/budget";
 import { decodePdf, pdfPageSizePt } from "../links/decoders/pdf";
 import { decodeTiff } from "../links/decoders/tiff";
 import type { Resolved } from "../links/types";
+import { nodeLabel } from "../model/labels";
 import type { Document, FileNode, NodeId, Page } from "../model/types";
 import type { AssetMap, FileAsset, RasterAsset } from "./asset-types";
 import { svgIntrinsicSize } from "./inline-svg";
@@ -69,7 +70,7 @@ export interface AssetDeps {
   readText: (path: string) => Promise<string>;
   /** Resolution of everything that has to be rasterised: PDF pages and note content. */
   dpi: number;
-  /** Where the reason goes when one node's asset could not be made: `Node {id}: {reason}`. */
+  /** Where the reason goes when one node's asset could not be made: `{label}: {reason}`. */
   warnings: string[];
 }
 
@@ -90,7 +91,7 @@ async function snapshotBody(el: HTMLElement | undefined, dpi: number): Promise<R
  * within it (with a warning, worded so that the PDF exporter drops it with the other "PDF panel rasterised" ones): the
  * PDF export embeds the page as vectors whatever its raster, so it must not lose the panel.
  */
-async function decodePdfWithinBudget(node: FileNode, bytes: ArrayBuffer, deps: AssetDeps): ReturnType<typeof decodePdf> {
+async function decodePdfWithinBudget(doc: Document, node: FileNode, bytes: ArrayBuffer, deps: AssetDeps): ReturnType<typeof decodePdf> {
   const scale = deps.dpi / PT_DPI;
   try {
     return await decodePdf(bytes, node.pageIndex, scale);
@@ -98,12 +99,12 @@ async function decodePdfWithinBudget(node: FileNode, bytes: ArrayBuffer, deps: A
     if (!(error instanceof DecodeLimitError)) throw error;
     const fit = scale * Math.sqrt((MAX_DECODE_MEGAPIXELS * 1e6) / (error.width * error.height)) * BUDGET_MARGIN;
     const raster = await decodePdf(bytes, node.pageIndex, fit);
-    deps.warnings.push(`Node ${node.id}: PDF panel rasterised at ${Math.floor(fit * PT_DPI)} dpi, not ${deps.dpi}: ${error.message}`);
+    deps.warnings.push(`${nodeLabel(doc, node)}: PDF panel rasterised at ${Math.floor(fit * PT_DPI)} dpi, not ${deps.dpi}: ${error.message}`);
     return raster;
   }
 }
 
-async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "image" }>, deps: AssetDeps): Promise<FileAsset> {
+async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resolved, { kind: "image" }>, deps: AssetDeps): Promise<FileAsset> {
   const path = resolved.file.path;
   switch (resolved.source) {
     case "raster": {
@@ -112,7 +113,7 @@ async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "i
       const dataUri = bytesToDataUri(await deps.readBinary(path), mime);
       const natural = await loadNaturalSize(dataUri);
       // svg2pdf.js leaves an AVIF image out of the PDF with nothing but a console message; the SVG export keeps it.
-      if (mime === "image/avif") deps.warnings.push(`Node ${node.id}: AVIF is not supported by the PDF export`);
+      if (mime === "image/avif") deps.warnings.push(`${nodeLabel(doc, node)}: AVIF is not supported by the PDF export`);
       return { kind: "image", dataUri, naturalWidth: natural.width, naturalHeight: natural.height };
     }
     case "svg": {
@@ -122,7 +123,7 @@ async function imageAsset(node: FileNode, resolved: Extract<Resolved, { kind: "i
     }
     case "pdf": {
       const bytes = await deps.readBinary(path);
-      const raster = await decodePdfWithinBudget(node, bytes, deps);
+      const raster = await decodePdfWithinBudget(doc, node, bytes, deps);
       // The page decodePdf drew: an out-of-range index is clamped, and the asset says which page it holds.
       const pageIndex = Math.min(Math.max(Math.trunc(node.pageIndex) || 0, 0), raster.pageCount - 1);
       const size = await pdfPageSizePt(bytes, pageIndex);
@@ -159,7 +160,7 @@ export async function collectAssets(doc: Document, page: Page, deps: AssetDeps):
     try {
       const resolved = deps.resolved(node.id);
       if (!resolved) {
-        deps.warnings.push(`Node ${node.id}: its link is still being resolved, skipped`);
+        deps.warnings.push(`${nodeLabel(doc, node)}: its link is still being resolved, skipped`);
         continue;
       }
       if (resolved.kind === "missing") continue;
@@ -167,10 +168,10 @@ export async function collectAssets(doc: Document, page: Page, deps: AssetDeps):
       if (node.show === "content" || resolved.kind === "content") {
         assets.set(node.id, await snapshotBody(deps.elementFor(node.id), deps.dpi));
       } else {
-        assets.set(node.id, await imageAsset(node, resolved, deps));
+        assets.set(node.id, await imageAsset(doc, node, resolved, deps));
       }
     } catch (error) {
-      deps.warnings.push(`Node ${node.id}: ${error instanceof Error ? error.message : String(error)}`);
+      deps.warnings.push(`${nodeLabel(doc, node)}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return assets;

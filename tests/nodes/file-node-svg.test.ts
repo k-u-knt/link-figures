@@ -1,16 +1,18 @@
-import { createPage, fileNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
 import { fileNodeSvg } from "../../src/nodes/file-node-svg";
 
+const page = createPage("a4-portrait", []);
 const ctx = () => ({
-  page: createPage("a4-portrait", []),
+  doc: { ...createDocument("a4-portrait"), pages: [page] },
+  page,
   assets: new Map(),
   defs: [] as string[],
   warnings: [] as string[],
   uid: (p: string) => p + "-1",
 });
 const node = (over: Partial<FileNode> = {}): FileNode => ({
-  ...fileNodeDefaults(createPage("a4-portrait", []), { file: "a.png", subpath: "", show: "image" }, []),
+  ...fileNodeDefaults(page, { file: "a.png", subpath: "", show: "image" }, []),
   x: 10,
   y: 20,
   width: 100,
@@ -143,20 +145,20 @@ test("svg asset: an entity-declaring DOCTYPE does not leave undeclared reference
   expect(out).not.toMatch(/&ns_x;|<script|onload|DOCTYPE/);
 });
 
-test("svg asset: what inlining had to drop is warned about, with the node's id", () => {
+test("svg asset: what inlining had to drop is warned about, naming the panel", () => {
   const c = ctx();
   const n = node({ file: "plot.svg" });
   fileNodeSvg(n, { kind: "svg", text: '<svg viewBox="0 0 1 1"><style>@media print{.a{x:y}}</style></svg>', width: 1, height: 1 }, c);
-  expect(c.warnings).toEqual([`Node ${n.id}: @media rule in <style> dropped`]);
+  expect(c.warnings).toEqual([`Panel "plot.svg" (${page.name}): @media rule in <style> dropped`]);
 });
 
-test("svg asset: references out of the file, on its root or inside it, are dropped and warned about once each, with the node's id", () => {
+test("svg asset: references out of the file, on its root or inside it, are dropped and warned about once each, naming the panel", () => {
   const c = ctx();
   const n = node({ file: "plot.svg" });
   const text = '<svg viewBox="0 0 1 1" style="background:url(http://t/x.png)"><image href="http://t/x.png"/><svg:script>evil()</svg:script></svg>';
   const out = fileNodeSvg(n, { kind: "svg", text, width: 1, height: 1 }, c) as string;
   expect(out).not.toMatch(/http:|script/);
-  expect(c.warnings).toEqual([`Node ${n.id}: external reference removed: http://t/x.png`]);
+  expect(c.warnings).toEqual([`Panel "plot.svg" (${page.name}): external reference removed: http://t/x.png`]);
 });
 
 test("ids from uid are used for every clip path in one build", () => {

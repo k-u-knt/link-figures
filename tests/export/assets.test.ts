@@ -1,3 +1,4 @@
+import { nodeLabel } from "../../src/model/labels";
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import type { Document, FileNode } from "../../src/model/types";
 import type { Resolved } from "../../src/links/types";
@@ -135,7 +136,7 @@ describe("raster sources", () => {
     const assets = await s.run();
     expect((assets.get(s.nodes[0].id) as { dataUri: string }).dataUri).toBe("data:image/avif;base64,AQID");
     expect(assets.has(s.nodes[1].id)).toBe(true);
-    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: AVIF is not supported by the PDF export`]);
+    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: AVIF is not supported by the PDF export`]);
   });
 
   test("an image that cannot be decoded, or has an unknown type, is a warning and no asset", async () => {
@@ -145,8 +146,8 @@ describe("raster sources", () => {
     const assets = await s.run();
     expect(assets.size).toBe(0);
     expect(s.warnings).toEqual([
-      `Node ${s.nodes[0].id}: the image could not be decoded`,
-      `Node ${s.nodes[1].id}: "b.xyz" is not an image type that can be embedded`,
+      `${nodeLabel(s.doc, s.nodes[0])}: the image could not be decoded`,
+      `${nodeLabel(s.doc, s.nodes[1])}: "b.xyz" is not an image type that can be embedded`,
     ]);
   });
 });
@@ -195,7 +196,7 @@ describe("pdf sources", () => {
     const fit = mocks.decodePdf.mock.calls[1][2] as number;
     expect(Math.ceil(9921 * (fit * 72) / 1200) * Math.ceil(14031 * (fit * 72) / 1200)).toBeLessThanOrEqual(50e6);
     expect(fit).toBeGreaterThan((0.98 * 1200 * Math.sqrt(50e6 / (9921 * 14031))) / 72);
-    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: PDF panel rasterised at ${Math.floor(fit * 72)} dpi, not 1200: ${message}`]);
+    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: PDF panel rasterised at ${Math.floor(fit * 72)} dpi, not 1200: ${message}`]);
   });
 
   test("any other decoding failure is still the node's warning, with no asset", async () => {
@@ -204,7 +205,7 @@ describe("pdf sources", () => {
     mocks.decodePdf.mockRejectedValue(new Error("bad xref"));
     expect((await s.run()).size).toBe(0);
     expect(mocks.decodePdf).toHaveBeenCalledTimes(1);
-    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: bad xref`]);
+    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: bad xref`]);
   });
 
   test("a page index beyond the file is recorded as the page that was drawn", async () => {
@@ -259,8 +260,8 @@ describe("content cards", () => {
     mocks.snapdom.mockResolvedValue(capture("blob:nope"));
     expect((await s.run()).size).toBe(0);
     expect(s.warnings).toEqual([
-      `Node ${s.nodes[0].id}: the node is not drawn on the stage, so it cannot be rasterised`,
-      `Node ${s.nodes[1].id}: the snapshot is not an image`,
+      `${nodeLabel(s.doc, s.nodes[0])}: the node is not drawn on the stage, so it cannot be rasterised`,
+      `${nodeLabel(s.doc, s.nodes[1])}: the snapshot is not an image`,
     ]);
   });
 });
@@ -275,7 +276,7 @@ describe("nodes without anything to embed", () => {
   test("a link that is still being resolved is skipped with a warning that says so", async () => {
     const s = setup([{}]);
     expect((await s.run()).size).toBe(0);
-    expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: its link is still being resolved, skipped`]);
+    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: its link is still being resolved, skipped`]);
   });
 
   test("only file nodes of the page asked for are looked at", async () => {
@@ -302,7 +303,7 @@ test("one node that fails does not stop the rest", async () => {
   s.files["plot.svg"] = '<svg viewBox="0 0 10 10"/>';
   const assets = await s.run();
   expect([...assets.keys()]).toEqual([s.nodes[1].id, s.nodes[2].id]);
-  expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: File not found in vault: gone.png`]);
+  expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: File not found in vault: gone.png`]);
 });
 
 test("a rejection that is not an Error is still reported", async () => {
@@ -311,5 +312,5 @@ test("a rejection that is not an Error is still reported", async () => {
   mocks.decodePdf.mockRejectedValue("bad xref");
   mocks.pdfPageSizePt.mockResolvedValue({ width: 1, height: 1 });
   expect((await s.run()).size).toBe(0);
-  expect(s.warnings).toEqual([`Node ${s.nodes[0].id}: bad xref`]);
+  expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: bad xref`]);
 });

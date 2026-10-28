@@ -1,4 +1,5 @@
 import { pageSizePx } from "../model/geometry";
+import { nodeLabel } from "../model/labels";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { NodeTypeRegistry, SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
@@ -43,6 +44,7 @@ export function buildPageSvg(
   const warnings: string[] = [];
   const counters = new Map<string, number>();
   const ctx: SvgContext = {
+    doc,
     page,
     assets,
     defs,
@@ -63,7 +65,7 @@ export function buildPageSvg(
   for (const node of nodes) {
     const type = nodeTypes.get(node.type);
     if (!type) {
-      warnings.push(`Node ${node.id}: no node type "${node.type}" is registered, skipped`);
+      warnings.push(`${nodeLabel(doc, node)}: no node type "${node.type}" is registered, skipped`);
       continue;
     }
     const before = warnings.length;
@@ -72,13 +74,13 @@ export function buildPageSvg(
       const asset = assets.get(node.id);
       if (asset?.kind !== "raster") {
         // A node type that already said why it has nothing to draw (a missing link) is not reported twice.
-        if (warnings.length === before) warnings.push(`Node ${node.id}: not rasterised, skipped`);
+        if (warnings.length === before) warnings.push(`${nodeLabel(doc, node)}: not rasterised, skipped`);
         continue;
       }
       fragment =
         `<image href="${escapeAttr(asset.dataUri)}" x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" ` +
         `preserveAspectRatio="none"/>`;
-      warnings.push(`Node ${node.id} rasterised`);
+      warnings.push(`${nodeLabel(doc, node)} rasterised`);
     }
     body.push(wrap(node, fragment));
   }

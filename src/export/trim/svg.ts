@@ -56,9 +56,21 @@ function referencedIds(root: Element): Set<string> {
   return new Set(elementsOf(root).flatMap(referencesOf));
 }
 
-/** The children of `<defs>` that have an id: the definitions that can go when nothing uses them any more. */
+/** Elements that are only ever drawn through a reference, wherever they are declared. */
+const RESOURCES = new Set(["clipPath", "mask", "marker", "pattern", "linearGradient", "radialGradient", "filter", "symbol"]);
+
+/**
+ * The definitions that can go when nothing uses them any more: the children of `<defs>` and the resource elements
+ * anywhere, that have an id and are not inside another definition.
+ */
 function definitionsOf(root: Element): Element[] {
-  return Array.from(root.querySelectorAll("defs > [id]")).filter((el) => isSvg(el) && el.parentElement?.localName === "defs");
+  const definitions: Element[] = [];
+  for (const el of Array.from(root.querySelectorAll("[id]"))) {
+    if (!isSvg(el) || !(el.parentElement?.localName === "defs" || RESOURCES.has(el.localName))) continue;
+    if (definitions.some((definition) => definition.contains(el))) continue;
+    definitions.push(el);
+  }
+  return definitions;
 }
 
 /**
@@ -140,7 +152,6 @@ function removeWithEmptiedGroups(el: Element, root: Element, referenced: Set<str
  */
 export function pruneSvg(text: string, visible: Rect, measure: SvgMeasure): { text: string; removed: number } {
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-  // Held on to: measuring may move the root into the live document, after which `doc` no longer has it.
   const root = doc.documentElement;
   if (!root || root.localName !== "svg" || !isSvg(root) || doc.getElementsByTagName("parsererror").length > 0) {
     throw new Error("the SVG could not be read");
@@ -198,11 +209,6 @@ function widen(rect: Rect, by: number): Rect {
 /** The default filter region: 10 % beyond the filtered element's box on every side. */
 const DEFAULT_FILTER_REGION = { x: -0.1, y: -0.1, width: 1.2, height: 1.2 };
 
-/** How far markers may reach beyond a path, in the root's units: three stroke widths (SVG's default marker size), at least 10. [B: may refine] */
-function markerReach(strokeWidth: number, scale: number): number {
-  return Math.max(strokeWidth * 3 * scale, 10);
-}
-
 /** A number, or a percentage as a fraction; `null` for anything else (a length with a unit). */
 function fractionOf(value: string | null, fallback: number): number | null {
   if (value === null || value.trim() === "") return fallback;
@@ -238,12 +244,61 @@ function filterRegion(filter: Element, box: Rect): Rect | null {
   return { x: box.x + fx * box.width, y: box.y + fy * box.height, width: fw * box.width, height: fh * box.height };
 }
 
-/** The `<filter>` a computed `filter` value names, `undefined` for no filter, `null` for one that cannot be read (CSS functions, several filters, a missing element). */
-function filterElementOf(value: string, root: Element): Element | null | undefined {
+/** A plain number attribute (`px` allowed), `fallback` when absent, `null` when it cannot be read. */
+function numberAttribute(el: Element, name: string, fallback: number): number | null {
+  const value = el.getAttribute(name);
+  return value === null || value.trim() === "" ? fallback : userLengthOf(value);
+}
+
+/** `<marker>`'s viewBox mapped into its viewport (`width` × `height`) as `preserveAspectRatio` says: scale and offset per axis. */
+function markerViewBoxFit(marker: Element, width: number, height: number): { sx: number; sy: number; tx: number; ty: number } | null {
+  const viewBox = marker.getAttribute("viewBox");
+  if (viewBox === null) return { sx: 1, sy: 1, tx: 0, ty: 0 };
+  const parts = viewBox.trim().split(/[\s,]+/).map(Number);
+  if (parts.length !== 4 || !parts.every(Number.isFinite) || !(parts[2] > 0 && parts[3] > 0)) return null;
+  const [vx, vy, vw, vh] = parts;
+  const ratio = (marker.getAttribute("preserveAspectRatio") ?? "xMidYMid meet").trim().split(/\s+/);
+  const align = ratio[0] || "xMidYMid";
+  if (align === "none") return { sx: width / vw, sy: height / vh, tx: (-vx * width) / vw, ty: (-vy * height) / vh };
+  const m = /^x(Min|Mid|Max)Y(Min|Mid|Max)$/.exec(align);
+  const meetOrSlice = ratio[1] ?? "meet";
+  if (!m || (meetOrSlice !== "meet" && meetOrSlice !== "slice")) return null;
+  const s = meetOrSlice === "meet" ? Math.min(width / vw, height / vh) : Math.max(width / vw, height / vh);
+  const offset = (where: string, room: number) => (where === "Min" ? 0 : where === "Mid" ? room / 2 : room);
+  return { sx: s, sy: s, tx: -vx * s + offset(m[1], width - vw * s), ty: -vy * s + offset(m[2], height - vh * s) };
+}
+
+/**
+ * How far `marker` can paint from the vertex it is placed on, in the user units of the element it marks: the farthest
+ * corner of its viewport (`markerWidth` × `markerHeight`, default 3 × 3) from its reference point (`refX`, `refY`, in
+ * its viewBox when it has one), in stroke widths unless `markerUnits` is `userSpaceOnUse`. The distance holds however
+ * `orient` turns it. `null` when it cannot be read, or when its content may paint outside its viewport
+ * (`overflow` visible or auto).
+ */
+function markerReach(marker: Element, strokeWidth: number, view: Window): number | null {
+  const overflow = view.getComputedStyle(marker).getPropertyValue("overflow");
+  if (overflow === "visible" || overflow === "auto") return null;
+  const units = marker.getAttribute("markerUnits") ?? "strokeWidth";
+  if (units !== "strokeWidth" && units !== "userSpaceOnUse") return null;
+  const width = numberAttribute(marker, "markerWidth", 3);
+  const height = numberAttribute(marker, "markerHeight", 3);
+  const refX = numberAttribute(marker, "refX", 0);
+  const refY = numberAttribute(marker, "refY", 0);
+  if (width === null || height === null || refX === null || refY === null || width < 0 || height < 0) return null;
+  const fit = markerViewBoxFit(marker, width, height);
+  if (!fit) return null;
+  const rx = refX * fit.sx + fit.tx;
+  const ry = refY * fit.sy + fit.ty;
+  const reach = Math.hypot(Math.max(Math.abs(rx), Math.abs(width - rx)), Math.max(Math.abs(ry), Math.abs(height - ry)));
+  return units === "strokeWidth" ? reach * strokeWidth : reach;
+}
+
+/** The element named by a computed `url(#id)` value of `tag` in `root`, `undefined` for `none`, `null` for anything else (a missing element, a CSS function). */
+function referencedElement(value: string, tag: string, root: Element): Element | null | undefined {
   if (value === "" || value === "none") return undefined;
   const m = /^url\(\s*["']?#([^)"'\s]+)["']?\s*\)$/.exec(value.trim());
   if (!m) return null;
-  return Array.from(root.querySelectorAll("filter")).find((f) => f.id === m[1]) ?? null;
+  return Array.from(root.querySelectorAll(tag)).find((el) => el.id === m[1]) ?? null;
 }
 
 /** The outermost element above `el` (or `el` itself). */
@@ -253,24 +308,112 @@ function rootOf(el: Element): Element {
   return root;
 }
 
+// ---- A safe copy to measure ------------------------------------------------------------------------------------------
+
+/** Elements that could run something or load something else into the app's document. */
+const UNSAFE_ELEMENTS = new Set(["script", "foreignObject", "iframe", "object", "embed", "audio", "video", "handler", "listener"]);
+
+const XLINK_NS = "http://www.w3.org/1999/xlink";
+
+/** A reference that stays inside the file: `#…` or `data:…`. */
+function isLocalTarget(target: string): boolean {
+  const t = target.trim().toLowerCase();
+  return t.startsWith("#") || t.startsWith("data:");
+}
+
 /**
- * Measures with the browser's layout: the first element measured brings its SVG into a shadow root of `host` (which
- * should be in the document, out of sight but not `display: none`), where it stays. The shadow root keeps the SVG's
- * `<style>` rules and the app's apart, so neither restyles the other while it is there. The box is `getBBox()` mapped to the root's user
- * units (its viewBox) through the screen matrices of the element and of the root, widened by half the stroke width
- * (scaled), by `markerReach` when markers are set, and to the filter region of every filter on the element or above
- * it. `null` when any of this cannot be read.
+ * `css` with every `url()` that leaves the file replaced by `none`, or `null` when what is left could still load
+ * something (an `@import`, `image-set()`, a CSS escape that could spell either, a `url(` that was not understood).
+ */
+function localCss(css: string): string | null {
+  const out = css.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/gi, (whole, _quote: string, target: string) => (isLocalTarget(target) ? whole : "none"));
+  if (/\\|@import|image-set\(|image\(|cross-fade\(|element\(/i.test(out)) return null;
+  for (const m of out.matchAll(/url\(/gi)) {
+    if (!/^url\(\s*["']?\s*(#|data:)/i.test(out.slice(m.index))) return null;
+  }
+  return out;
+}
+
+/**
+ * Makes `root` (a copy, not yet in any live document) safe to put into the app's document: drops elements that run or
+ * embed (scripts, `foreignObject`, anything not SVG) and animations, event attributes, links out of the file, and
+ * CSS that loads. False when some CSS could not be made safe: the copy must then not be used.
+ */
+function makeSafe(root: Element): boolean {
+  for (const el of elementsOf(root)) {
+    if (el !== root && (!isSvg(el) || UNSAFE_ELEMENTS.has(el.localName) || ANIMATIONS.has(el.localName))) {
+      el.remove();
+      continue;
+    }
+    for (const attribute of Array.from(el.attributes)) {
+      const name = attribute.localName.toLowerCase();
+      const isLink = name === "href" || name === "src" || attribute.namespaceURI === XLINK_NS;
+      if (name.startsWith("on") || (isLink && !isLocalTarget(attribute.value))) {
+        el.removeAttributeNode(attribute);
+        continue;
+      }
+      if (!/url\(|\\|@import|image/i.test(attribute.value)) continue;
+      const css = localCss(attribute.value);
+      if (css === null) return false;
+      attribute.value = css;
+    }
+    if (el.localName === "style") {
+      const css = localCss(el.textContent ?? "");
+      if (css === null) return false;
+      el.textContent = css;
+    }
+  }
+  return true;
+}
+
+/** A source's safe copy, in a shadow root of the host, and which copy stands for each of the source's elements. */
+interface Mounted {
+  source: Element;
+  root: Element;
+  copies: Map<Element, Element>;
+}
+
+/** Puts a safe copy of `source` into a shadow root of `host`; `null` when no safe copy can be made. */
+function mountSafeCopy(source: Element, host: HTMLElement): Mounted | null {
+  // Copied in the parsed (inert) document, and made safe there, before any of it reaches the app's document.
+  const root = source.cloneNode(true) as Element;
+  const sources = elementsOf(source);
+  const copies = new Map(elementsOf(root).map((copy, i) => [sources[i], copy]));
+  if (!makeSafe(root)) return null;
+  const mount = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+  mount.replaceChildren(root);
+  return { source, root, copies };
+}
+
+/**
+ * Measures with the browser's layout. The source itself never enters the app's document: the first element measured
+ * puts a safe copy of its SVG (see `makeSafe`) into a shadow root of `host` (which should be in the document, out of
+ * sight but not `display: none`), and each element is measured by its copy. The shadow root keeps the SVG's `<style>`
+ * rules and the app's apart. The box is `getBBox()` mapped to the root's user units (its viewBox) through the screen
+ * matrices of the element and of the root, widened by half the stroke width (scaled), by the farthest reach of its
+ * markers (see `markerReach`), and to the filter region of every filter on the element or above it. `null` when any
+ * of this cannot be read, or no safe copy can be made.
  */
 export function domSvgMeasure(host: HTMLElement): SvgMeasure {
-  return (el) => {
+  let mounted: Mounted | null = null;
+  let unsafe: Element | null = null;
+  return (source) => {
     try {
-      const mount = host.shadowRoot ?? host.attachShadow({ mode: "open" });
-      const root = rootOf(el);
-      if (root.parentNode !== mount) mount.replaceChildren(root);
-      const view = el.ownerDocument.defaultView;
+      const sourceRoot = rootOf(source);
+      if (unsafe === sourceRoot) return null;
+      if (mounted?.source !== sourceRoot) {
+        mounted = mountSafeCopy(sourceRoot, host);
+        if (!mounted) {
+          unsafe = sourceRoot;
+          return null;
+        }
+      }
+      const root = mounted.root;
+      const el = mounted.copies.get(source) as SVGGraphicsElement | undefined;
+      const view = root.ownerDocument.defaultView;
       const rootScreen = (root as SVGGraphicsElement).getScreenCTM();
       const toRootFromScreen = rootScreen ? invert(matrixOf(rootScreen)) : null;
-      if (!view || !toRootFromScreen) return null;
+      if (!el || !el.isConnected || !view || !toRootFromScreen) return null;
       /** `node`'s user units to the root's, or `null`. */
       const toRoot = (node: SVGGraphicsElement): Matrix | null => {
         const screen = node.getScreenCTM();
@@ -281,18 +424,21 @@ export function domSvgMeasure(host: HTMLElement): SvgMeasure {
       if (!matrix) return null;
       const style = view.getComputedStyle(el);
       const scale = scaleOf(matrix);
-      const stroked = style.getPropertyValue("stroke") !== "none";
-      const strokeWidth = stroked ? Number.parseFloat(style.getPropertyValue("stroke-width") || "1") : 0;
+      const strokeWidth = Number.parseFloat(style.getPropertyValue("stroke-width") || "1");
       if (!Number.isFinite(strokeWidth)) return null;
-      const hasMarkers = ["marker-start", "marker-mid", "marker-end"].some((name) => {
-        const value = style.getPropertyValue(name);
-        return value !== "" && value !== "none";
-      });
-      let box = widen(mapRect(el.getBBox(), matrix), (strokeWidth / 2) * scale);
-      if (hasMarkers) box = widen(box, markerReach(strokeWidth, scale));
+      const stroked = style.getPropertyValue("stroke") !== "none";
+      let reach = stroked ? strokeWidth / 2 : 0;
+      for (const property of ["marker-start", "marker-mid", "marker-end"]) {
+        const marker = referencedElement(style.getPropertyValue(property), "marker", root);
+        if (marker === undefined) continue;
+        const markerReached = marker && markerReach(marker, strokeWidth, view);
+        if (markerReached === null || markerReached === undefined) return null;
+        reach = Math.max(reach, markerReached);
+      }
+      let box = widen(mapRect(el.getBBox(), matrix), reach * scale);
 
       for (let node: Element | null = el; node; node = node.parentElement) {
-        const filter = filterElementOf(view.getComputedStyle(node).getPropertyValue("filter"), root);
+        const filter = referencedElement(view.getComputedStyle(node).getPropertyValue("filter"), "filter", root);
         if (filter === undefined) continue;
         if (filter === null) return null;
         const filtered = node as SVGGraphicsElement;

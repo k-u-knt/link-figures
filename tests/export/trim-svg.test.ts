@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { svgIntrinsicSize } from "../../src/export/inline-svg";
+import { browserTrimDeps } from "../../src/export/trim";
 import { domSvgMeasure, pruneSvg, type SvgMeasure } from "../../src/export/trim/svg";
 import type { Rect } from "../../src/model/geometry";
 
@@ -73,6 +74,16 @@ test("a definition only a removed element used is removed; ones kept elements us
   expect(idsIn(out.text)).toEqual(["g2", "g3", "g4", "g5", "g6", "css", "unused", "in1", "in2", "in3", "in4"]);
   expect(out.text).toContain("<title>Plot</title>");
   expect(out.text).toContain(".k { stroke: url(#css); }");
+});
+
+test("a resource declared outside <defs> that only a removed element used is removed too", () => {
+  const text = svg(
+    `<clipPath id="c1"><rect id="cr"/></clipPath><linearGradient id="g1"/><clipPath id="c2"/><marker id="unused"/>` +
+      `<path id="out" clip-path="url(#c1)" fill="url(#g1)"/><path id="in" clip-path="url(#c2)"/>`,
+  );
+  const out = pruneSvg(text, LEFT_HALF, measureById({ out: OUTSIDE, in: INSIDE }));
+  expect(out.removed).toBe(1);
+  expect(idsIn(out.text)).toEqual(["c2", "unused", "in"]);
 });
 
 test("an element another one uses stays even when it lies outside", () => {
@@ -176,6 +187,86 @@ describe("domSvgMeasure", () => {
     }
   });
 
+  test("widens by the marker's reach in stroke widths, from its reference point", () => {
+    stubLayout({ x: 0, y: 0, width: 10, height: 10 }, [1, 0, 0, 1, 0, 0]);
+    const marker = `<marker id="m" markerWidth="4" markerHeight="4" refX="2" refY="2"/>`;
+    const box = measureFirst(`${marker}<path id="p" style="stroke: black; stroke-width: 2; marker-end: url(#m)"/>`, "p");
+    // The farthest corner of the 4 × 4 viewport is (2, 2) from the reference point, in stroke widths of 2.
+    const reach = Math.hypot(2, 2) * 2;
+    expect(box!.x).toBeCloseTo(-reach);
+    expect(box!.width).toBeCloseTo(10 + 2 * reach);
+  });
+
+  test("widens by the marker's reach in user units, through its viewBox and the element's scale", () => {
+    stubLayout({ x: 0, y: 0, width: 10, height: 10 }, [2, 0, 0, 2, 0, 0]);
+    // A 0 0 2 2 viewBox fitted into 6 × 6: the reference point (0, 0) lands on the viewport's corner, 6√2 from the far one.
+    const marker = `<marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6" viewBox="0 0 2 2"/>`;
+    const box = measureFirst(`${marker}<path id="p" style="stroke: none; stroke-width: 5; marker-start: url(#m)"/>`, "p");
+    const reach = Math.hypot(6, 6) * 2;
+    expect(box!.x).toBeCloseTo(-reach);
+    expect(box!.width).toBeCloseTo(20 + 2 * reach);
+  });
+
+  test.each([
+    ["a missing marker", `<path id="p" style="marker-end: url(#nowhere)"/>`],
+    ["a marker whose content may overflow", `<marker id="m" overflow="visible" style="overflow: visible"/><path id="p" style="marker-end: url(#m)"/>`],
+    ["a marker with an unreadable viewBox", `<marker id="m" viewBox="0 0 0 2"/><path id="p" style="marker-end: url(#m)"/>`],
+    ["a marker size with a unit", `<marker id="m" markerWidth="3mm"/><path id="p" style="marker-end: url(#m)"/>`],
+  ])("is null for %s", (_name, body) => {
+    stubLayout({ x: 0, y: 0, width: 10, height: 10 }, [1, 0, 0, 1, 0, 0]);
+    expect(measureFirst(body, "p")).toBeNull();
+  });
+
+  /**
+   * A source with what could run or load: event attributes, a script, HTML (in a foreignObject and on its own), links
+   * and CSS out of the file. (No `<iframe>`: happy-dom's DOMParser, unlike a browser's, tries to load one.)
+   */
+  const UNSAFE_SOURCE =
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100" onload="alert(1)">` +
+    `<style>@import "https://evil.example/a.css"; .a { fill: url(https://evil.example/f.svg#x); }</style>` +
+    `<script>alert(2)</script><foreignObject><div xmlns="http://www.w3.org/1999/xhtml">html</div></foreignObject><html:b xmlns:html="http://www.w3.org/1999/xhtml">html</html:b>` +
+    `<image id="img" href="https://evil.example/i.png" onerror="alert(3)"/><image id="img2" xlink:href="https://evil.example/j.png"/>` +
+    `<rect id="r" style="fill: url('https://evil.example/p.svg#y')"/><rect id="in"/></svg>`;
+
+  /** Prunes `text` measuring with `domSvgMeasure` in a fresh host (`#in` is always inside); returns the result and the host's mounted markup. */
+  function pruneInHost(text: string): { out: { text: string; removed: number }; mounted: string | null; boxes: (Rect | null)[] } {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    try {
+      const measure = domSvgMeasure(host);
+      const boxes: (Rect | null)[] = [];
+      const out = pruneSvg(text, LEFT_HALF, (el) => {
+        const box = measure(el);
+        boxes.push(box);
+        return el.id === "in" ? INSIDE : box;
+      });
+      const first = host.shadowRoot?.firstChild;
+      return { out, mounted: first ? new XMLSerializer().serializeToString(first) : null, boxes };
+    } finally {
+      host.remove();
+    }
+  }
+
+  test("what reaches the host is a copy without anything that runs or loads; the source is pruned and kept as it was", () => {
+    stubLayout(OUTSIDE, [1, 0, 0, 1, 0, 0]);
+    const { out, mounted } = pruneInHost(UNSAFE_SOURCE.replace(`@import "https://evil.example/a.css"; `, ""));
+    for (const banned of ["onload", "onerror", "script", "foreignObject", "xhtml", "https://", "alert"]) expect(mounted).not.toContain(banned);
+    expect(mounted).toContain(".a { fill: none; }");
+    expect(mounted).toContain('style="fill: none"');
+    expect(out.removed).toBe(3);
+    expect(idsIn(out.text)).toEqual(["in"]);
+    expect(out.text).toContain("<script>alert(2)</script>");
+    expect(out.text).toContain('onload="alert(1)"');
+  });
+
+  test("CSS that cannot be made safe (an @import) mounts nothing, and nothing is measured", () => {
+    stubLayout(OUTSIDE, [1, 0, 0, 1, 0, 0]);
+    const { out, mounted, boxes } = pruneInHost(UNSAFE_SOURCE);
+    expect(mounted).toBeNull();
+    expect(boxes.every((box) => box === null)).toBe(true);
+    expect(out.removed).toBe(0);
+  });
+
   test("is null when the browser cannot measure", () => {
     const proto = (window as unknown as { SVGGraphicsElement: { prototype: SVGGraphicsElement } }).SVGGraphicsElement.prototype;
     vi.spyOn(proto, "getBBox").mockImplementation(() => {
@@ -183,4 +274,10 @@ describe("domSvgMeasure", () => {
     });
     expect(measureFirst(`<rect id="r"/>`, "r")).toBeNull();
   });
+});
+
+test("the browser's SVG trimmer removes its measuring host even when the SVG cannot be read", async () => {
+  const before = document.body.childElementCount;
+  await expect(browserTrimDeps.trimSvg("<html/>", LEFT_HALF)).rejects.toThrow();
+  expect(document.body.childElementCount).toBe(before);
 });

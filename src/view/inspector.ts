@@ -127,16 +127,30 @@ interface Section {
  */
 export class Inspector {
   private signature = "";
+  /** A change of section is waiting for the control being typed into to lose the focus. */
+  private pending = false;
 
-  constructor(private readonly view: LinkFiguresView, private readonly el: HTMLElement) {}
+  constructor(private readonly view: LinkFiguresView, private readonly el: HTMLElement) {
+    // `change` has committed the field's write by the time the focus leaves it, so the section that was held back is then drawn.
+    this.el.addEventListener("focusout", () => {
+      if (this.pending) this.render();
+    });
+  }
 
   render(): void {
     const section = this.describe();
     if (!section) {
+      this.pending = false;
       this.signature = "";
       this.el.empty();
       return;
     }
+    // The stage moved to another page while a field here was being typed into: rebuilding the panel would take the field, and what was typed, away.
+    if (section.signature !== this.signature && this.isTypingIn()) {
+      this.pending = true;
+      return;
+    }
+    this.pending = false;
     // The same controls as before (a store change that is none of their business, or the user's own edit): only their values change, so a field being typed in keeps its text and focus.
     if (section.signature === this.signature) {
       syncFields(this.el, section.fields, section.read);
@@ -147,6 +161,12 @@ export class Inspector {
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
     renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write);
+  }
+
+  /** A control in this inspector has the focus and holds text that has not been committed. */
+  private isTypingIn(): boolean {
+    const active = this.el.ownerDocument?.activeElement;
+    return !!active && this.el.contains(active) && typedInto.has(active as Control);
   }
 
   private describe(): Section | null {

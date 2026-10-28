@@ -24,14 +24,15 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   const registries = createRegistries();
   registries.nodeTypes.register(fileType);
   const selection = new SelectionState();
-  // The stage is centred on the first page; `focusPage` is the view's rule for the page that is acted on.
+  // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
     readOnly: false,
     store,
     selection,
     plugin: { registries },
-    currentPage: () => store.doc.pages[0],
-    focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[0])!,
+    pageIndex: 0,
+    currentPage: () => store.doc.pages[view.pageIndex],
+    focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[view.pageIndex])!,
   };
   const el = new FakeEl("div");
   const inspector = new Inspector(view as never, el as never);
@@ -232,6 +233,83 @@ describe("updating", () => {
     expect(titleOf(el)).toBe("Node");
     selection.clear();
     expect(el.find((e) => e.hasClass("lf-inspector-sub"))?.text).toBe("Page 1");
+  });
+
+  test("with nothing selected, a render after the stage centres on another page shows that page", () => {
+    const { el, view, inspector } = setup((d) => { d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id))); });
+    const subtitle = () => el.find((e) => e.hasClass("lf-inspector-sub"))?.text;
+    expect(subtitle()).toBe("Page 1");
+    view.pageIndex = 1;
+    inspector.render();
+    expect(subtitle()).toBe("Page 2");
+    view.pageIndex = 0;
+    inspector.render();
+    expect(subtitle()).toBe("Page 1");
+  });
+
+  describe("a field being typed into while the stage moves to another page", () => {
+    const twoPages = (d: ReturnType<typeof createDocument>) => { d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id))); };
+    const subtitleOf = (el: FakeEl) => el.find((e) => e.hasClass("lf-inspector-sub"))?.text;
+
+    test("a section change waits while a field in the inspector is being typed into, and lands when it loses the focus", () => {
+      const { el, view, inspector } = setup(twoPages);
+      const width = el.typeOnly("width", "12");
+      view.pageIndex = 1;
+      inspector.render();
+      // The page nearest the middle is now the second, but the field keeps its place and its text.
+      expect(subtitleOf(el)).toBe("Page 1");
+      expect(el.control("width")).toBe(width);
+      expect(width.value).toBe("12");
+      // The browser blurs the control (nothing committed, so the model's value is back), then `focusout` reaches the inspector.
+      el.ownerDocument.activeElement = null;
+      width.fire("blur");
+      el.fire("focusout");
+      expect(subtitleOf(el)).toBe("Page 2");
+      expect(el.control("width").value).toBe("210");
+    });
+
+    test("committed with Enter, the held section lands at once, and the write went to the page the field belonged to", () => {
+      const { el, view, inspector, store } = setup(twoPages);
+      el.typeOnly("width", "150");
+      view.pageIndex = 1;
+      inspector.render();
+      expect(subtitleOf(el)).toBe("Page 1");
+      el.control("width").fire("change");
+      expect(store.doc.pages.map((p) => p.width)).toEqual([150, 210]);
+      expect(subtitleOf(el)).toBe("Page 2");
+    });
+
+    test("a field with the focus but nothing typed in it does not hold the section back, and a focusout with nothing held changes nothing", () => {
+      const { el, view, inspector } = setup(twoPages);
+      el.control("width").focus();
+      const margin = el.control("margins.left");
+      el.fire("focusout");
+      expect(el.control("margins.left")).toBe(margin);
+      view.pageIndex = 1;
+      inspector.render();
+      expect(subtitleOf(el)).toBe("Page 2");
+    });
+
+    test("a field typed into in another view's inspector does not hold this one back", () => {
+      const { el, view, inspector } = setup(twoPages);
+      // A second pane: its own inspector over its own element, in the same document, with the focus in one of its fields.
+      const elsewhere = new FakeEl("div", el.ownerDocument);
+      const second = new Inspector(view as never, elsewhere as never);
+      second.render();
+      elsewhere.typeOnly("width", "12");
+      expect(el.ownerDocument.activeElement).toBe(elsewhere.control("width"));
+      view.pageIndex = 1;
+      inspector.render();
+      expect(subtitleOf(el)).toBe("Page 2");
+    });
+
+    test("an element that has no ownerDocument is rendered as it always was", () => {
+      const { el, view, inspector } = setup(twoPages);
+      Object.defineProperty(el, "ownerDocument", { value: undefined });
+      view.pageIndex = 1;
+      expect(() => inspector.render()).not.toThrow();
+      expect(subtitleOf(el)).toBe("Page 2");
+    });
   });
 
   test("a page that has gone from under the inspector shows the page that is there now", () => {

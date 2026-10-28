@@ -72,6 +72,8 @@ function setup(initial: Document = figure()) {
   const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn() };
   const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn() };
   const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
+  const toolbar = { render: vi.fn() };
+  const inspector = { render: vi.fn() };
   Object.assign(internals, {
     stageEl: {
       clientWidth: 0,
@@ -80,14 +82,14 @@ function setup(initial: Document = figure()) {
       classList: { toggle: vi.fn() },
       style: { setProperty: vi.fn(), removeProperty: vi.fn() },
     },
-    viewportEl: { show: () => {}, hide: () => {} },
+    viewportEl: { show: () => {}, hide: () => {}, style: { transform: "", setProperty: vi.fn() } },
     nodeHost,
     pageLayer: { render: vi.fn() },
     pointer,
     intake: { attach: vi.fn() },
     selection,
-    toolbar: { render: () => {} },
-    inspector: { render: () => {} },
+    toolbar,
+    inspector,
   });
   view.file = { path: FIGURE_PATH } as never;
 
@@ -120,7 +122,7 @@ function setup(initial: Document = figure()) {
     (view.app.vault.cachedRead as ReturnType<typeof vi.fn>).mockClear();
     events.length = 0;
   };
-  return { view, nodeHost, pointer, selection, disk, text0, events, obsidianLoads, vaultModifies, resetCalls, vaultHandlers, rewatch: () => { unwatch(); unwatch = watch(); } };
+  return { view, nodeHost, pointer, selection, toolbar, inspector, disk, text0, events, obsidianLoads, vaultModifies, resetCalls, vaultHandlers, rewatch: () => { unwatch(); unwatch = watch(); } };
 }
 
 const link = (view: LinkFiguresView, index: number) => {
@@ -346,6 +348,71 @@ describe("the armed tool", () => {
     expect(armedWhilePlacing).toBeNull();
     expect(t.view.armedTool).toBeNull();
     expect(console.error).toHaveBeenCalled();
+  });
+});
+
+describe("the chrome follows the stage", () => {
+  /** `requestAnimationFrame` as a queue the test runs by hand, with `cancelAnimationFrame` taking a callback out of it. */
+  function frames() {
+    const queue = new Map<number, () => void>();
+    let last = 0;
+    vi.stubGlobal("window", {
+      requestAnimationFrame: (cb: () => void) => {
+        queue.set(++last, cb);
+        return last;
+      },
+      cancelAnimationFrame: vi.fn((id: number) => void queue.delete(id)),
+      setTimeout,
+      clearTimeout,
+    });
+    return queue;
+  }
+
+  test("applyViewport renders the chrome once per animation frame", () => {
+    const queue = frames();
+    const t = setup();
+    // What loading the figure asked for (the fit) is none of this test's business.
+    queue.clear();
+    t.toolbar.render.mockClear();
+    t.inspector.render.mockClear();
+
+    t.view.applyViewport();
+    t.view.applyViewport();
+    expect(queue.size).toBe(1);
+    expect(t.inspector.render).not.toHaveBeenCalled();
+
+    [...queue.values()][0]();
+    expect(t.toolbar.render).toHaveBeenCalledTimes(1);
+    expect(t.inspector.render).toHaveBeenCalledTimes(1);
+
+    // The frame has run, so the next pan or zoom asks for another.
+    queue.clear();
+    t.view.applyViewport();
+    expect(queue.size).toBe(1);
+  });
+
+  test("a chrome that cannot draw does not break the pan", () => {
+    const queue = frames();
+    const t = setup();
+    queue.clear();
+    t.inspector.render.mockImplementation(() => {
+      throw new Error("no room");
+    });
+    t.view.applyViewport();
+    expect(() => [...queue.values()][0]()).not.toThrow();
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  test("closing the view cancels the frame that was waiting", async () => {
+    const queue = frames();
+    const t = setup();
+    queue.clear();
+    t.inspector.render.mockClear();
+    t.view.applyViewport();
+    expect(queue.size).toBe(1);
+    await t.view.onClose();
+    expect(queue.size).toBe(0);
+    expect(t.inspector.render).not.toHaveBeenCalled();
   });
 });
 

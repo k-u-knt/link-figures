@@ -83,6 +83,11 @@ export class FakeEl {
     return this.children.flatMap((child) => [...(test(child) ? [child] : []), ...child.findAll(test)]);
   }
 
+  /** Whether `el` is this element or inside it. */
+  contains(el: unknown): boolean {
+    return el === this || this.find((child) => child === el) !== null;
+  }
+
   hasClass(name: string): boolean {
     return this.cls.includes(name);
   }

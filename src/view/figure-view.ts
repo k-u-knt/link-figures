@@ -78,6 +78,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** The next loaded document is to be fitted to the stage once the stage has a size. */
   private needsFit = true;
   private fitFrame: number | null = null;
+  /** The animation frame in which the chrome is next brought in line with the viewport (see `scheduleChrome`). */
+  private chromeFrame: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private spaceHeld = false;
   /** The pointer that is dragging the canvas, and where it was last seen (client coordinates). */
@@ -133,6 +135,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.resizeObserver = null;
     if (this.fitFrame !== null) window.cancelAnimationFrame(this.fitFrame);
     this.fitFrame = null;
+    if (this.chromeFrame !== null) window.cancelAnimationFrame(this.chromeFrame);
+    this.chromeFrame = null;
   }
 
   getViewData(): string {
@@ -279,10 +283,24 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.applyViewport();
   }
 
+  /**
+   * Copies the viewport onto the DOM. A pan or a zoom can change which page is nearest the middle of the stage, and the
+   * Page section of the inspector and the view commands act on that page (`focusPage`), so the chrome is drawn again too.
+   */
   applyViewport(): void {
     this.viewportEl.style.transform = this.viewport.cssTransform();
     // For what is drawn on the pages but is sized in screen pixels (handles, outlines): see the selection rules in styles.css.
     this.viewportEl.style.setProperty("--lf-zoom", String(this.viewport.zoom));
+    this.scheduleChrome();
+  }
+
+  /** Draws the toolbar and the inspector once in the next animation frame, however many times the viewport changes before it. */
+  private scheduleChrome(): void {
+    if (this.chromeFrame !== null) return;
+    this.chromeFrame = window.requestAnimationFrame(() => {
+      this.chromeFrame = null;
+      this.renderChrome();
+    });
   }
 
   /** A pointerdown that pans the canvas (middle button, or the left with the space bar held), which the pointer controller leaves alone. */

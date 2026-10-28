@@ -109,5 +109,5 @@ test("writePageField: a preset is applied whole unless it is over the limit", ()
   expect(writePageField(p, "preset", "a4-landscape", 2000)).toBe(false);
   expect(p).toMatchObject({ preset: "a4-landscape", width: 297, height: 210 });
   expect(writePageField(p, "preset", "a4-portrait", 250)).toBe(true);
-  expect(p).toMatchObject({ width: 210, height: 250 });
+  expect(p).toMatchObject({ preset: "custom", width: 210, height: 250 });
 });

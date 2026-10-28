@@ -126,6 +126,17 @@ describe("page section", () => {
     expect(seen).toEqual(["inspect:width", "inspect:height"]);
   });
 
+  test("a width over the page limit is shown, and kept, at the limit", () => {
+    const { el, store, view } = setup();
+    (view.plugin as any).settings = { maxPageSizeMm: 2000 };
+    el.typeInto("width", "2500");
+    expect(store.doc.pages[0].width).toBe(2000);
+    expect(el.control("width").value).toBe("2000");
+    // Typing it again when the page is already at the limit changes nothing in the model, yet the field is put right.
+    el.typeInto("width", "2500");
+    expect(el.control("width").value).toBe("2000");
+  });
+
   test("something that is not a number puts the old value back and writes nothing", () => {
     const { el, store } = setup();
     el.typeInto("width", "");

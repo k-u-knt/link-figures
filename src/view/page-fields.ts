@@ -96,7 +96,8 @@ export function writePageField(page: Page, key: string, value: unknown, limitMm:
     const next = applyPreset(page, String(value));
     const width = clampPageSize(next.width, limitMm);
     const height = clampPageSize(next.height, limitMm);
-    page.preset = next.preset;
+    // A preset whose size was cut down is no longer that preset.
+    page.preset = width.clamped || height.clamped ? CUSTOM_PRESET : next.preset;
     page.width = width.value;
     page.height = height.value;
     return width.clamped || height.clamped;

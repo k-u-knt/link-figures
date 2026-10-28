@@ -59,7 +59,10 @@ export function tokenize(bytes: Uint8Array): Token[] {
     const token = next();
     if (!token) break;
     if (token.kind === "operator" && token.value === "BI") tokens.push(inlineImage(token.start));
-    else tokens.push(token);
+    else if (token.kind === "operator" && (token.value === "EI" || token.value === "ID")) {
+      // Outside an inline image these can only be the rest of one whose data was ended too early.
+      throw new ContentParseError(`"${token.value}" outside an inline image at byte ${token.start}`);
+    } else tokens.push(token);
   }
   return tokens;
 

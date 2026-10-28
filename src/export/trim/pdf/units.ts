@@ -301,6 +301,8 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
   let tm: Matrix = IDENTITY;
   let tlm: Matrix = IDENTITY;
   const fonts = new Map<string, ReturnType<ResourceInfo["font"]>>();
+  /** Per two-byte font: the width each byte counts as, the widest known glyph but at least an em. */
+  const twoByteWidths = new Map<string, number>();
 
   for (let index = 0; index < ops.length; index++) {
     const op = ops[index];
@@ -517,7 +519,12 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     const size = gs.size;
     const th = gs.scale;
     // A two-byte font's codes are not mapped to glyphs here: each byte counts as a glyph at least one em wide.
-    const twoByteWidth = font.widths ? Math.max(1000, font.widths.missing, ...font.widths.list) : 1000;
+    let twoByteWidth = twoByteWidths.get(gs.font);
+    if (twoByteWidth === undefined) {
+      twoByteWidth = Math.max(1000, font.widths?.missing ?? 0);
+      for (const w of font.widths?.list ?? []) if (w > twoByteWidth) twoByteWidth = w;
+      twoByteWidths.set(gs.font, twoByteWidth);
+    }
     let x = 0;
     let minX = Infinity;
     let maxX = -Infinity;

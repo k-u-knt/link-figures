@@ -95,6 +95,14 @@ test("binary inline-image data holding \" EI \" without /L never yields a token 
   expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI \xfe\x01 EI Q"))).toThrow(ContentParseError);
 });
 
+test("the rest of an inline image ended too early throws, whatever its bytes read as", () => {
+  // A false " EI " in binary data without /L, followed by bytes that read as a string, an operator or a name.
+  expect(() => tokenize(enc("q BI /W 4 /H 1 /BPC 8 /CS /G ID \x80 EI (\xfe\xfd) EI Q"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI ab EI Q"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q BI /W 4 /H 1 ID \x80 EI /\xfe EI Q"))).toThrow(ContentParseError);
+  expect(() => tokenize(enc("q ID Q"))).toThrow(ContentParseError);
+});
+
 test("malformed input throws ContentParseError", () => {
   expect(() => tokenize(enc("(unterminated"))).toThrow(ContentParseError);
   expect(() => tokenize(enc("<41 4"))).toThrow(ContentParseError);

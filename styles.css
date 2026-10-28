@@ -243,9 +243,13 @@
   overflow: hidden;
 }
 
-.lf-image img {
+/* Three classes deep on purpose: Obsidian's app.css caps every `.workspace-leaf-content img:not([width])` at
+   `max-width: 100%` (specificity 0,2,1), which would shrink a picture wider than its frame (a cover fit, or any crop)
+   and leave the frame blank. This selector outranks it. */
+.lf-view .lf-node .lf-image img {
   position: absolute;
   max-width: none;
+  max-height: none;
   user-select: none;
   -webkit-user-drag: none;
 }

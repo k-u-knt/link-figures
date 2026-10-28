@@ -45,7 +45,8 @@ test("svg asset is inlined with namespaced ids and the crop as viewBox", () => {
     { kind: "svg", text: '<svg viewBox="0 0 200 100"><defs><clipPath id="c1"><rect/></clipPath></defs><rect clip-path="url(#c1)"/></svg>', width: 200, height: 100 },
     c,
   ) as string;
-  expect(out).toMatch(new RegExp(`^<svg x="10" y="20" width="100" height="50" viewBox="100 0 100 100" preserveAspectRatio="xMidYMid slice" id="${n.id}-root">`));
+  // Natural 200x100, right half (100x100) covered into 100x50: scale 1, so the crop is 100x100 at y -25 in the box, cut to it by the clip.
+  expect(out).toMatch(new RegExp(`^<g clip-path="url\\(#clip-1\\)"><svg x="10" y="-5" width="100" height="100" viewBox="100 0 100 100" preserveAspectRatio="xMidYMid meet" id="${n.id}-root">`));
   expect(out).toContain(`id="${n.id}-c1"`);
   expect(out).toContain(`url(#${n.id}-c1)`);
   expect(c.warnings).toEqual([]);
@@ -93,7 +94,7 @@ test("svg asset without a crop uses the whole viewBox, and contain means meet", 
     { kind: "svg", text: '<svg viewBox="10 20 200 100"><rect/></svg>', width: 200, height: 100 },
     ctx(),
   ) as string;
-  expect(out).toMatch(/^<svg x="10" y="20" width="100" height="50" viewBox="10 20 200 100" preserveAspectRatio="xMidYMid meet" id="p-[a-z0-9]{4}-root">/);
+  expect(out).toMatch(/^<g clip-path="url\(#clip-1\)"><svg x="10" y="20" width="100" height="50" viewBox="10 20 200 100" preserveAspectRatio="xMidYMid meet" id="p-[a-z0-9]{4}-root">/);
 });
 
 test("svg asset keeps the namespace prefixes its root declared, so inlined xlink:href stays well-formed", () => {
@@ -103,7 +104,7 @@ test("svg asset keeps the namespace prefixes its root declared, so inlined xlink
     { kind: "svg", text: '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10"><use xlink:href="#a"/></svg>', width: 10, height: 10 },
     ctx(),
   ) as string;
-  expect(out).toMatch(new RegExp(`^<svg x="10" y="20" width="100" height="50" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid slice" id="${n.id}-root" xmlns:xlink="http:\\/\\/www\\.w3\\.org\\/1999\\/xlink">`));
+  expect(out).toMatch(new RegExp(`^<g clip-path="url\\(#clip-1\\)"><svg x="10" y="-5" width="100" height="100" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" id="${n.id}-root" xmlns:xlink="http:\\/\\/www\\.w3\\.org\\/1999\\/xlink">`));
 });
 
 const svglite =
@@ -165,4 +166,37 @@ test("ids from uid are used for every clip path in one build", () => {
   fileNodeSvg(node(), asset, c);
   fileNodeSvg(node(), asset, c);
   expect(c.defs.map((d) => /id="([^"]+)"/.exec(d)![1])).toEqual(["clip-1", "clip-2"]);
+});
+
+// A crop is clipped to the crop region, not to the node's box: with `contain` the rest of the image must not fill the letterbox.
+
+test("image: the clip is the crop's region in the box (offset by the node), not the node's rectangle", () => {
+  const c = ctx();
+  // Natural 200x100, right half (100x100), contained in 100x50: scale 0.5, so the crop is 50x50, centred (x 25) in the box.
+  // The whole image is then 100x50, 50 to the left of the crop's own left edge: at x -25 in the box.
+  const out = fileNodeSvg(node({ crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, fit: "contain" }), { kind: "image", dataUri: "data:,x", naturalWidth: 200, naturalHeight: 100 }, c) as string;
+  expect(c.defs[0]).toBe('<clipPath id="clip-1"><rect x="35" y="20" width="50" height="50"/></clipPath>');
+  expect(out).toContain('x="-15" y="20" width="100" height="50"');
+});
+
+describe("svg asset with the right-half crop of a 100x100 viewBox on a 200x100 node at (10, 20)", () => {
+  const asset = { kind: "svg" as const, text: '<svg viewBox="0 0 100 100"><rect/></svg>', width: 100, height: 100 };
+  const crop = { x: 0.5, y: 0, w: 0.5, h: 1 };
+
+  test("contain: the crop's part of the viewBox fills a viewport of the crop's aspect, letterboxed in the node and clipped to it", () => {
+    const c = ctx();
+    const n = node({ file: "plot.svg", width: 200, height: 100, crop, fit: "contain" });
+    const out = fileNodeSvg(n, asset, c) as string;
+    expect(out).toMatch(new RegExp(`^<g clip-path="url\\(#clip-1\\)"><svg x="85" y="20" width="50" height="100" viewBox="50 0 50 100" preserveAspectRatio="xMidYMid meet" id="${n.id}-root">`));
+    expect(out).toMatch(/<\/svg><\/g>$/);
+    expect(c.defs).toEqual(['<clipPath id="clip-1"><rect x="85" y="20" width="50" height="100"/></clipPath>']);
+  });
+
+  test("cover: the viewport is scaled up past the node, which clips it", () => {
+    const c = ctx();
+    const n = node({ file: "plot.svg", width: 200, height: 100, crop, fit: "cover" });
+    const out = fileNodeSvg(n, asset, c) as string;
+    expect(out).toMatch(new RegExp(`^<g clip-path="url\\(#clip-1\\)"><svg x="10" y="-130" width="200" height="400" viewBox="50 0 50 100" preserveAspectRatio="xMidYMid meet" id="${n.id}-root">`));
+    expect(c.defs).toEqual(['<clipPath id="clip-1"><rect x="10" y="20" width="200" height="100"/></clipPath>']);
+  });
 });

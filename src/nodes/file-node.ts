@@ -2,7 +2,7 @@ import { Component, MarkdownRenderer, setIcon } from "obsidian";
 import type { FileAsset } from "../export/asset-types";
 import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
-import { imagePlacement, type Rect } from "../model/geometry";
+import { cropPlacement, type Rect } from "../model/geometry";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
@@ -52,6 +52,8 @@ class FileNodeRenderer implements NodeRenderer {
   private renderedResolved: Resolved | undefined | null = null;
   private bodyKind: BodyKind = "pending";
   private imageEl: HTMLImageElement | null = null;
+  /** The `.lf-image` element round the picture: it is placed at the crop's region, and clips the picture to it. */
+  private imageFrame: HTMLElement | null = null;
   private contentEl: HTMLElement | null = null;
   /** Owns the components the markdown renderer creates, so a re-render or unmount can release them. */
   private card: Component | null = null;
@@ -140,6 +142,7 @@ class FileNodeRenderer implements NodeRenderer {
     }
     this.body.empty();
     this.imageEl = null;
+    this.imageFrame = null;
     this.contentEl = null;
     this.natural = null;
     this.bodyKind = "pending";
@@ -149,11 +152,13 @@ class FileNodeRenderer implements NodeRenderer {
   private showImage(src: string): void {
     if (this.bodyKind !== "image" || !this.imageEl) {
       this.clearBody("The node was replaced", false);
-      const img = this.body.createDiv({ cls: "lf-image" }).createEl("img");
+      const frame = this.body.createDiv({ cls: "lf-image" });
+      const img = frame.createEl("img");
       img.draggable = false;
       img.addEventListener("load", () => this.onImageLoad(img));
       img.addEventListener("error", () => this.onImageError(img));
       this.imageEl = img;
+      this.imageFrame = frame;
       this.bodyKind = "image";
     }
     // A new `src` keeps the old size until it has loaded, so a refreshed image does not jump.
@@ -181,17 +186,24 @@ class FileNodeRenderer implements NodeRenderer {
     return size.width > 0 && size.height > 0 ? size : FALLBACK_NATURAL;
   }
 
-  /** Positions the whole image so that the crop region covers (or fits in) the node's box; `object-fit` cannot crop. */
+  /**
+   * Shows the crop region at the node's fit: the frame is put at the part of the box the region fills (all of it with
+   * `cover`, a letterboxed rectangle with `contain`) and clips the whole image, placed inside it. `object-fit` cannot crop.
+   */
   private placeImage(): void {
     const img = this.imageEl;
-    if (!img) return;
+    const frame = this.imageFrame;
+    if (!img || !frame) return;
     const box = { width: this.node.width, height: this.node.height };
-    const place: Rect = imagePlacement(box, this.natural ?? { width: 0, height: 0 }, this.node.crop, this.node.fit);
-    const style = img.style;
-    style.left = `${place.x}px`;
-    style.top = `${place.y}px`;
-    style.width = `${place.width}px`;
-    style.height = `${place.height}px`;
+    const { image, region } = cropPlacement(box, this.natural ?? { width: 0, height: 0 }, this.node.crop, this.node.fit);
+    frame.style.left = `${region.x}px`;
+    frame.style.top = `${region.y}px`;
+    frame.style.width = `${region.width}px`;
+    frame.style.height = `${region.height}px`;
+    img.style.left = `${image.x - region.x}px`;
+    img.style.top = `${image.y - region.y}px`;
+    img.style.width = `${image.width}px`;
+    img.style.height = `${image.height}px`;
   }
 
   private showContent(resolved: Extract<Resolved, { kind: "content" }>): void {

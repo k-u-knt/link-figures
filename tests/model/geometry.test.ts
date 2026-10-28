@@ -1,4 +1,4 @@
-import { pageOriginsPx, imagePlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect } from "../../src/model/geometry";
+import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect } from "../../src/model/geometry";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -33,4 +33,31 @@ test("unionRect bounds all rects, and is empty for none", () => {
 });
 test("imagePlacement fills the box when the image has no size yet", () => {
   expect(imagePlacement({ width: 100, height: 50 }, { width: 0, height: 0 }, null, "cover")).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+});
+
+test("cropPlacement: contain with a right-half crop letterboxes the crop, not the image", () => {
+  const p = cropPlacement({ width: 200, height: 100 }, { width: 200, height: 100 }, { x: 0.5, y: 0, w: 0.5, h: 1 }, "contain");
+  expect(p.fitted).toEqual({ x: 50, y: 0, width: 100, height: 100 });
+  expect(p.region).toEqual(p.fitted);
+  expect(p.image).toEqual({ x: -50, y: 0, width: 200, height: 100 });
+});
+test("cropPlacement: cover with the same crop fills the box and the region is cut to it", () => {
+  const p = cropPlacement({ width: 200, height: 100 }, { width: 200, height: 100 }, { x: 0.5, y: 0, w: 0.5, h: 1 }, "cover");
+  expect(p.fitted).toEqual({ x: 0, y: -50, width: 200, height: 200 });
+  expect(p.region).toEqual({ x: 0, y: 0, width: 200, height: 100 });
+  expect(p.image).toEqual({ x: -200, y: -50, width: 400, height: 200 });
+});
+test("cropPlacement: no crop, contain, a wide image in a square box", () => {
+  const p = cropPlacement({ width: 100, height: 100 }, { width: 200, height: 100 }, null, "contain");
+  expect(p.fitted).toEqual({ x: 0, y: 25, width: 100, height: 50 });
+  expect(p.region).toEqual(p.fitted);
+  expect(p.image).toEqual(p.fitted);
+});
+test("cropPlacement: an image without a size gives the box as region", () => {
+  const box = { x: 0, y: 0, width: 100, height: 50 };
+  expect(cropPlacement({ width: 100, height: 50 }, { width: 0, height: 0 }, null, "contain")).toEqual({ image: box, fitted: box, region: box });
+});
+test("imagePlacement is the whole image of cropPlacement", () => {
+  const args = [{ width: 200, height: 100 }, { width: 300, height: 90 }, { x: 0.25, y: 0.1, w: 0.5, h: 0.8 }] as const;
+  for (const fit of ["cover", "contain"] as const) expect(imagePlacement(...args, fit)).toEqual(cropPlacement(...args, fit).image);
 });

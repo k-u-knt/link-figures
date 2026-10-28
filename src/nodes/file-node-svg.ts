@@ -1,38 +1,51 @@
 import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline-svg";
 import type { FileAsset } from "../export/asset-types";
-import { imagePlacement } from "../model/geometry";
+import { cropPlacement, type Rect } from "../model/geometry";
 import type { FileNode } from "../model/types";
 import type { SvgContext } from "../registry/node-type";
 
-/** The node's image drawn at its crop and fit, clipped to the node's rectangle. Numbers are written as they are, unrounded. */
+/**
+ * The node's image drawn at its crop and fit, clipped to the crop's region of the node's rectangle, so that with `contain`
+ * the image outside the crop does not fill the letterbox. Numbers are written as they are, unrounded.
+ */
 function clippedImage(node: FileNode, href: string, natural: { width: number; height: number }, ctx: SvgContext): string {
-  const place = imagePlacement({ width: node.width, height: node.height }, natural, node.crop, node.fit);
+  const { image, region } = cropPlacement({ width: node.width, height: node.height }, natural, node.crop, node.fit);
   const clip = ctx.uid("clip");
-  ctx.defs.push(`<clipPath id="${clip}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"/></clipPath>`);
+  ctx.defs.push(clipRect(clip, node, region));
   return (
-    `<image href="${href}" x="${node.x + place.x}" y="${node.y + place.y}" width="${place.width}" height="${place.height}" ` +
+    `<image href="${href}" x="${node.x + image.x}" y="${node.y + image.y}" width="${image.width}" height="${image.height}" ` +
     `preserveAspectRatio="none" clip-path="url(#${clip})"/>`
   );
 }
 
+/** A `<clipPath>` of the part of the node's rectangle that `region` (relative to the node) names. */
+function clipRect(id: string, node: FileNode, region: Rect): string {
+  return `<clipPath id="${id}"><rect x="${node.x + region.x}" y="${node.y + region.y}" width="${region.width}" height="${region.height}"/></clipPath>`;
+}
+
 /**
- * The linked SVG as a nested `<svg>`: its viewBox (or the crop's part of it) fills the node's rectangle as `fit` says.
- * It carries the file's root attributes (namespaces, `class`, `fill`…) and the id `{node.id}-root` that the file's
- * scoped `<style>` rules start from. Things inlining had to drop are reported as warnings.
+ * The linked SVG as a nested `<svg>`: its viewBox (or the crop's part of it) fills the crop's region as `fit` says, and
+ * a clip to that region cuts off what `cover` pushes beyond the node's rectangle. The nested `<svg>`'s viewport has the
+ * crop's aspect ratio, so `meet` and `slice` draw the same and `meet` is used for both. It carries the file's root
+ * attributes (namespaces, `class`, `fill`…) and the id `{node.id}-root` that the file's scoped `<style>` rules start from.
+ * Things inlining had to drop are reported as warnings.
  */
 function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   const [vx, vy, vw, vh] = svgIntrinsicSize(text).viewBox;
   const c = node.crop;
   const viewBox = c ? [vx + c.x * vw, vy + c.y * vh, c.w * vw, c.h * vh] : [vx, vy, vw, vh];
-  const aspect = node.fit === "cover" ? "xMidYMid slice" : "xMidYMid meet";
+  const { fitted, region } = cropPlacement({ width: node.width, height: node.height }, { width: vw, height: vh }, c, node.fit);
+  const clip = ctx.uid("clip");
+  ctx.defs.push(clipRect(clip, node, region));
   const prefix = `${node.id}-`;
   const dropped: string[] = [];
   const rootAttributes = svgRootAttributes(text, prefix, dropped);
   const content = inlineSvg(text, prefix, dropped);
   for (const message of dropped) ctx.warnings.push(`Node ${node.id}: ${message}`);
   return (
-    `<svg x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" viewBox="${viewBox.join(" ")}" ` +
-    `preserveAspectRatio="${aspect}" id="${prefix}root"${rootAttributes}>${content}</svg>`
+    `<g clip-path="url(#${clip})">` +
+    `<svg x="${node.x + fitted.x}" y="${node.y + fitted.y}" width="${fitted.width}" height="${fitted.height}" viewBox="${viewBox.join(" ")}" ` +
+    `preserveAspectRatio="xMidYMid meet" id="${prefix}root"${rootAttributes}>${content}</svg></g>`
   );
 }
 

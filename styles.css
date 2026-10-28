@@ -237,10 +237,9 @@
   overflow: hidden;
 }
 
-/* The picture is placed by script (crop and fit), not by object-fit. */
+/* The picture is placed by script (crop and fit), not by object-fit: the frame at the crop's region, the image inside it. */
 .lf-image {
   position: absolute;
-  inset: 0;
   overflow: hidden;
 }
 

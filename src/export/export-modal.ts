@@ -8,6 +8,7 @@ import type { LinkFiguresView } from "../view/figure-view";
 import type { AssetMap } from "./asset-types";
 import { collectAssets } from "./assets";
 import { buildPageSvg } from "./svg-builder";
+import { browserTrimDeps, trimAssets, type TrimDeps } from "./trim";
 import { exportDir, exportFolderFor, exportPathFor, isFigureSource, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
 /** More warnings than this are summarised in the notice; all of them go to the console. */
@@ -34,14 +35,17 @@ export interface ExportDeps {
   elementFor: (id: NodeId) => HTMLElement | undefined;
   /** The stage's decoders, so panels are drawn in the export as they are on the stage. */
   decoders: Decoders;
+  /** How each panel's source is trimmed to the part of it that shows (see `trimAssets`). */
+  trim: TrimDeps;
   /** True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). */
   isProtected: (path: string) => boolean;
 }
 
 /**
- * Collects each page's assets, builds its SVG, lets the exporter turn them into files and writes those to the vault.
- * The warnings returned are everything that could not be done faithfully: assets that failed, nodes skipped, nodes rasterised,
- * and files not written because their path is protected (`deps.isProtected`). `files` counts the files actually written.
+ * Collects each page's assets, trims each panel's source to the part of it that shows, builds the page's SVG, lets the
+ * exporter turn them into files and writes those to the vault. The warnings returned are everything that could not be
+ * done faithfully (assets that failed, nodes skipped, nodes rasterised, and files not written because their path is
+ * protected: `deps.isProtected`), and what trimming did to each cropped panel. `files` counts the files actually written.
  */
 export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ files: number; warnings: string[] }> {
   const { app } = deps;
@@ -59,7 +63,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
     if (page.width > run.maxPageSizeMm || page.height > run.maxPageSizeMm) {
       warnings.push(`Page "${page.name}" is ${page.width} × ${page.height} mm, over the ${run.maxPageSizeMm} mm page limit`);
     }
-    const pageAssets = await collectAssets(run.doc, page, {
+    const collected = await collectAssets(run.doc, page, {
       app,
       resolved: deps.resolved,
       elementFor: deps.elementFor,
@@ -69,6 +73,7 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       dpi: run.dpi,
       warnings,
     });
+    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, warnings);
     const built = buildPageSvg(run.doc, page, deps.nodeTypes, pageAssets);
     warnings.push(...built.warnings);
     assets.set(page.id, pageAssets);
@@ -228,6 +233,7 @@ export class ExportModal extends Modal {
           resolved: (id) => view.resolvedCache.get(id),
           elementFor: (id) => view.nodeHost.elementFor(id),
           decoders: plugin.decoders,
+          trim: browserTrimDeps,
           isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
         },
       );

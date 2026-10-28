@@ -202,3 +202,31 @@ describe("svg asset with the right-half crop of a 100x100 viewBox on a 200x100 n
     expect(c.defs).toEqual(['<clipPath id="clip-1"><rect x="10" y="20" width="200" height="100"/></clipPath>']);
   });
 });
+
+test("an image asset's own crop (after trimming) is used instead of the node's", () => {
+  // The node's crop is the right half; the asset is that half alone, so its crop is all of it.
+  const n = node({ crop: { x: 0.5, y: 0, w: 0.5, h: 1 } });
+  const out = fileNodeSvg(n, { kind: "image", dataUri: "data:,x", naturalWidth: 100, naturalHeight: 100, crop: { x: 0, y: 0, w: 1, h: 1 } }, ctx()) as string;
+  // The uncut 200×100 image is drawn at x -90; its right half starts 100 further on.
+  expect(out).toContain('x="10" y="-5" width="100" height="100"');
+});
+
+test("a PDF asset's raster crop (after trimming) is used for its raster instead of the node's crop", () => {
+  const n = node({ file: "plot.pdf", crop: { x: 0.5, y: 0, w: 0.5, h: 1 } });
+  const out = fileNodeSvg(
+    n,
+    {
+      kind: "pdf",
+      bytes: new ArrayBuffer(0),
+      pageIndex: 0,
+      widthPt: 300,
+      heightPt: 150,
+      raster: "data:,cut",
+      rasterWidth: 100,
+      rasterHeight: 100,
+      rasterCrop: { x: 0, y: 0, w: 1, h: 1 },
+    },
+    ctx(),
+  ) as string;
+  expect(out).toContain('href="data:,cut" x="10" y="-5" width="100" height="100"');
+});

@@ -2,15 +2,16 @@ import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline
 import type { FileAsset } from "../export/asset-types";
 import { cropPlacement, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
-import type { FileNode } from "../model/types";
+import type { Crop, FileNode } from "../model/types";
 import type { SvgContext } from "../registry/node-type";
 
 /**
  * The node's image drawn at its crop and fit, clipped to the crop's region of the node's rectangle, so that with `contain`
- * the image outside the crop does not fill the letterbox. Numbers are written as they are, unrounded.
+ * the image outside the crop does not fill the letterbox. `crop` is the node's, or the one a trimmed asset carries for its
+ * cut image. Numbers are written as they are, unrounded.
  */
-function clippedImage(node: FileNode, href: string, natural: { width: number; height: number }, ctx: SvgContext): string {
-  const { image, region } = cropPlacement({ width: node.width, height: node.height }, natural, node.crop, node.fit);
+function clippedImage(node: FileNode, href: string, natural: { width: number; height: number }, crop: Crop | null, ctx: SvgContext): string {
+  const { image, region } = cropPlacement({ width: node.width, height: node.height }, natural, crop, node.fit);
   const clip = ctx.uid("clip");
   ctx.defs.push(clipRect(clip, node, region));
   return (
@@ -62,10 +63,10 @@ export function fileNodeSvg(node: FileNode, asset: FileAsset | undefined, ctx: S
   }
   switch (asset.kind) {
     case "image":
-      return clippedImage(node, asset.dataUri, { width: asset.naturalWidth, height: asset.naturalHeight }, ctx);
+      return clippedImage(node, asset.dataUri, { width: asset.naturalWidth, height: asset.naturalHeight }, asset.crop ?? node.crop, ctx);
     case "pdf":
       ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: PDF panel rasterised`);
-      return clippedImage(node, asset.raster, { width: asset.rasterWidth, height: asset.rasterHeight }, ctx);
+      return clippedImage(node, asset.raster, { width: asset.rasterWidth, height: asset.rasterHeight }, asset.rasterCrop ?? node.crop, ctx);
     case "svg":
       return nestedSvg(node, asset.text, ctx);
   }

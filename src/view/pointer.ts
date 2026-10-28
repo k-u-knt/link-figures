@@ -4,7 +4,7 @@ import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { LinkFiguresView } from "./figure-view";
 import { HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle } from "./pointer-math";
-import { pageWorldRect } from "./viewport";
+import { pagePointAt, pageWorldRect } from "./viewport";
 
 /** Screen pixels a press has to travel before it is a drag; a click that wobbles is still a click. */
 const DRAG_THRESHOLD_PX = 3;
@@ -141,6 +141,17 @@ export class PointerController {
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     const target = ev.target as Element | null;
     if (isEditable(target) || target?.closest?.(".lf-badge")) return;
+
+    // An armed tool takes the press: it is placed where the press is, on any page and over any node, and selects nothing
+    // itself. The stage does not take the focus, and the mousedown that follows must not move it either (hence
+    // `preventDefault`): it belongs to what the tool has just made, such as a label that has started editing.
+    if (this.view.armedTool) {
+      ev.preventDefault();
+      const at = pagePointAt(this.store.doc, this.view.viewport.toWorld(this.view.stagePoint(ev)));
+      if (at) this.view.placeTool(at);
+      else this.view.disarmTool();
+      return;
+    }
 
     // So that keys arrive after a click.
     stage.focus({ preventScroll: true });
@@ -387,6 +398,12 @@ export class PointerController {
         handled = this.deleteSelected();
         break;
       case "Escape":
+        // An armed tool is put down first; the selection is cleared by the next Escape.
+        if (this.view.armedTool) {
+          this.view.disarmTool();
+          handled = true;
+          break;
+        }
         handled = this.view.selection.ids.length > 0;
         this.view.selection.clear();
         break;

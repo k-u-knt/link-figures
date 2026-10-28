@@ -13,6 +13,13 @@ export interface Rect {
   height: number;
 }
 
+/** A point on a page, in that page's own pixels (from its top-left corner): where a node is put. */
+export interface PlacePoint {
+  page: Page;
+  x: number;
+  y: number;
+}
+
 export function mmToPx(mm: number): number {
   return mm * MM_TO_PX;
 }

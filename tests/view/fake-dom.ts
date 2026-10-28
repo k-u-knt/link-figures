@@ -87,6 +87,11 @@ export class FakeEl {
     return this.cls.includes(name);
   }
 
+  toggleClass(name: string, on: boolean): void {
+    this.cls = this.cls.filter((c) => c !== name);
+    if (on) this.cls.push(name);
+  }
+
   /** The control for a field. */
   control(key: string): FakeEl {
     const el = this.querySelector(`[data-key="${key}"]`);

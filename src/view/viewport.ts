@@ -1,4 +1,4 @@
-import { pageOriginsPx, pageSizePx, type Pt, type Rect } from "../model/geometry";
+import { pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
 import type { Document, NodeId, Page } from "../model/types";
 
 export interface Size {
@@ -69,6 +69,15 @@ export class Viewport {
 export function pageWorldRect(doc: Document, page: Page): Rect {
   const origin = pageOriginsPx(doc).get(page.id) ?? { x: 0, y: 0 };
   return { ...origin, ...pageSizePx(page) };
+}
+
+/** The page under a world point, and the point in that page's pixels; null when it is over the canvas between or around the pages. */
+export function pagePointAt(doc: Document, world: Pt): PlacePoint | null {
+  for (const page of doc.pages) {
+    const rect = pageWorldRect(doc, page);
+    if (rectContainsPt(rect, world)) return { page, x: world.x - rect.x, y: world.y - rect.y };
+  }
+  return null;
 }
 
 /** The page whose centre is nearest `world`; the first page on a tie, and undefined for a document without pages. */

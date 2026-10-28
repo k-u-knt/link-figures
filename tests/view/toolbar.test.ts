@@ -17,6 +17,7 @@ function setup(commands: Command[]) {
   const ran: string[] = [];
   const view = {
     readOnly: false,
+    armedTool: null as Command | null,
     store,
     stageEl: Object.assign(stage, { focus: () => void ran.push("focus-stage") }),
     plugin: { registries },
@@ -85,4 +86,16 @@ test("a command registered later gets a button, and the buttons are built again"
   view.plugin.registries.commands.register(cmd("b", "view"));
   toolbar.render();
   expect(el.children.map((c) => (c.hasClass("lf-sep") ? "|" : c.attrs["aria-label"]))).toEqual(["Name a", "|", "Name b"]);
+});
+
+test("the armed tool's button is active", () => {
+  const { el, toolbar, view } = setup([cmd("text", "insert"), cmd("other", "insert")]);
+  const [text, other] = el.children;
+  expect([text.hasClass("is-active"), other.hasClass("is-active")]).toEqual([false, false]);
+  view.armedTool = view.plugin.registries.commands.get("text")!;
+  toolbar.render();
+  expect([text.hasClass("is-active"), other.hasClass("is-active")]).toEqual([true, false]);
+  view.armedTool = null;
+  toolbar.render();
+  expect(text.hasClass("is-active")).toBe(false);
 });

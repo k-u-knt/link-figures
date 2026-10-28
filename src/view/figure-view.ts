@@ -13,7 +13,7 @@ import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
 import { createDocument } from "../model/defaults";
-import type { Pt, Rect } from "../model/geometry";
+import type { PlacePoint, Pt, Rect } from "../model/geometry";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { Command, CommandContext } from "../registry/command";
@@ -64,6 +64,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
+  /** The tool that the next press on a page places (see `Command.place`), or null. A new document, or none, disarms it. */
+  armedTool: Command | null = null;
 
   /** The file text as `setViewData` received it. */
   private rawText = "";
@@ -233,6 +235,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.readOnly = true;
     this.rawText = raw;
     this.ensureDom();
+    this.disarmTool();
     this.clearError();
     this.viewportEl.hide();
     const box = this.stageEl.createDiv({ cls: "lf-error" });
@@ -312,15 +315,54 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   runCommand(command: Command): void {
     const ctx = this.commandContext();
     if (this.readOnly || !command.applies(ctx)) return;
+    this.attempt(command, () => command.run(ctx));
+  }
+
+  /** Arms `command`, a tool, in place of any other; arming the armed tool again disarms it. Nothing is armed in a read-only view. */
+  armTool(command: Command): void {
+    if (this.readOnly || !command.place) return;
+    this.setArmedTool(this.armedTool?.id === command.id ? null : command);
+  }
+
+  disarmTool(): void {
+    this.setArmedTool(null);
+  }
+
+  /** The press of an armed tool on a page: the tool is disarmed, then placed at `at` (once), a failure shown as `runCommand` shows one. */
+  placeTool(at: PlacePoint): void {
+    const tool = this.armedTool;
+    if (!tool?.place) return;
+    this.disarmTool();
+    const ctx = this.commandContext();
+    this.attempt(tool, () => tool.place?.(ctx, at));
+  }
+
+  /** What a double-click tells a node, from a command: an `lf-activate` event on its element (a text node starts editing). */
+  activateNode(id: NodeId): void {
+    this.nodeHost.elementFor(id)?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
+  }
+
+  /** Does what `command` does; a failure, thrown or rejected, is shown to the user rather than lost. */
+  private attempt(command: Command, action: () => void | Promise<void>): void {
     const fail = (error: unknown): void => {
       console.error(`Link Figures: "${command.name}" failed`, error);
       new Notice(`Link Figures: "${command.name}" failed. ${error instanceof Error ? error.message : String(error)}`);
     };
     try {
-      void Promise.resolve(command.run(ctx)).catch(fail);
+      void Promise.resolve(action()).catch(fail);
     } catch (error) {
       fail(error);
     }
+  }
+
+  /** The stage shows an armed tool by its cursor (`.lf-tool-armed` in styles.css), and the toolbar by its button. */
+  private setArmedTool(tool: Command | null): void {
+    if (tool === this.armedTool) return;
+    this.armedTool = tool;
+    this.stageEl.classList.toggle("lf-tool-armed", tool !== null);
+    if (tool) this.stageEl.style.setProperty("--lf-tool-cursor", tool.cursor ?? "crosshair");
+    else this.stageEl.style.removeProperty("--lf-tool-cursor");
+    this.renderChrome();
   }
 
   /** The Delete key's own action: the selected nodes that are not locked are removed, and their links forgotten. */
@@ -486,6 +528,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   private setDocument(doc: Document, parsed: ParsedFigureFile, keepResolutions = false): void {
     this.ensureDom();
+    // A tool armed for the document that was just replaced is not to land on this one.
+    this.disarmTool();
     this.unsubscribe?.();
     if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;

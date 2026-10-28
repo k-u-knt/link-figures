@@ -2,11 +2,12 @@ import { normalizePath, Notice, type App } from "obsidian";
 import { MIN_NODE_PX } from "../constants";
 import { splitLinktext } from "../format/links-section";
 import { fileNodeDefaults } from "../model/defaults";
-import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type Pt } from "../model/geometry";
+import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
 import { isEditable } from "../view/pointer";
 import { roundPx } from "../view/pointer-math";
+import { pagePointAt, pageWorldRect } from "../view/viewport";
 import { classifyDrop, classifyPaste, dedupeName, extensionOf, linkSafeName, type DropData, type IntakeAction } from "./intake-classify";
 import { isPanelExtension, resolveFileNode } from "./resolver";
 import type { Resolved } from "./types";
@@ -19,11 +20,7 @@ const IMAGE_LOAD_TIMEOUT_MS = 15000;
 type Size = { width: number; height: number };
 
 /** Where new nodes go: a page, and a position on it in that page's pixels. */
-export interface IntakeTarget {
-  page: Page;
-  x: number;
-  y: number;
-}
+export type IntakeTarget = PlacePoint;
 
 /** What a node is to link to, and how it is to show it. */
 type Planned = Pick<FileNode, "file" | "subpath" | "show">;
@@ -203,13 +200,10 @@ export class Intake {
   /** The page under a world point (else the page nearest the middle of the stage) and the point in that page's own pixels. */
   private placeAt(world: Pt): IntakeTarget {
     const doc = this.view.store.doc;
-    const origins = pageOriginsPx(doc);
-    const under = doc.pages.find((page) => {
-      const origin = origins.get(page.id);
-      return origin !== undefined && rectContainsPt({ ...origin, ...pageSizePx(page) }, world);
-    });
-    const page = under ?? this.view.currentPage();
-    const origin = origins.get(page.id) ?? { x: 0, y: 0 };
+    const under = pagePointAt(doc, world);
+    if (under) return under;
+    const page = this.view.currentPage();
+    const origin = pageWorldRect(doc, page);
     return { page, x: world.x - origin.x, y: world.y - origin.y };
   }
 

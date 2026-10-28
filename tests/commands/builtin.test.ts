@@ -29,6 +29,11 @@ class FakeView implements EditorView {
   deleteSelection(): boolean { this.calls.push("delete"); return true; }
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
   imageSize = (id: NodeId) => (this.sizes[id] ? Promise.resolve(this.sizes[id]) : Promise.reject(new Error("no image")));
+  armedTool: Command | null = null;
+  /** What the real view does: arming the armed tool again disarms it. */
+  armTool(command: Command): void { this.armedTool = this.armedTool?.id === command.id ? null : command; }
+  disarmTool(): void { this.armedTool = null; }
+  activateNode(id: NodeId): void { this.calls.push(`activate:${id}`); }
   commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
 }
@@ -177,47 +182,57 @@ test("duplicate keeps a text node's font, and copies do not share objects with t
 });
 
 describe("insert-text", () => {
-  test("adds a text node centred on the current page, selects it, and is one undo step", () => {
-    const { command, ctx, view, store } = setup();
-    expect(command("insert-text").applies(ctx())).toBe(true);
-    command("insert-text").run(ctx());
-
-    const [node] = store.doc.nodes;
-    expect(store.doc.nodes).toHaveLength(1);
-    expect(node).toMatchObject({ type: "text", text: "Text", page: store.doc.pages[0].id, z: 0, rotation: 0, locked: false });
-    const page = store.doc.pages[0];
-    expect(node.x + node.width / 2).toBeCloseTo(mmToPx(page.width) / 2, 1);
-    expect(node.y + node.height / 2).toBeCloseTo(mmToPx(page.height) / 2, 1);
-    expect(view.selection).toEqual([node.id]);
-
-    store.undo();
+  test("Text arms the tool from the toolbar and the palette; running it again disarms", () => {
+    const { plugin, command, ctx, view, store } = setup();
+    const text = command("insert-text");
+    expect(text.applies(ctx())).toBe(true);
+    // The toolbar runs the command.
+    text.run(ctx());
+    expect(view.armedTool).toBe(text);
+    text.run(ctx());
+    expect(view.armedTool).toBeNull();
+    // The palette entry runs it through the view, as the toolbar does.
+    const palette = plugin.commands.find((c) => c.id === "lf-insert-text");
+    expect(palette.checkCallback(false)).toBe(true);
+    expect(view.armedTool).toBe(text);
+    // Arming adds nothing: the label comes with the press on the page.
     expect(store.doc.nodes).toEqual([]);
+    expect(store.canUndo()).toBe(false);
   });
 
-  test("goes on top of the nodes of the page it is for, whatever other pages hold", () => {
+  test("placing Text puts the label's top-left at the point, above everything on that page, selected and editing, in one undo step", () => {
     const { command, ctx, view, store } = setup((d) => {
       d.pages.push(createPage("a4-landscape", d.pages.map((p) => p.id)));
       fileNode(d, { id: "p-low", z: 2, page: d.pages[0].id });
       fileNode(d, { id: "p-high", z: 7, page: d.pages[0].id });
       fileNode(d, { id: "p-other", z: 40, page: d.pages[1].id });
     });
-    command("insert-text").run(ctx());
-    expect(store.doc.nodes.at(-1)!.z).toBe(8);
+    const text = command("insert-text");
+    expect(text.cursor).toBe("text");
+    // The point's page decides, not the page of the selection or the one in the middle of the stage.
+    view.selection = ["p-low"];
+    text.place!(ctx(), { page: store.doc.pages[1], x: 12.346, y: 67.891 });
 
-    // Nothing selected, the stage centred on the second page: it gets the node, centred on its own size.
-    view.selection = [];
-    view.pageIndex = 1;
-    command("insert-text").run(ctx());
-    const second = store.doc.nodes.at(-1)!;
-    expect(second).toMatchObject({ page: store.doc.pages[1].id, z: 41 });
-    expect(second.x + second.width / 2).toBeCloseTo(mmToPx(store.doc.pages[1].width) / 2, 1);
-    expect(second.y + second.height / 2).toBeCloseTo(mmToPx(store.doc.pages[1].height) / 2, 1);
+    expect(store.doc.nodes).toHaveLength(4);
+    const label = store.doc.nodes[3];
+    expect(label).toMatchObject({ type: "text", text: "Text", page: store.doc.pages[1].id, x: 12.35, y: 67.89, z: 41, rotation: 0, locked: false });
+    expect(view.selection).toEqual([label.id]);
+    expect(view.calls).toEqual([`activate:${label.id}`]);
+
+    store.undo();
+    expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-low", "p-high", "p-other"]);
+    expect(store.canUndo()).toBe(false);
+
+    // On the first page it goes above the nodes of that page, whatever the second holds.
+    text.place!(ctx(), { page: store.doc.pages[0], x: 0, y: 0 });
+    expect(store.doc.nodes.at(-1)).toMatchObject({ page: store.doc.pages[0].id, x: 0, y: 0, z: 8 });
   });
 
   test("a second one gets its own id", () => {
     const { command, ctx, store } = setup();
-    command("insert-text").run(ctx());
-    command("insert-text").run(ctx());
+    const at = { page: store.doc.pages[0], x: 10, y: 10 };
+    command("insert-text").place!(ctx(), at);
+    command("insert-text").place!(ctx(), at);
     expect(new Set(store.doc.nodes.map((n) => n.id)).size).toBe(2);
     expect(store.doc.nodes.map((n) => n.z)).toEqual([0, 1]);
   });
@@ -535,13 +550,13 @@ describe("page-level commands with a selection on a page the stage is not centre
   });
 });
 
-test("a text inserted right after a drop is an undo step of its own, not merged with the drop's insert", () => {
+test("a text placed right after a drop is an undo step of its own, not merged with the drop's insert", () => {
   const { command, ctx, store } = setup();
-  // What a drop commits (`Intake`), a moment before the toolbar's Text.
+  // What a drop commits (`Intake`), a moment before a Text label is placed.
   store.commit("insert", (draft) => {
     draft.nodes.push(fileNodeDefaults(draft.pages[0], { file: "plot.png", subpath: "", show: "image" }, []));
   });
-  command("insert-text").run(ctx());
+  command("insert-text").place!(ctx(), { page: store.doc.pages[0], x: 10, y: 10 });
   expect(store.doc.nodes.map((n) => n.type)).toEqual(["file", "text"]);
   store.undo();
   expect(store.doc.nodes.map((n) => n.type)).toEqual(["file"]);

@@ -2,7 +2,10 @@ import { setIcon } from "obsidian";
 import type { Command, CommandContext } from "../registry/command";
 import type { LinkFiguresView } from "./figure-view";
 
-/** The toolbar from the command registry: one icon button per command, a separator between groups. Buttons are disabled when their command does not apply. */
+/**
+ * The toolbar from the command registry: one icon button per command, a separator between groups. Buttons are disabled
+ * when their command does not apply, and the button of the armed tool is shown pressed (`is-active`).
+ */
 export class Toolbar {
   private readonly buttons = new Map<string, HTMLButtonElement>();
   /** What the buttons were built from, so that a change in the registry (and only that) rebuilds them. */
@@ -16,9 +19,12 @@ export class Toolbar {
     // The buttons outlive a change in the document, so a button that has the focus keeps it.
     if (signature !== this.built) this.build(commands, signature);
     const ctx = this.view.commandContext();
+    const armed = this.view.armedTool?.id;
     for (const command of commands) {
       const button = this.buttons.get(command.id);
-      if (button) button.disabled = this.view.readOnly || !applies(command, ctx);
+      if (!button) continue;
+      button.disabled = this.view.readOnly || !applies(command, ctx);
+      button.toggleClass("is-active", command.id === armed);
     }
   }
 

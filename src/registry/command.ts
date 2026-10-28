@@ -1,4 +1,5 @@
 import type { App, Hotkey } from "obsidian";
+import type { PlacePoint } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { NodeId, Page } from "../model/types";
 
@@ -11,6 +12,11 @@ export interface FigureViewLike {
   fitPage(): void;
   zoomTo(z: number): void;
   requestExport(): void;
+  /** The tool that the next press on a page places, or null. */
+  armedTool: Command | null;
+  /** Arms `command` (a command with `place`), in place of any other; arming the armed tool again disarms it. */
+  armTool(command: Command): void;
+  disarmTool(): void;
 }
 
 export interface CommandContext {
@@ -34,6 +40,13 @@ export interface Command {
   hotkeys?: Hotkey[];
   applies(ctx: CommandContext): boolean;
   run(ctx: CommandContext): void | Promise<void>;
+  /**
+   * Makes the command a tool: its `run` arms it (`ctx.view.armTool`), and the next press on a page calls this with
+   * the point pressed, once, and disarms it. Escape, or a press off every page, disarms it without placing anything.
+   */
+  place?(ctx: CommandContext, at: PlacePoint): void;
+  /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */
+  cursor?: string;
 }
 
 export class CommandRegistry {

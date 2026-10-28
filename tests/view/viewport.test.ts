@@ -1,4 +1,4 @@
-import { Viewport, nearestPage, pageInFocus, pageWorldRect } from "../../src/view/viewport";
+import { Viewport, nearestPage, pageInFocus, pagePointAt, pageWorldRect } from "../../src/view/viewport";
 import { createDocument, createPage } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -74,6 +74,22 @@ test("nearestPage picks the page whose centre is nearest the point", () => {
   expect(nearestPage(d, { x: 100, y: second - 1 })).toBe(d.pages[1]);
 });
 test("nearestPage of a document without pages is undefined", () => { const d = createDocument("a4-portrait"); d.pages = []; expect(nearestPage(d, { x: 0, y: 0 })).toBeUndefined(); });
+test("pagePointAt: the page under a world point and the point in its pixels; null between pages", () => {
+  const d = twoPages();
+  const second = (297 + 20) * MM_TO_PX;
+  const onFirst = pagePointAt(d, { x: 30, y: 40 })!;
+  expect(onFirst.page).toBe(d.pages[0]);
+  expect([onFirst.x, onFirst.y]).toEqual([30, 40]);
+  // On the second page, the point is in that page's own pixels: less its origin below the first page and the gap.
+  const onSecond = pagePointAt(d, { x: 30, y: second + 40 })!;
+  expect(onSecond.page).toBe(d.pages[1]);
+  expect(onSecond.x).toBe(30);
+  expect(onSecond.y).toBeCloseTo(40);
+  // In the gap between the pages, beside them, and above the first.
+  expect(pagePointAt(d, { x: 30, y: 297 * MM_TO_PX + 10 })).toBeNull();
+  expect(pagePointAt(d, { x: 210 * MM_TO_PX + 1, y: 40 })).toBeNull();
+  expect(pagePointAt(d, { x: 30, y: -1 })).toBeNull();
+});
 
 describe("pageInFocus", () => {
   const twoPages = () => {

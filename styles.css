@@ -28,6 +28,12 @@
   pointer-events: none;
 }
 
+/* The armed tool's button: shown pressed until the tool is placed or put down. */
+.lf-toolbar button.is-active {
+  background-color: var(--background-modifier-active-hover);
+  color: var(--text-accent);
+}
+
 .lf-sep {
   align-self: stretch;
   width: 1px;
@@ -145,6 +151,12 @@
   font-size: var(--font-smaller);
   user-select: text;
   cursor: text;
+}
+
+/* A tool is armed: the next press on a page places it. Its own cursor, set on the stage by the view, or a crosshair. */
+.lf-stage.lf-tool-armed,
+.lf-stage.lf-tool-armed * {
+  cursor: var(--lf-tool-cursor, crosshair);
 }
 
 /* Space held, or a drag with it: the canvas is about to be, or is being, panned. */

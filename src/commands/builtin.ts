@@ -1,7 +1,7 @@
 import { MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
-import { mmToPx, pageSizePx } from "../model/geometry";
+import { mmToPx, type PlacePoint } from "../model/geometry";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import type { FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
@@ -22,6 +22,8 @@ export interface EditorView extends FigureViewLike {
   openLink(linktext: string, newLeaf?: boolean): void;
   /** The natural size of the image a node shows, once it has loaded; rejects for a node that shows no image. */
   imageSize(id: NodeId): Promise<{ width: number; height: number }>;
+  /** Tells a node what a double-click on it tells it (a text node starts editing). */
+  activateNode(id: NodeId): void;
 }
 
 const editor = (ctx: CommandContext): EditorView => ctx.view as EditorView;
@@ -143,21 +145,21 @@ function deletePage(ctx: CommandContext): void {
   });
 }
 
-/** A new text node in the middle of the page, above everything on it, and selected. */
-function insertText(ctx: CommandContext): void {
-  const page = ctx.page;
-  if (!page) return;
+/** A new text node with its top-left at `at`, above everything on that page, selected and being edited. */
+function placeText(ctx: CommandContext, at: PlacePoint): void {
+  const { page } = at;
   const { nodes } = ctx.store.doc;
   const node = textNodeDefaults(page, {}, nodes.map((n) => n.id));
-  const size = pageSizePx(page);
-  node.x = roundPx((size.width - node.width) / 2);
-  node.y = roundPx((size.height - node.height) / 2);
+  node.x = roundPx(at.x);
+  node.y = roundPx(at.y);
   node.z = nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1) + 1;
   // Not "insert": a drop's commit just before must stay an undo step of its own.
   ctx.store.commit("insert-text", (draft) => {
     draft.nodes.push(node);
   });
   ctx.view.setSelection([node.id]);
+  // The node host drew the label as the commit was made, so it is there to be told; typing replaces "Text".
+  editor(ctx).activateNode(node.id);
 }
 
 /** The one file node with a link that is selected, if that is what is selected. */
@@ -207,6 +209,17 @@ async function resetAspect(ctx: CommandContext): Promise<void> {
 
 /** Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). */
 function builtinCommands(): Command[] {
+  // A tool: the toolbar button and the palette entry arm it, and the next press on a page places a label there.
+  const text: Command = {
+    id: "insert-text",
+    name: "Text",
+    icon: "type",
+    group: "insert",
+    cursor: "text",
+    applies: (ctx) => !!ctx.page,
+    run: (ctx) => ctx.view.armTool(text),
+    place: placeText,
+  };
   return [
     { id: "undo", name: "Undo", icon: "undo", group: "edit", applies: (ctx) => ctx.store.canUndo(), run: (ctx) => void ctx.store.undo() },
     { id: "redo", name: "Redo", icon: "redo", group: "edit", applies: (ctx) => ctx.store.canRedo(), run: (ctx) => void ctx.store.redo() },
@@ -219,7 +232,7 @@ function builtinCommands(): Command[] {
       run: (ctx) => void editor(ctx).deleteSelection(),
     },
     { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", applies: (ctx) => ctx.selection.length > 0, run: duplicate },
-    { id: "insert-text", name: "Text", icon: "type", group: "insert", applies: (ctx) => !!ctx.page, run: insertText },
+    text,
     stackCommand("bring-forward", "Bring forward", "arrow-up", "forward"),
     stackCommand("send-backward", "Send backward", "arrow-down", "backward"),
     {

@@ -3,6 +3,7 @@ import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import type { ChangeEvent } from "../../src/model/store";
 import type { Document, FileNode } from "../../src/model/types";
+import type { Command } from "../../src/registry/command";
 import { LinkFiguresView } from "../../src/view/figure-view";
 
 // The view's base class and everything it draws with are stubs: what is tested is how the view takes up a changed file.
@@ -72,7 +73,13 @@ function setup(initial: Document = figure()) {
   const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn() };
   const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
   Object.assign(internals, {
-    stageEl: { clientWidth: 0, clientHeight: 0, createDiv: () => ({ createDiv: () => ({}), createEl: () => ({}), remove: () => {} }) },
+    stageEl: {
+      clientWidth: 0,
+      clientHeight: 0,
+      createDiv: () => ({ createDiv: () => ({}), createEl: () => ({}), remove: () => {} }),
+      classList: { toggle: vi.fn() },
+      style: { setProperty: vi.fn(), removeProperty: vi.fn() },
+    },
     viewportEl: { show: () => {}, hide: () => {} },
     nodeHost,
     pageLayer: { render: vi.fn() },
@@ -290,6 +297,55 @@ describe("any other change to the file is loaded anew", () => {
     t.obsidianLoads("---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{ not json\n```\n");
     expect(t.view.readOnly).toBe(true);
     expect(t.view.getViewData()).toContain("{ not json");
+  });
+});
+
+describe("the armed tool", () => {
+  const tool = (): Command => ({ id: "tool", name: "Tool", group: "insert", applies: () => true, run() {}, place: vi.fn() });
+  const corrupt = "---\nlink-figures: 1\n---\n## Figure\n```lnkfig\n{ not json\n```\n";
+
+  test("a reload from disk disarms the tool, and a read-only file cannot arm one", () => {
+    const t = setup();
+    const stage = t.view.stageEl as unknown as { classList: { toggle: ReturnType<typeof vi.fn> }; style: { setProperty: ReturnType<typeof vi.fn> } };
+    const armed = tool();
+    t.view.armTool(armed);
+    expect(t.view.armedTool).toBe(armed);
+    // The stage shows it: the class, and the tool's cursor (a crosshair when it names none).
+    expect(stage.classList.toggle).toHaveBeenLastCalledWith("lf-tool-armed", true);
+    expect(stage.style.setProperty).toHaveBeenLastCalledWith("--lf-tool-cursor", "crosshair");
+
+    t.view.setViewData(textOf(figure()), true);
+    expect(t.view.armedTool).toBeNull();
+    expect(stage.classList.toggle).toHaveBeenLastCalledWith("lf-tool-armed", false);
+
+    t.view.armTool(armed);
+    t.obsidianLoads(corrupt);
+    expect(t.view.readOnly).toBe(true);
+    expect(t.view.armedTool).toBeNull();
+    t.view.armTool(armed);
+    expect(t.view.armedTool).toBeNull();
+    expect(armed.place).not.toHaveBeenCalled();
+  });
+
+  test("arming the armed tool again disarms it; placing disarms it first, and a failure is reported rather than thrown", () => {
+    const t = setup();
+    const armed = tool();
+    t.view.armTool(armed);
+    t.view.armTool(armed);
+    expect(t.view.armedTool).toBeNull();
+
+    const page = t.view.store.doc.pages[0];
+    let armedWhilePlacing: Command | null | undefined;
+    vi.mocked(armed.place!).mockImplementation((ctx) => {
+      armedWhilePlacing = (ctx.view as typeof t.view).armedTool;
+      throw new Error("no room");
+    });
+    t.view.armTool(armed);
+    expect(() => t.view.placeTool({ page, x: 5, y: 6 })).not.toThrow();
+    expect(armed.place).toHaveBeenCalledWith(expect.objectContaining({ view: t.view, store: t.view.store }), { page, x: 5, y: 6 });
+    expect(armedWhilePlacing).toBeNull();
+    expect(t.view.armedTool).toBeNull();
+    expect(console.error).toHaveBeenCalled();
   });
 });
 

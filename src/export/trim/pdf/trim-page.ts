@@ -390,9 +390,10 @@ function simpleWidths(font: PDFDict, widths: PDFObject): FontInfo | null {
 
 /**
  * A Type 3 font: its widths in glyph space, its FontMatrix, and a box that bounds its glyphs, the union of its FontBBox
- * and the box each glyph declares with `d1`. A FontBBox of zeros (or any without area) says nothing; a glyph that
- * cannot be read, or that begins with `d0`, adds nothing. With no box left, or a FontMatrix or widths that cannot be
- * read, the font is not measured.
+ * and the box each glyph declares with `d1`. With a FontBBox, a glyph that cannot be read, or that begins with `d0`,
+ * adds nothing. A FontBBox of zeros (or any without area) says nothing, so then every glyph must declare its box, or
+ * one of them could draw anywhere. With no box left, or a FontMatrix or widths that cannot be read, the font is not
+ * measured.
  */
 function type3Font(font: PDFDict): FontInfo | null {
   const matrix = numbersOf(font.lookup(PDFName.of("FontMatrix")), 6) as Matrix | null;
@@ -403,7 +404,9 @@ function type3Font(font: PDFDict): FontInfo | null {
   let bbox = fontBBox && hasArea(fontBBox) ? normalized(fontBBox) : null;
   const procs = font.lookup(PDFName.of("CharProcs"));
   const glyphs = procs instanceof PDFDict ? procs.keys().map((key) => procs.lookup(key)) : [];
-  for (const declared of glyphs.map(glyphBox)) {
+  const declaredBoxes = glyphs.map(glyphBox);
+  if (!bbox && declaredBoxes.includes(null)) return null;
+  for (const declared of declaredBoxes) {
     if (declared) bbox = bbox ? [Math.min(bbox[0], declared[0]), Math.min(bbox[1], declared[1]), Math.max(bbox[2], declared[2]), Math.max(bbox[3], declared[3])] : declared;
   }
   return bbox && hasArea(bbox) ? { ...info, glyphSpace: { matrix, bbox } } : null;

@@ -621,9 +621,19 @@ describe("what the units are told of the resources", () => {
       });
     });
 
-    test("a FontBBox of zeros: the union of the glyphs' d1 boxes, with those that cannot be read left out", async () => {
-      const font = await type3([0, 0, 0, 0], { A: "600 0 500 700 0 -100 d1", B: "500 0 d0 0 0 m 900 900 l S", C: { content: "x", filter: "DCTDecode" } });
-      expect(font?.glyphSpace?.bbox).toEqual([0, -100, 500, 700]);
+    test("a FontBBox of zeros: the union of the glyphs' d1 boxes, when every glyph declares one", async () => {
+      const font = await type3([0, 0, 0, 0], { A: "600 0 500 700 0 -100 d1", B: "500 0 -20 0 300 400 d1 0 0 m f" });
+      expect(font?.glyphSpace?.bbox).toEqual([-20, -100, 500, 700]);
+    });
+
+    test("with a FontBBox, glyphs that begin with d0 or cannot be read add nothing", async () => {
+      const font = await type3([0, -200, 600, 800], { A: "500 0 d0 0 0 m 900 900 l S", B: { content: "x", filter: "DCTDecode" } });
+      expect(font?.glyphSpace?.bbox).toEqual([0, -200, 600, 800]);
+    });
+
+    test("a FontBBox of zeros with a glyph that does not declare its box (d0, or unreadable): not measured", async () => {
+      expect(await type3([0, 0, 0, 0], { A: "600 0 500 700 0 -100 d1", B: "500 0 d0 0 0 m 900 900 l S" })).toBeNull();
+      expect(await type3([0, 0, 0, 0], { A: "600 0 500 700 0 -100 d1", B: { content: "x", filter: "DCTDecode" } })).toBeNull();
     });
 
     test("not measured with neither a FontBBox nor a d1 box, or with a FontMatrix or widths that cannot be read", async () => {

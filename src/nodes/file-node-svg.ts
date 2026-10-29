@@ -71,13 +71,13 @@ export function skippedReason(resolved: Extract<Resolved, { kind: "missing" }>):
  * render: content cards, and links that could not be drawn (which also warns).
  */
 export function fileNodeSvg(node: FileNode, asset: FileAsset | SkippedAsset | undefined, ctx: SvgContext): string | "raster" {
+  if (asset?.kind === "skipped") {
+    ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${asset.reason}, skipped`);
+    return "raster";
+  }
   if (node.show === "content") return "raster";
   if (!asset) {
     ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: link missing, skipped`);
-    return "raster";
-  }
-  if (asset.kind === "skipped") {
-    ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${asset.reason}, skipped`);
     return "raster";
   }
   switch (asset.kind) {

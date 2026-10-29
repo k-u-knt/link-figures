@@ -76,6 +76,12 @@ test.each([
   expect(c.warnings).toEqual([`${nodeLabel(c.doc, node())}: ${line}`]);
 });
 
+test("a content card with a skipped asset warns once with the reason, not as unrasterised", () => {
+  const c = ctx();
+  expect(fileNodeSvg(node({ show: "content" }), { kind: "skipped", reason: "heading or block not found" }, c)).toBe("raster");
+  expect(c.warnings).toEqual([`${nodeLabel(c.doc, node())}: heading or block not found, skipped`]);
+});
+
 test.each([
   [{ reason: "file" }, "link missing"],
   [{ reason: "subpath" }, "heading or block not found"],

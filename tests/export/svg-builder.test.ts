@@ -126,6 +126,12 @@ test("a missing link is reported once, not once by the node type and again by th
   expect(warnings[0]).toMatch(/link missing/);
 });
 
+test("a content card whose link is missing gets its reason as the only line", () => {
+  const d = docWith({ show: "content" });
+  const { warnings } = buildPageSvg(d, d.pages[0], reg(), new Map([[d.nodes[0].id, { kind: "skipped", reason: "heading or block not found" }]]));
+  expect(warnings).toEqual([`${nodeLabel(d, d.nodes[0])}: heading or block not found, skipped`]);
+});
+
 test("a node whose type is not registered is skipped with a warning", () => {
   const d = docWith({});
   const { svg, warnings } = buildPageSvg(d, d.pages[0], new NodeTypeRegistry(), new Map([[d.nodes[0].id, image()]]));

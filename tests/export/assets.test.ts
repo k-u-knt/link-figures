@@ -147,16 +147,14 @@ describe("raster sources", () => {
     expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: AVIF is not supported by the PDF export`]);
   });
 
-  test("an image that cannot be decoded, or has an unknown type, is a warning and no asset", async () => {
+  test("an image that cannot be decoded, or has an unknown type, gets a skipped asset with the reason", async () => {
     const s = setup([{ resolved: image("a.png", "raster") }, { resolved: image("b.xyz", "raster") }]);
     s.files["a.png"] = bytes(255, 255, 255);
     s.files["b.xyz"] = bytes(1);
     const assets = await s.run();
-    expect(assets.size).toBe(0);
-    expect(s.warnings).toEqual([
-      `${nodeLabel(s.doc, s.nodes[0])}: the image could not be decoded`,
-      `${nodeLabel(s.doc, s.nodes[1])}: "b.xyz" is not an image type that can be embedded`,
-    ]);
+    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "the image could not be decoded" });
+    expect(assets.get(s.nodes[1].id)).toEqual({ kind: "skipped", reason: '"b.xyz" is not an image type that can be embedded' });
+    expect(s.warnings).toEqual([]);
   });
 });
 
@@ -207,13 +205,13 @@ describe("pdf sources", () => {
     expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: PDF panel rasterised at ${Math.floor(fit * 72)} dpi, not 1200: ${message}`]);
   });
 
-  test("any other decoding failure is still the node's warning, with no asset", async () => {
+  test("any other decoding failure is still the node's reason, as a skipped asset", async () => {
     const s = setup([{ resolved: image("doc.pdf", "pdf") }]);
     s.files["doc.pdf"] = bytes(1);
     mocks.decodePdf.mockRejectedValue(new Error("bad xref"));
-    expect((await s.run()).size).toBe(0);
+    expect((await s.run()).get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "bad xref" });
     expect(mocks.decodePdf).toHaveBeenCalledTimes(1);
-    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: bad xref`]);
+    expect(s.warnings).toEqual([]);
   });
 
   test("a page index beyond the file is recorded as the page that was drawn", async () => {
@@ -299,18 +297,17 @@ describe("content cards", () => {
     expect((await s.run()).get(s.nodes[0].id)?.kind).toBe("raster");
   });
 
-  test("a card that is not on the stage, or whose snapshot is not an image, is a warning and no asset", async () => {
+  test("a card that is not on the stage, or whose snapshot is not an image, gets a skipped asset with the reason", async () => {
     const s = setup([
       { node: { show: "content" }, resolved: content },
       { node: { show: "content" }, resolved: content },
     ]);
     s.elements.set(s.nodes[1].id, stage());
     mocks.snapdom.mockResolvedValue(capture("blob:nope"));
-    expect((await s.run()).size).toBe(0);
-    expect(s.warnings).toEqual([
-      `${nodeLabel(s.doc, s.nodes[0])}: the node is not drawn on the stage, so it cannot be rasterised`,
-      `${nodeLabel(s.doc, s.nodes[1])}: the snapshot is not an image`,
-    ]);
+    const assets = await s.run();
+    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "the node is not drawn on the stage, so it cannot be rasterised" });
+    expect(assets.get(s.nodes[1].id)).toEqual({ kind: "skipped", reason: "the snapshot is not an image" });
+    expect(s.warnings).toEqual([]);
   });
 });
 
@@ -328,10 +325,10 @@ describe("nodes without anything to embed", () => {
     expect(s.warnings).toEqual([]);
   });
 
-  test("a link that is still being resolved is skipped with a warning that says so", async () => {
+  test("a link that is still being resolved gets a skipped asset that says so, and no warning of its own", async () => {
     const s = setup([{}]);
-    expect((await s.run()).size).toBe(0);
-    expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: its link is still being resolved, skipped`]);
+    expect((await s.run()).get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "its link is still being resolved" });
+    expect(s.warnings).toEqual([]);
   });
 
   test("only file nodes of the page asked for are looked at", async () => {
@@ -357,8 +354,9 @@ test("one node that fails does not stop the rest", async () => {
   s.files["a.png"] = bytes(1, 2, 3);
   s.files["plot.svg"] = '<svg viewBox="0 0 10 10"/>';
   const assets = await s.run();
-  expect([...assets.keys()]).toEqual([s.nodes[1].id, s.nodes[2].id]);
-  expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: File not found in vault: gone.png`]);
+  expect([...assets.keys()]).toEqual([s.nodes[0].id, s.nodes[1].id, s.nodes[2].id]);
+  expect(assets.get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "File not found in vault: gone.png" });
+  expect(s.warnings).toEqual([]);
 });
 
 test("a rejection that is not an Error is still reported", async () => {
@@ -366,6 +364,6 @@ test("a rejection that is not an Error is still reported", async () => {
   s.files["a.pdf"] = bytes(1);
   mocks.decodePdf.mockRejectedValue("bad xref");
   mocks.pdfPageSizePt.mockResolvedValue({ width: 1, height: 1 });
-  expect((await s.run()).size).toBe(0);
-  expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: bad xref`]);
+  expect((await s.run()).get(s.nodes[0].id)).toEqual({ kind: "skipped", reason: "bad xref" });
+  expect(s.warnings).toEqual([]);
 });

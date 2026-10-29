@@ -156,9 +156,9 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
 
 /**
  * Everything a page's nodes need that only the vault or the DOM can give: each linked image's bytes (or the SVG's
- * text, or a PDF page, or a TIFF page, decoded) and a raster of each content card. Nodes without a link to draw
- * still resolving get no asset, and `buildPageSvg` reports those; a missing link gets a `skipped` asset that says why. One node that fails does not stop the others:
- * its reason is added to `deps.warnings` and the node is left without an asset.
+ * text, or a PDF page, or a TIFF page, decoded) and a raster of each content card. A node that cannot be drawn gets a
+ * `skipped` asset that says why (its link is missing or still resolving, or collecting it threw), so `buildPageSvg`
+ * reports each such node once. One node that fails does not stop the others.
  */
 export async function collectAssets(doc: Document, page: Page, deps: AssetDeps): Promise<AssetMap> {
   const assets: AssetMap = new Map();
@@ -168,7 +168,7 @@ export async function collectAssets(doc: Document, page: Page, deps: AssetDeps):
     try {
       const resolved = deps.resolved(node.id);
       if (!resolved) {
-        deps.warnings.push(`${nodeLabel(doc, node)}: its link is still being resolved, skipped`);
+        assets.set(node.id, { kind: "skipped", reason: "its link is still being resolved" });
         continue;
       }
       if (resolved.kind === "missing") {
@@ -182,7 +182,7 @@ export async function collectAssets(doc: Document, page: Page, deps: AssetDeps):
         assets.set(node.id, await imageAsset(doc, node, resolved, deps));
       }
     } catch (error) {
-      deps.warnings.push(`${nodeLabel(doc, node)}: ${error instanceof Error ? error.message : String(error)}`);
+      assets.set(node.id, { kind: "skipped", reason: error instanceof Error ? error.message : String(error) });
     }
   }
   return assets;

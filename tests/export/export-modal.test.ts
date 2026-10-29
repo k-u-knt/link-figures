@@ -143,8 +143,7 @@ test("what could not be embedded comes back as warnings, from the collection and
   );
   expect(out.files).toBe(2);
   expect(out.warnings).toEqual([
-    `${nodeLabel(doc, png)}: File not found in vault: moved.png`,
-    `${nodeLabel(doc, png)}: link missing, skipped`,
+    `${nodeLabel(doc, png)}: File not found in vault: moved.png, skipped`,
     `${nodeLabel(doc, gone)}: link missing, skipped`,
   ]);
 });
@@ -322,8 +321,7 @@ test("each cropped panel is trimmed after collection and before the page is buil
   expect(cuts).toEqual([{ x: 160, y: 120, width: 320, height: 240 }]);
   expect(text(vault.content.get("Fig - Page 1.svg"))).toContain('href="data:image/png;base64,CUT"');
   expect(out.warnings).toEqual([
-    `${nodeLabel(doc, moved)}: File not found in vault: moved.png`,
-    `${nodeLabel(doc, moved)}: link missing, skipped`,
+    `${nodeLabel(doc, moved)}: File not found in vault: moved.png, skipped`,
     `${nodeLabel(doc, png)}: cut to what shows (320 × 240 of 640 × 480 px)`,
   ]);
 });

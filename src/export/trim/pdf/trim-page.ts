@@ -430,6 +430,7 @@ function normalized([x0, y0, x1, y1]: number[]): [number, number, number, number
   return [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
 }
 
+/** Whether a box, given as [x0 y0 x1 y1], has a non-zero width and height. */
 function hasArea([x0, y0, x1, y1]: number[]): boolean {
   return x0 !== x1 && y0 !== y1;
 }

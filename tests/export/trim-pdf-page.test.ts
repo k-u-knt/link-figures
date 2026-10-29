@@ -648,7 +648,7 @@ describe("what the units are told of the resources", () => {
     const res = await info(() => ({
       Font: {
         T3: { Type: "Font", Subtype: "Type3" },
-        V:{ Type: "Font", Subtype: "Type0", Encoding: "Identity-V", DescendantFonts: [{ Subtype: "CIDFontType2" }] },
+        V: { Type: "Font", Subtype: "Type0", Encoding: "Identity-V", DescendantFonts: [{ Subtype: "CIDFontType2" }] },
         Bad: { Type: "Font", Subtype: "Type1", FirstChar: 0, Widths: [100, "x"] },
       },
     }));

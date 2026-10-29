@@ -89,11 +89,24 @@ test("the element's own stroke width wins over its ancestors', the style attribu
   expect(byId(doc, "a-lfsw1")?.getAttribute("markerWidth")).toBe("4");
 });
 
-test("a percentage, non-numeric or zero stroke width leaves the element alone", () => {
-  for (const width of ["50%", "thick", "0"]) {
+test("a non-numeric or zero stroke width leaves the element alone", () => {
+  for (const width of ["thick", "inherit", "0", "0mm"]) {
     const input = svg(ARROW, `<path d="M0,0 L50,0" stroke-width="${width}" marker-end="url(#a)"/>`);
     expect(normaliseUserSpaceMarkers(input)).toBe(input);
   }
+});
+
+test("a stroke width is read as svg2pdf.js reads it: units and percentages dropped, the sign ignored", () => {
+  for (const [width, scaled] of [["2pt", "4"], ["50%", "0.16"], ["-2", "4"]] as const) {
+    const doc = parse(normaliseUserSpaceMarkers(svg(ARROW, `<path id="p" d="M0,0 L50,0" stroke-width="${width}" marker-end="url(#a)"/>`)));
+    expect(doc.getElementById("p")?.getAttribute("marker-end")).toBe("url(#a-lfsw1)");
+    expect(byId(doc, "a-lfsw1")?.getAttribute("markerWidth")).toBe(scaled);
+  }
+});
+
+test("a document whose <style> mentions stroke-width is left as it is", () => {
+  const input = svg(`${ARROW}<style>path { stroke-width: 3 }</style>`, '<path d="M0,0 L50,0" stroke-width="2" marker-end="url(#a)"/>');
+  expect(normaliseUserSpaceMarkers(input)).toBe(input);
 });
 
 test("a clone's id never takes one the document already uses", () => {

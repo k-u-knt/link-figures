@@ -8,8 +8,9 @@
  * the original's.
  *
  * The stroke width is read as svg2pdf.js reads it, from the `style` attribute before the presentation attribute and
- * from the nearest ancestor that sets it; `<style>` rules are not read. A width that is not a plain number (a
- * percentage, `inherit`) or is not positive leaves the element as it is.
+ * from the nearest ancestor that sets it, as `Math.abs(parseFloat(value))` (so `2pt`, `50%` and `-2` are widths of 2,
+ * 50 and 2, as svg2pdf.js has them). A width that parses to NaN (`inherit`) or 0 leaves the element as it is. `<style>`
+ * rules are not read, so a document with a `<style>` element that mentions `stroke-width` is left as it is.
  */
 
 const SVG_MIME = "image/svg+xml";
@@ -42,13 +43,13 @@ function ownValue(el: Element, property: string): string | undefined {
   return styleValue(el, property) ?? el.getAttribute(property) ?? undefined;
 }
 
-/** The stroke width the element is drawn with (1 when nothing sets it), or null when it is not a positive number. */
+/** The stroke width the element is drawn with (1 when nothing sets it), read as svg2pdf.js reads it, or null when that is NaN or 0. */
 function strokeWidthOf(el: Element): number | null {
   for (let node: Element | null = el; node; node = node.parentElement) {
     const value = ownValue(node, "stroke-width");
     if (value === undefined) continue;
-    const width = plainNumber(value);
-    return width !== null && width > 0 ? width : null;
+    const width = Math.abs(parseFloat(value));
+    return Number.isNaN(width) || width === 0 ? null : width;
   }
   return 1;
 }
@@ -75,6 +76,8 @@ export function normaliseUserSpaceMarkers(svg: string): string {
     if (id && !markers.has(id) && marker.getAttribute("markerUnits")?.trim() === "userSpaceOnUse") markers.set(id, marker);
   }
   if (markers.size === 0) return svg;
+  // svg2pdf.js applies stylesheet rules to stroke width, which this pass cannot see: leave the whole page as it is.
+  if (Array.from(doc.getElementsByTagName("style")).some((style) => (style.textContent ?? "").includes("stroke-width"))) return svg;
 
   const ids = new Set(Array.from(doc.querySelectorAll("[id]"), (el) => el.getAttribute("id")));
   const clones = new Map<string, string>();

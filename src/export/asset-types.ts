@@ -35,6 +35,12 @@ export interface RasterAsset {
   dataUri: string;
 }
 
+/** A file node that has nothing to draw, with the reason (as the export's warning says it): nothing is embedded for it. */
+export interface SkippedAsset {
+  kind: "skipped";
+  reason: string;
+}
+
 export type FileAsset = ImageAsset | SvgAsset | PdfAsset;
 
-export type AssetMap = Map<NodeId, FileAsset | RasterAsset>;
+export type AssetMap = Map<NodeId, FileAsset | RasterAsset | SkippedAsset>;

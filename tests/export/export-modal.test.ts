@@ -377,3 +377,18 @@ test.each([
   expect(pdfTrims).toHaveLength(pdfCount);
   expect(out.warnings.filter((w) => !/PDF panel rasterised/.test(w))).toEqual([`${nodeLabel(doc, png)}: ${line}`]);
 });
+
+test("a panel over the decode limit is reported with that reason, once, and not as a missing link", async () => {
+  const { doc, png, gone, resolved } = figure();
+  resolved.set(png.id, { kind: "missing", reason: "decode", deps: [], message: "over the 50 MP limit" });
+  resolved.set(gone.id, { kind: "missing", reason: "subpath", deps: [] });
+  const { app } = world();
+  const out = await runExport(
+    { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
+    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+  );
+  expect(out.warnings).toEqual([
+    `${nodeLabel(doc, png)}: could not be decoded (over the 50 MP limit), skipped`,
+    `${nodeLabel(doc, gone)}: heading or block not found, skipped`,
+  ]);
+});

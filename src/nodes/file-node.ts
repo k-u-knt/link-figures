@@ -1,14 +1,14 @@
 import { Component, MarkdownRenderer, setIcon } from "obsidian";
-import type { FileAsset } from "../export/asset-types";
+import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
 import { cropPlacement, type Rect } from "../model/geometry";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
-import { fileNodeSvg } from "./file-node-svg";
+import { fileNodeSvg, skippedReason } from "./file-node-svg";
 
-export { fileNodeSvg };
+export { fileNodeSvg, skippedReason };
 
 type Size = { width: number; height: number };
 /** A caller of `naturalSize()` waiting for the image to load. */
@@ -260,7 +260,7 @@ export const fileNodeType: NodeType<FileNode> = {
   toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
     const asset = ctx.assets.get(node.id);
     // A rasterised content card is the exporter's business, not an asset of this node type.
-    const fileAsset: FileAsset | undefined = asset && asset.kind !== "raster" ? asset : undefined;
+    const fileAsset: FileAsset | SkippedAsset | undefined = asset && asset.kind !== "raster" ? asset : undefined;
     return fileNodeSvg(node, fileAsset, ctx);
   },
 };

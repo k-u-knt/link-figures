@@ -1,6 +1,7 @@
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
-import { fileNodeSvg } from "../../src/nodes/file-node-svg";
+import { nodeLabel } from "../../src/model/labels";
+import { fileNodeSvg, skippedReason } from "../../src/nodes/file-node-svg";
 
 const page = createPage("a4-portrait", []);
 const ctx = () => ({
@@ -63,6 +64,26 @@ test("pdf asset is raster image with a warning", () => {
   ) as string;
   expect(out).toContain('href="data:image/png;base64,QQ=="');
   expect(c.warnings[0]).toMatch(/PDF panel rasterised/);
+});
+
+test.each([
+  ["link missing", "link missing, skipped"],
+  ["no image in that section", "no image in that section, skipped"],
+  ["could not be decoded (too big)", "could not be decoded (too big), skipped"],
+])("a skipped asset (%s) warns once with its reason and is left to the DOM", (reason, line) => {
+  const c = ctx();
+  expect(fileNodeSvg(node(), { kind: "skipped", reason }, c)).toBe("raster");
+  expect(c.warnings).toEqual([`${nodeLabel(c.doc, node())}: ${line}`]);
+});
+
+test.each([
+  [{ reason: "file" }, "link missing"],
+  [{ reason: "subpath" }, "heading or block not found"],
+  [{ reason: "no-image" }, "no image in that section"],
+  [{ reason: "decode", message: "bad header" }, "could not be decoded (bad header)"],
+  [{ reason: "decode" }, "could not be decoded"],
+] as const)("skippedReason of %j", (missing, text) => {
+  expect(skippedReason({ kind: "missing", deps: [], ...missing })).toBe(text);
 });
 
 // Beyond the brief's five.

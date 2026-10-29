@@ -292,3 +292,14 @@ test.each([
   expect(after.image.x + after.image.width).toBeGreaterThanOrEqual(after.clip.x + after.clip.width - 1e-6);
   expect(after.image.y + after.image.height).toBeGreaterThanOrEqual(after.clip.y + after.clip.height - 1e-6);
 });
+
+test("a skipped asset is passed through untouched, with no report line", async () => {
+  const { doc, page, node } = figure({ crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+  const asset = { kind: "skipped" as const, reason: "link missing" };
+  const { deps, cuts } = fakeDeps();
+  const report: string[] = [];
+  const out = await trimAssets(doc, page, new Map([[node.id, asset]]), deps, report, "raster");
+  expect(out.get(node.id)).toBe(asset);
+  expect(cuts).toEqual([]);
+  expect(report).toEqual([]);
+});

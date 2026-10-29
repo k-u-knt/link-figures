@@ -145,7 +145,7 @@ export async function trimAssets(
   for (const node of doc.nodes) {
     if (node.page !== page.id || node.type !== "file" || node.show === "content") continue;
     const asset = assets.get(node.id);
-    if (!asset || asset.kind === "raster") continue;
+    if (!asset || asset.kind === "raster" || asset.kind === "skipped") continue;
     const label = nodeLabel(doc, node);
     const say = (line: string) => report.push(`${label}: ${line}`);
     try {

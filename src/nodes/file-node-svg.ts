@@ -1,7 +1,8 @@
 import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline-svg";
-import type { FileAsset } from "../export/asset-types";
+import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { cropPlacement, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
+import type { Resolved } from "../links/types";
 import type { Crop, FileNode } from "../model/types";
 import type { SvgContext } from "../registry/node-type";
 
@@ -51,14 +52,32 @@ function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   );
 }
 
+/** Why a missing link cannot be drawn, as an export warning says it (after the node's label, before ", skipped"). */
+export function skippedReason(resolved: Extract<Resolved, { kind: "missing" }>): string {
+  switch (resolved.reason) {
+    case "file":
+      return "link missing";
+    case "subpath":
+      return "heading or block not found";
+    case "no-image":
+      return "no image in that section";
+    case "decode":
+      return resolved.message ? `could not be decoded (${resolved.message})` : "could not be decoded";
+  }
+}
+
 /**
  * A file node as an SVG fragment, in the node's own (unrotated) coordinates, or `"raster"` for the nodes the DOM must
- * render: content cards, and links whose source could not be read (which also warns).
+ * render: content cards, and links that could not be drawn (which also warns).
  */
-export function fileNodeSvg(node: FileNode, asset: FileAsset | undefined, ctx: SvgContext): string | "raster" {
+export function fileNodeSvg(node: FileNode, asset: FileAsset | SkippedAsset | undefined, ctx: SvgContext): string | "raster" {
   if (node.show === "content") return "raster";
   if (!asset) {
     ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: link missing, skipped`);
+    return "raster";
+  }
+  if (asset.kind === "skipped") {
+    ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${asset.reason}, skipped`);
     return "raster";
   }
   switch (asset.kind) {

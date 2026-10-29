@@ -6,10 +6,11 @@ import { recipeOf } from "../adjust/render";
 import type { Decoders, Resolved } from "../links/types";
 import { nodeLabel } from "../model/labels";
 import type { Document, FileNode, NodeId, Page } from "../model/types";
+import { skippedReason } from "../nodes/file-node-svg";
 import type { AssetMap, FileAsset, RasterAsset } from "./asset-types";
 import { svgIntrinsicSize } from "./inline-svg";
 
-export type { AssetMap, FileAsset, ImageAsset, PdfAsset, RasterAsset, SvgAsset } from "./asset-types";
+export type { AssetMap, FileAsset, ImageAsset, PdfAsset, RasterAsset, SkippedAsset, SvgAsset } from "./asset-types";
 
 /** CSS px per inch, the basis of `scale` for a DOM snapshot. */
 const CSS_DPI = 96;
@@ -156,7 +157,7 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
 /**
  * Everything a page's nodes need that only the vault or the DOM can give: each linked image's bytes (or the SVG's
  * text, or a PDF page, or a TIFF page, decoded) and a raster of each content card. Nodes without a link to draw
- * (missing, still resolving) get no asset; `buildPageSvg` reports those. One node that fails does not stop the others:
+ * still resolving get no asset, and `buildPageSvg` reports those; a missing link gets a `skipped` asset that says why. One node that fails does not stop the others:
  * its reason is added to `deps.warnings` and the node is left without an asset.
  */
 export async function collectAssets(doc: Document, page: Page, deps: AssetDeps): Promise<AssetMap> {
@@ -170,7 +171,10 @@ export async function collectAssets(doc: Document, page: Page, deps: AssetDeps):
         deps.warnings.push(`${nodeLabel(doc, node)}: its link is still being resolved, skipped`);
         continue;
       }
-      if (resolved.kind === "missing") continue;
+      if (resolved.kind === "missing") {
+        assets.set(node.id, { kind: "skipped", reason: skippedReason(resolved) });
+        continue;
+      }
       // The node type draws a content card from a raster, also when a card's link turned out to be an image.
       if (node.show === "content" || resolved.kind === "content") {
         assets.set(node.id, await snapshotBody(deps.elementFor(node.id), deps.dpi));

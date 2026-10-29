@@ -315,9 +315,16 @@ describe("content cards", () => {
 });
 
 describe("nodes without anything to embed", () => {
-  test("a missing link gets no asset and no warning of its own (the SVG builder reports it)", async () => {
-    const s = setup([{ resolved: { kind: "missing", reason: "file", deps: [] } }]);
-    expect((await s.run()).size).toBe(0);
+  test.each([
+    [{ reason: "file" }, "link missing"],
+    [{ reason: "subpath" }, "heading or block not found"],
+    [{ reason: "no-image" }, "no image in that section"],
+    [{ reason: "decode", message: "over the 50 MP limit" }, "could not be decoded (over the 50 MP limit)"],
+    [{ reason: "decode" }, "could not be decoded"],
+  ] as const)("a missing link (%j) gets a skipped asset with the reason, and no warning of its own", async (missing, reason) => {
+    const s = setup([{ resolved: { kind: "missing", deps: [], ...missing } }]);
+    const assets = await s.run();
+    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "skipped", reason });
     expect(s.warnings).toEqual([]);
   });
 

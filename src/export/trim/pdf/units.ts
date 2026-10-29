@@ -12,10 +12,14 @@ import { ContentParseError, type Token } from "./tokenize";
 /** A PDF matrix [a b c d e f], mapping (x, y) to (a·x + c·y + e, b·x + d·y + f). */
 export type Matrix = [number, number, number, number, number, number];
 
-/** A font's horizontal widths (in thousandths of an em); `widths` is null when every glyph counts as an em. */
+/**
+ * A font's horizontal widths (in thousandths of an em, or in glyph space for a Type 3 font); `widths` is null when every
+ * glyph counts as an em. `glyphSpace` is a Type 3 font's: its FontMatrix and a box in glyph space that bounds every glyph.
+ */
 export interface FontInfo {
   widths: { first: number; list: number[]; missing: number } | null;
   twoByte: boolean;
+  glyphSpace?: { matrix: Matrix; bbox: [number, number, number, number] };
 }
 
 /** What an ExtGState sets of the line style and the font; an entry left out is one the dictionary does not set. */
@@ -121,7 +125,8 @@ const TEXT_SHOWING = new Set(["Tj", "TJ", "'", '"']);
 
 /**
  * Text box: from 0.5 em below the baseline to 1.2 em above it, and 0.5 em beyond each end of a showing operator's
- * glyphs, so that descenders, accents and ink past the advance width (italics, swashes) stay inside.
+ * glyphs, so that descenders, accents and ink past the advance width (italics, swashes) stay inside. A Type 3 font's
+ * glyphs are bounded by its own box instead, without this padding.
  */
 const TEXT_DESCENT = -0.5;
 const TEXT_ASCENT = 1.2;
@@ -580,9 +585,16 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
       for (const w of font.widths?.list ?? []) if (w > twoByteWidth) twoByteWidth = w;
       twoByteWidths.set(gs.font, twoByteWidth);
     }
+    const glyphSpace = font.glyphSpace;
+    // Text space per unit of width and of size: a Type 3 font's widths are in glyph space, which its FontMatrix takes to
+    // text space (along the baseline: the x of (width, 0) through it).
+    const widthScale = glyphSpace ? glyphSpace.matrix[0] : 1 / 1000;
     let x = 0;
     let minX = Infinity;
     let maxX = -Infinity;
+    /** The first and last glyph origins, between which a Type 3 font's glyph boxes all lie. */
+    let minOrigin = Infinity;
+    let maxOrigin = -Infinity;
     for (const item of items) {
       if (item.kind === "number") {
         x -= (item.value / 1000) * size * th;
@@ -592,18 +604,36 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
       for (let i = 0; i < codes.length; i++) {
         const code = codes.charCodeAt(i);
         const w0 = font.twoByte ? twoByteWidth : !font.widths ? 1000 : (font.widths.list[code - font.widths.first] ?? font.widths.missing);
-        const ink = (w0 / 1000) * size * th;
+        const ink = w0 * widthScale * size * th;
         minX = Math.min(minX, x, x + ink);
         maxX = Math.max(maxX, x, x + ink);
+        minOrigin = Math.min(minOrigin, x);
+        maxOrigin = Math.max(maxOrigin, x);
         const spacing = gs.charSpacing + (!font.twoByte && code === 32 ? gs.wordSpacing : 0);
-        x += ((w0 / 1000) * size + spacing) * th;
+        x += (w0 * widthScale * size + spacing) * th;
       }
     }
     if (minX <= maxX) {
-      const y0 = Math.min(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
-      const y1 = Math.max(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
-      const side = Math.abs(TEXT_SIDE * size * th);
-      let box = rectThrough(multiply(tm, gs.ctm), minX - side, y0, maxX + side, y1);
+      let box: Rect | null;
+      if (glyphSpace) {
+        // Each glyph's box goes through FontMatrix, the size, Tz and rise to its origin; as the origins lie on one
+        // line, the copies at the first and last of them bound all the others. The advances along the baseline too.
+        const [gx0, gy0, gx1, gy1] = glyphSpace.bbox;
+        const points = [minX, gs.rise, maxX, gs.rise];
+        for (const origin of [minOrigin, maxOrigin]) {
+          const toText = multiply(glyphSpace.matrix, [size * th, 0, 0, size, origin, gs.rise]);
+          for (const [gx, gy] of [[gx0, gy0], [gx1, gy0], [gx0, gy1], [gx1, gy1]]) points.push(...apply(toText, gx, gy));
+        }
+        const toTarget = multiply(tm, gs.ctm);
+        const target: number[] = [];
+        for (let i = 0; i < points.length; i += 2) target.push(...apply(toTarget, points[i], points[i + 1]));
+        box = boxOf(target);
+      } else {
+        const y0 = Math.min(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
+        const y1 = Math.max(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
+        const side = Math.abs(TEXT_SIDE * size * th);
+        box = rectThrough(multiply(tm, gs.ctm), minX - side, y0, maxX + side, y1);
+      }
       // Modes 1 and 2 stroke the glyph outlines.
       if (box && (gs.render === 1 || gs.render === 2)) {
         const half = (gs.lineWidth / 2) * maxScale(gs.ctm);

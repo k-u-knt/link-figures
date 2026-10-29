@@ -317,9 +317,9 @@ function borrowingStreams(resources: PDFDict | undefined, name: string): PDFObje
 
 /**
  * What `findUnits` needs to know of a stream's resources (see `ResourceInfo`). Anything that cannot be read with
- * certainty is null, so the drawings using it are kept: a form without a usable BBox or Matrix, a Type 3 font (its
- * glyphs are drawings of any size), a font written vertically, a font whose widths are malformed, an ExtGState whose
- * line style or font is malformed.
+ * certainty is null, so the drawings using it are kept: a form without a usable BBox or Matrix, a Type 3 font with no
+ * box that bounds its glyphs (they are drawings of any size), a font written vertically, a font whose widths are
+ * malformed, an ExtGState whose line style or font is malformed.
  */
 export function pdfResourceInfo(resources: PDFDict | undefined): ResourceInfo {
   return {
@@ -365,14 +365,20 @@ export function pdfResourceInfo(resources: PDFDict | undefined): ResourceInfo {
   };
 }
 
-/** A simple or Type 0 font's widths, or null for one that must not be measured. */
+/** A simple, Type 3 or Type 0 font's widths, or null for one that must not be measured. */
 function fontInfo(font: PDFObject | undefined): FontInfo | null {
   if (!(font instanceof PDFDict)) return null;
   const kind = subtype(font);
   if (kind === "Type0") return compositeFont(font);
+  if (kind === "Type3") return type3Font(font);
   if (kind !== "Type1" && kind !== "MMType1" && kind !== "TrueType") return null;
   const widths = font.lookup(PDFName.of("Widths"));
   if (widths === undefined) return { widths: null, twoByte: false };
+  return simpleWidths(font, widths);
+}
+
+/** A simple font's `widths`, from its Widths, FirstChar and its descriptor's MissingWidth, or null when malformed. */
+function simpleWidths(font: PDFDict, widths: PDFObject): FontInfo | null {
   const list = numbersOf(widths);
   const first = font.lookup(PDFName.of("FirstChar"));
   const descriptor = font.lookup(PDFName.of("FontDescriptor"));
@@ -380,6 +386,49 @@ function fontInfo(font: PDFObject | undefined): FontInfo | null {
   const missing = missingObject === undefined ? 0 : missingObject instanceof PDFNumber ? missingObject.asNumber() : NaN;
   if (!list || !(first instanceof PDFNumber) || !Number.isFinite(missing)) return null;
   return { widths: { first: first.asNumber(), list, missing }, twoByte: false };
+}
+
+/**
+ * A Type 3 font: its widths in glyph space, its FontMatrix, and a box that bounds its glyphs, the union of its FontBBox
+ * and the box each glyph declares with `d1`. A FontBBox of zeros (or any without area) says nothing; a glyph that
+ * cannot be read, or that begins with `d0`, adds nothing. With no box left, or a FontMatrix or widths that cannot be
+ * read, the font is not measured.
+ */
+function type3Font(font: PDFDict): FontInfo | null {
+  const matrix = numbersOf(font.lookup(PDFName.of("FontMatrix")), 6) as Matrix | null;
+  const widths = font.lookup(PDFName.of("Widths"));
+  const info = widths === undefined ? null : simpleWidths(font, widths);
+  if (!matrix || !info) return null;
+  const fontBBox = numbersOf(font.lookup(PDFName.of("FontBBox")), 4);
+  let bbox = fontBBox && hasArea(fontBBox) ? normalized(fontBBox) : null;
+  const procs = font.lookup(PDFName.of("CharProcs"));
+  const glyphs = procs instanceof PDFDict ? procs.keys().map((key) => procs.lookup(key)) : [];
+  for (const declared of glyphs.map(glyphBox)) {
+    if (declared) bbox = bbox ? [Math.min(bbox[0], declared[0]), Math.min(bbox[1], declared[1]), Math.max(bbox[2], declared[2]), Math.max(bbox[3], declared[3])] : declared;
+  }
+  return bbox && hasArea(bbox) ? { ...info, glyphSpace: { matrix, bbox } } : null;
+}
+
+/** The box a Type 3 glyph declares with the `d1` it begins with, or null when it begins otherwise or cannot be read. */
+function glyphBox(proc: PDFObject | undefined): [number, number, number, number] | null {
+  try {
+    const tokens = tokenize(decodeStream(proc));
+    const first = tokens.findIndex((t) => t.kind === "operator");
+    if (first !== 6 || tokens[first].value !== "d1" || tokens.slice(0, 6).some((t) => t.kind !== "number")) return null;
+    const [, , ...box] = tokens.slice(0, 6).map((t) => Number(t.value));
+    return box.every(Number.isFinite) ? normalized(box) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** [x0 y0 x1 y1] with its corners in order (lower left, upper right). */
+function normalized([x0, y0, x1, y1]: number[]): [number, number, number, number] {
+  return [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+}
+
+function hasArea([x0, y0, x1, y1]: number[]): boolean {
+  return x0 !== x1 && y0 !== y1;
 }
 
 /**

@@ -248,6 +248,44 @@ describe("text", () => {
     expect(units("BT 1 0 0 rg /F1 10 Tf (a) Tj ET 0 0 m 1 1 l S", res).units[0].box).not.toBeNull();
   });
 
+  describe("Type 3 fonts", () => {
+    const type3 = (matrix: Matrix, bbox: [number, number, number, number], width: number): FontInfo => ({
+      widths: { first: 65, list: [width], missing: 0 },
+      twoByte: false,
+      glyphSpace: { matrix, bbox },
+    });
+    const T3 = type3([0.001, 0, 0, 0.001, 0, 0], [0, -200, 600, 800], 600);
+
+    test("a glyph's box is the font's bbox through FontMatrix × size, with no em padding", () => {
+      // The bbox [0 -200 600 800] at 10 pt is x 0–6, y -2–8 from the glyph's origin at (100, 100).
+      expectBox(units("BT /T3 10 Tf 100 100 Td (A) Tj ET", resources({ fonts: { T3 } })).units[0], 100, 98, 6, 10);
+    });
+
+    test("glyphs advance by their width × FontMatrix, and TJ numbers move them as for any font", () => {
+      // A at 0, A at 6, then back 1000/1000 × 10 and A at 2: the last box ends at 6 + 6 = 12.
+      expectBox(units("BT /T3 10 Tf [(AA) 1000 (A)] TJ ET", resources({ fonts: { T3 } })).units[0], 0, -2, 12, 10);
+    });
+
+    test("a skewed FontMatrix: the box bounds the transformed corners of the bbox", () => {
+      // [0 0 1000 1000] through [0.001 0.0002 0.0005 0.001] at 10 pt: (0, 0), (10, 2), (5, 10), (15, 12).
+      const skewed = type3([0.001, 0.0002, 0.0005, 0.001, 0, 0], [0, 0, 1000, 1000], 1000);
+      expectBox(units("BT /T3 10 Tf (A) Tj ET", resources({ fonts: { T3: skewed } })).units[0], 0, 0, 15, 12);
+    });
+
+    test("Tz, rise, Tm and the CTM are applied, and stroked glyphs are widened by half the line width", () => {
+      // x 0–6 halved by 50 Tz, y -2–8 raised by 4: x 0–3, y 2–12; then +5 in x and ×2: x 10–16, y 4–24.
+      const src = "2 0 0 2 0 0 cm BT /T3 10 Tf 1 0 0 1 5 0 Tm 50 Tz 4 Ts (A) Tj ET";
+      expectBox(units(src, resources({ fonts: { T3 } })).units[0], 10, 4, 6, 20);
+      expectBox(units("2 w BT /T3 10 Tf 1 Tr (A) Tj ET", resources({ fonts: { T3 } })).units[0], -1, -3, 8, 12);
+    });
+
+    test("a glyph whose bbox lies away from the baseline still spans the advance along it", () => {
+      // The bbox is above the baseline only (y 5–8 at 10 pt); the advance from x 0 to 6 lies on it.
+      const raised = type3([0.001, 0, 0, 0.001, 0, 0], [100, 500, 200, 800], 600);
+      expectBox(units("BT /T3 10 Tf (A) Tj ET", resources({ fonts: { T3: raised } })).units[0], 0, 0, 6, 8);
+    });
+  });
+
   test("a text object with nothing shown has no box", () => {
     expect(units("BT 0 0 Td ET").units[0].box).toBeNull();
   });

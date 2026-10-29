@@ -410,6 +410,29 @@ describe("drawings that read the page's resources (no Resources of their own)", 
     expect(namesIn(out.resources, "XObject")).toEqual(["M0"]);
     expect(namesIn(out.resources, "Font")).toEqual(["F1"]);
   });
+
+  test("a matplotlib plot's tick labels and text in its Type 3 font are removed where they lie wholly outside", async () => {
+    const file = readFileSync(new URL("./fixtures/matplotlib-scatter.pdf", import.meta.url));
+    // The crop of the manual check: in user space x 57.6–288, y 144–288, the top of the plot's right part.
+    const trimmed = await trimPdfPage(own(file), 0, { x: 57.6, y: 0, width: 230.4, height: 144 });
+    // Before Type 3 text could be measured, 16 drawings went and every label stayed.
+    expect(trimmed.removed).toBeGreaterThan(16);
+    const out = await read(trimmed.bytes);
+    for (const label of ["(OUTSIDE)", "(0.0)", "(0.2)", "(0.4)", "(1.0)"]) expect(out.content).not.toContain(label);
+    const visible = { x: 57.6, y: 144, width: 230.4, height: 144 };
+    const outside = (b: { x: number; y: number; width: number; height: number }) =>
+      b.x > visible.x + visible.width || b.x + b.width < visible.x || b.y > visible.y + visible.height || b.y + b.height < visible.y;
+    expect(out.units.filter((u) => u.kind === "text" && u.box && outside(u.box))).toEqual([]);
+    expect(namesIn(out.resources, "Font")).toEqual([]);
+
+    // A crop around the OUTSIDE label (at x 214, y 76 in user space) keeps it, and drops the tick labels.
+    const around = await trimPdfPage(own(file), 0, { x: 200, y: 190, width: 88, height: 30 });
+    const kept = await read(around.bytes);
+    expect(kept.content).toContain("(OUTSIDE)");
+    expect(kept.content).not.toContain("(0.0)");
+    expect(kept.units.filter((u) => u.kind === "text")).toHaveLength(1);
+    expect(namesIn(kept.resources, "Font")).toEqual(["F1"]);
+  });
 });
 
 test("a file with only an owner password is trimmed, and the result is not encrypted", async () => {
@@ -558,7 +581,7 @@ describe("through the PDF export", () => {
 });
 
 describe("what the units are told of the resources", () => {
-  async function info(resources: (make: Makers) => Record<string, unknown>) {
+  async function info(resources: (make: Makers, context: PDFContext) => Record<string, unknown>) {
     const doc = await PDFDocument.load(await pdfWith("", resources));
     return pdfResourceInfo(doc.getPage(0).node.Resources());
   }
@@ -574,11 +597,48 @@ describe("what the units are told of the resources", () => {
     expect(res.font("F2")).toEqual({ widths: null, twoByte: false });
   });
 
-  test("Type 3 fonts, vertical writing, malformed widths and unknown names are not measured", async () => {
+  describe("Type 3 fonts", () => {
+    async function type3(fontBBox: number[], procs: Record<string, string | { content: string; filter: string }>, extra: Record<string, unknown> = {}) {
+      const res = await info((_, c) => {
+        const charProcs: Record<string, unknown> = {};
+        for (const [name, proc] of Object.entries(procs)) {
+          charProcs[name] = typeof proc === "string" ? c.register(c.stream(proc)) : c.register(c.stream(proc.content, { Filter: proc.filter }));
+        }
+        return {
+          Font: {
+            T3: { Type: "Font", Subtype: "Type3", FontBBox: fontBBox, FontMatrix: [0.001, 0, 0, 0.001, 0, 0], CharProcs: charProcs, FirstChar: 65, Widths: [600, 500], ...extra },
+          },
+        };
+      });
+      return res.font("T3");
+    }
+
+    test("its FontMatrix, FontBBox and widths (in glyph space), the bbox widened by any larger d1 box", async () => {
+      expect(await type3([0, -200, 600, 800], { A: "600 0 0 -100 500 700 d1 0 0 m f", B: "500 0 -50 0 400 900 d1" })).toEqual({
+        widths: { first: 65, list: [600, 500], missing: 0 },
+        twoByte: false,
+        glyphSpace: { matrix: [0.001, 0, 0, 0.001, 0, 0], bbox: [-50, -200, 600, 900] },
+      });
+    });
+
+    test("a FontBBox of zeros: the union of the glyphs' d1 boxes, with those that cannot be read left out", async () => {
+      const font = await type3([0, 0, 0, 0], { A: "600 0 500 700 0 -100 d1", B: "500 0 d0 0 0 m 900 900 l S", C: { content: "x", filter: "DCTDecode" } });
+      expect(font?.glyphSpace?.bbox).toEqual([0, -100, 500, 700]);
+    });
+
+    test("not measured with neither a FontBBox nor a d1 box, or with a FontMatrix or widths that cannot be read", async () => {
+      expect(await type3([0, 0, 0, 0], { A: "600 0 d0 0 0 m 900 900 l S", B: { content: "x", filter: "DCTDecode" } })).toBeNull();
+      expect(await type3([0, 0, 0, 0], {})).toBeNull();
+      expect(await type3([0, -200, 600, 800], {}, { FontMatrix: [0.001, 0, 0] })).toBeNull();
+      expect(await type3([0, -200, 600, 800], {}, { Widths: [600, "x"] })).toBeNull();
+    });
+  });
+
+  test("Type 3 fonts without glyphs to read, vertical writing, malformed widths and unknown names are not measured", async () => {
     const res = await info(() => ({
       Font: {
         T3: { Type: "Font", Subtype: "Type3" },
-        V: { Type: "Font", Subtype: "Type0", Encoding: "Identity-V", DescendantFonts: [{ Subtype: "CIDFontType2" }] },
+        V:{ Type: "Font", Subtype: "Type0", Encoding: "Identity-V", DescendantFonts: [{ Subtype: "CIDFontType2" }] },
         Bad: { Type: "Font", Subtype: "Type1", FirstChar: 0, Widths: [100, "x"] },
       },
     }));

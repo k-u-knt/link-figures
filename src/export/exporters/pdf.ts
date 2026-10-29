@@ -8,6 +8,7 @@ import type { Exporter, ExportInput } from "../../registry/exporter";
 import type { AssetMap, PdfAsset } from "../asset-types";
 import { pdfPanelPlacement, splitLayers, type Layer, type PdfPlacement } from "../pdf-layers";
 import { buildPageSvg } from "../svg-builder";
+import { normaliseUserSpaceMarkers } from "../svg-markers";
 
 const PDF_MIME = "application/pdf";
 const SVG_MIME = "image/svg+xml";
@@ -43,9 +44,12 @@ function createPdf(jsPDF: JsPdfConstructor, page: Page): JsPdf {
   return new jsPDF({ unit: "mm", format: [page.width, page.height], orientation: orientationOf(page), compress: true });
 }
 
-/** The page's SVG drawn as vectors, over the whole of jsPDF's current page. */
+/**
+ * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
+ * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width).
+ */
 async function drawSvg(pdf: JsPdf, svg: string, page: Page): Promise<void> {
-  await pdf.svg(parseSvg(svg, page), { x: 0, y: 0, width: page.width, height: page.height });
+  await pdf.svg(parseSvg(normaliseUserSpaceMarkers(svg), page), { x: 0, y: 0, width: page.width, height: page.height });
 }
 
 /** One PDF holding a page per figure page, each drawn from its own SVG. */

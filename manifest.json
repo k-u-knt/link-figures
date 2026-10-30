@@ -1,7 +1,7 @@
 {
   "id": "link-figures",
   "name": "Link Figures",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.14.0",
   "description": "Page-based figure and slide editor where every panel is a live link to its source.",
   "author": "Kenta Ninomiya",

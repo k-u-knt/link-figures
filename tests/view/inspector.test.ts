@@ -8,6 +8,7 @@ import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
+import { drawingCommands } from "../../src/commands/drawing";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
 import { clampToField, colorInputValue, formatNumber, Inspector } from "../../src/view/inspector";
@@ -36,6 +37,8 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   for (const paint of builtinPaintTypes) registries.paints.register(paint);
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
   registries.nodeTypes.register(shapeNodeType);
+  // The inspector's node writes run the node.update command.
+  for (const command of drawingCommands()) registries.commands.register(command);
   const selection = new SelectionState();
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
@@ -46,6 +49,7 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
     pageIndex: 0,
     currentPage: () => store.doc.pages[view.pageIndex],
     focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[view.pageIndex])!,
+    commandContext: () => ({ app: {} as never, registries, view, store, selection: selection.ids, page: view.focusPage() }),
   };
   const el = new FakeEl("div");
   const inspector = new Inspector(view as never, el as never);
@@ -745,5 +749,57 @@ describe("connector fields", () => {
     el.control("ends.0.snap").fire("change");
     // This store has no normaliser; the view's drops the anchor id (see the connector normaliser's tests).
     expect(connectorOf(store).ends[0]).toEqual({ kind: "attached", node: "p-a", snap: "center", anchor: "e" });
+  });
+
+  test("choosing a route writes that route's default params, as node.update does", () => {
+    const { el, store } = connected();
+    el.control("route").value = "curved";
+    el.control("route").fire("change");
+    expect(connectorOf(store)).toMatchObject({ route: "curved", routeParams: { bend: 0.25 } });
+    expect(keysOf(el)).toContain("routeParams.bend");
+  });
+});
+
+describe("the inspector runs node.update", () => {
+  /** Runs `node.update` as a script would, on the store of a second `setup` built the same way. */
+  function viaCommand(s: ReturnType<typeof setup>, id: string, patch: Record<string, unknown>) {
+    const command = s.view.plugin.registries.commands.get("node.update")!;
+    command.run(s.view.commandContext() as never, { id, patch });
+  }
+  const twoShapes = (d: ReturnType<typeof createDocument>) => {
+    // One page id, so two documents built this way are equal.
+    d.pages[0].id = "pg-1";
+    d.nodes.push(shapeNodeDefaults(d.pages[0], { id: "p-a" }, []), shapeNodeDefaults(d.pages[0], { id: "p-b" }, ["p-a"]));
+  };
+
+  test("an inspector write and node.update with the same patch give identical documents", () => {
+    const ui = setup(twoShapes);
+    const api = setup(twoShapes);
+    ui.selection.set(["p-a", "p-b"]);
+    ui.el.typeInto("border.width", "3");
+    viaCommand(api, "p-a", { border: { width: 3 } });
+    viaCommand(api, "p-b", { border: { width: 3 } });
+    expect(ui.store.doc).toEqual(api.store.doc);
+
+    const border = ui.el.control("border");
+    border.checked = false;
+    border.fire("change");
+    viaCommand(api, "p-a", { border: null });
+    viaCommand(api, "p-b", { border: null });
+    expect(ui.store.doc).toEqual(api.store.doc);
+    expect((ui.store.doc.nodes[0] as ShapeNode).border).toBeNull();
+  });
+
+  test("a write to several nodes is one commit, and a run of writes to one field merges into one undo step", () => {
+    const { el, store, selection, labels } = setup(twoShapes);
+    const seen = labels();
+    selection.set(["p-a", "p-b"]);
+    const before = store.doc;
+    el.typeInto("border.width", "2");
+    el.typeInto("border.width", "4");
+    expect(seen).toEqual(["inspect:border.width", "inspect:border.width"]);
+    expect(store.doc.nodes.map((n) => (n as ShapeNode).border!.width)).toEqual([4, 4]);
+    store.undo();
+    expect(store.doc).toEqual(before);
   });
 });

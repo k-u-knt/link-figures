@@ -1,6 +1,7 @@
+import { prepareCall, runInOneCommit, type PreparedCall } from "../commands/headless";
 import { DEFAULT_PAGE_LIMIT_MM } from "../constants";
 import { mmToPx, pxToMm } from "../model/geometry";
-import type { NodeId, Paint } from "../model/types";
+import type { Node, NodeId, Paint } from "../model/types";
 import { getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
@@ -303,7 +304,9 @@ interface Section {
 /**
  * The right-hand panel, generated from fields. With nothing selected it shows the page nearest the middle of the stage (`focusPage`);
  * with nodes selected it shows the first one's fields (the base fields and its node type's), and writes go to every
- * selected node. Every write is a commit labelled `inspect:<key>`, so a run of edits to one field is one undo step.
+ * selected node. A node's write runs the `node.update` command for each node it changes, all in one commit labelled
+ * `inspect:<key>`, so a run of edits to one field is one undo step, and the inspector makes the same documents as a
+ * script that sends the same patches. A page's write is a commit labelled `inspect:<key>` too.
  * Values are shown as the user thinks of them: a node's position and size in millimetres, though it stores pixels.
  */
 export class Inspector {
@@ -427,22 +430,42 @@ export class Inspector {
         const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;
         // A paint's own field (`frame.paint.color`) belongs to the first node's paint type, and is not written onto a paint of another.
         const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`));
-        this.view.store.commit(`inspect:${key}`, (draft) => {
-          const firstNow = draft.nodes.find((n) => n.id === first.id);
-          const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;
-          for (const node of draft.nodes) {
-            if (!targets.has(node.id)) continue;
-            // What belongs to one node type is not written onto nodes of another.
-            if (!baseKeys.has(key) && node.type !== first.type) continue;
-            // Nor is a nested value written onto a node that has nothing there (a frame that is off).
-            if (parent !== null && !isRecord(readValue(node, parent)) && !Array.isArray(readValue(node, parent))) continue;
-            if (paintKey && readValue(node, `${paintKey}.type`) !== paintType) continue;
-            if (key === "name" && stored === "") delete node.name;
-            // Each node gets its own copy of an object (a paint's defaults, a list of stops).
-            else writeValue(node, key, typeof stored === "object" && stored !== null ? structuredClone(stored) : stored);
-          }
-        });
+        const doc = this.view.store.doc;
+        const firstNow = doc.nodes.find((n) => n.id === first.id);
+        const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;
+        const calls: PreparedCall[] = [];
+        for (const node of doc.nodes) {
+          if (!targets.has(node.id)) continue;
+          // What belongs to one node type is not written onto nodes of another.
+          if (!baseKeys.has(key) && node.type !== first.type) continue;
+          // Nor is a nested value written onto a node that has nothing there (a frame that is off).
+          if (parent !== null && !isRecord(readValue(node, parent)) && !Array.isArray(readValue(node, parent))) continue;
+          if (paintKey && readValue(node, `${paintKey}.type`) !== paintType) continue;
+          calls.push(prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
+        }
+        if (calls.length === 0) return;
+        try {
+          runInOneCommit(this.view.store, this.view.commandContext(), calls, `inspect:${key}`);
+        } catch (error) {
+          // What the controls offer is valid, so this is a slip of the code, not the user's; the document is left as it was.
+          console.error(`Link Figures: the inspector could not set "${key}"`, error);
+        }
       },
     };
   }
+}
+
+/**
+ * The `node.update` patch that sets `key` (a dotted path, `border.width`, `caps.0.kind`) of `node` to `value`: the whole
+ * top-level field with that one value changed, so a list (the caps, a gradient's stops) is written whole, as `node.update`
+ * writes lists. An empty `name` is passed on as it is: `node.update` removes the name.
+ */
+export function patchFor(node: Node, key: string, value: unknown): Record<string, unknown> {
+  const copy = (v: unknown): unknown => (typeof v === "object" && v !== null ? structuredClone(v) : v);
+  const dot = key.indexOf(".");
+  if (dot === -1) return { [key]: copy(value) };
+  const top = key.slice(0, dot);
+  const field = copy((node as unknown as Record<string, unknown>)[top]) as object;
+  writeValue(field, key.slice(dot + 1), copy(value));
+  return { [top]: field };
 }

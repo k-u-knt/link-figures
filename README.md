@@ -77,7 +77,7 @@ Calls on one figure run one after another, so a script need not await each. With
 | `shape.create` | `kind` (`"rect"`), `x`, `y`, `width`, `height` (page px; required), `id`, `page`, `params`, `fill`, `border` | `{ id }` |
 | `connector.create` | `from`, `to` (ends; required), `route` (`"straight"`), `routeParams`, `stroke`, `caps`, `id`, `page` | `{ id }` |
 | `node.update` | `id`, `patch` (required): a part of the node in its JSON form, merged into it | `{ id }` |
-| `node.move` | `ids` (the selection when the figure is open; required headless), `dx`, `dy` (page px; required), `pages` (`true`; with `true` each moved node goes to the page under its centre) | `{ ids }` |
+| `node.move` | `ids` (the selection when the figure is open; required headless), `dx`, `dy` (page px; required), `pages` (`true`; with `true` each moved node goes to the page under its centre, and a connector whose items all go to one page goes with them) | `{ ids }` |
 | `connector.setEnd` | `id`, `which` (0 the start, 1 the end), `end` (required) | `{ id }` |
 | `shape.operate` | `operation` (a registered shape operation), `ids` (required) | `{ added, removed }` |
 

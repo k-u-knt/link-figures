@@ -4,12 +4,13 @@ import { attachTarget, endAt, endError, nearestAnchor, SNAP_MODE_OPTION, snapMar
 import { rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import { distanceToPath, toSvgPath, type PathData } from "../model/path";
-import type { ConnectorNode, Document, End, NodeId } from "../model/types";
+import type { ConnectorNode, Document, End, NodeId, PageId } from "../model/types";
 import type { Field } from "../registry/fields";
 import type {
   HandleDrag,
   InspectorContext,
   InteractionContext,
+  MoveContext,
   NodeHandle,
   NodeRenderer,
   NodeType,
@@ -301,9 +302,17 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     return { ...node, ends: [moveEnd(node.ends[0], dx, dy), moveEnd(node.ends[1], dx, dy)] };
   },
 
-  /** Kept on its page while an end is attached to an item that is not moving with it. */
-  keepsPage(node: ConnectorNode, moving: ReadonlySet<NodeId>): boolean {
-    return node.ends.some((e) => e.kind === "attached" && !moving.has(e.node));
+  /**
+   * Kept on its page while an end is attached to an item that is not moving with it; with every item it is attached to
+   * moving, and all of them going to one page, on that page, so it stays attached however far its own box has gone;
+   * otherwise (no end attached, or items going to different pages) on the page under its centre.
+   */
+  pageAfterMove(node: ConnectorNode, ctx: MoveContext): PageId {
+    const items = node.ends.flatMap((e) => (e.kind === "attached" ? [e.node] : []));
+    if (items.some((id) => !ctx.moving.has(id))) return node.page;
+    const pages = new Set(items.map((id) => ctx.pageOf(id)));
+    const [only] = pages;
+    return pages.size === 1 && only !== undefined ? only : ctx.centrePage;
   },
 
   toSvg(node: ConnectorNode, ctx: SvgContext): string {

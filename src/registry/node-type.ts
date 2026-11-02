@@ -3,7 +3,7 @@ import type { AssetMap } from "../export/asset-types";
 import type { Attachable } from "../model/attach";
 import type { Pt, Rect } from "../model/geometry";
 import type { PathData } from "../model/path";
-import type { Document, Node, NodeId, Page } from "../model/types";
+import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
 import type { Registries } from "./index";
@@ -144,11 +144,25 @@ export interface NodeType<N extends Node = Node> {
    */
   translate?(node: N, dx: number, dy: number): N;
   /**
-   * True when the node is to stay on its page although a move (`node.move`) has taken the centre of its box over
-   * another page; `moving` is every node of that move. A connector stays while an end is attached to an item that is
-   * not moving, which a page change would leave behind. Without it, the node goes to the page under its centre.
+   * The page the node is on once a move (`node.move`) that took it along has ended. Without it, the node goes to
+   * `ctx.centrePage`, the page under the centre of its box. A connector follows its items: it stays while an end is
+   * attached to an item that is not moving, goes with its items when they all go to one page, and otherwise goes to
+   * the page under its centre.
    */
-  keepsPage?(node: N, moving: ReadonlySet<NodeId>): boolean;
+  pageAfterMove?(node: N, ctx: MoveContext): PageId;
+}
+
+/** What a node type's `pageAfterMove` may depend on besides the node. */
+export interface MoveContext {
+  /** Every node of the move. */
+  moving: ReadonlySet<NodeId>;
+  /**
+   * The page node `id` is on once the move has ended, as far as it is known: for a node of the move whose type has no
+   * `pageAfterMove`, the page under its centre; for any other node, the page it is on now. Undefined for no such node.
+   */
+  pageOf(id: NodeId): PageId | undefined;
+  /** The page under the centre of the node's box, or the node's own page when the centre is over no page. */
+  centrePage: PageId;
 }
 
 export class NodeTypeRegistry {

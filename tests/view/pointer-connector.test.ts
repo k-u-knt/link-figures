@@ -384,6 +384,43 @@ test("a body drag of a shape with its connector to the other page takes both, th
   expect(connectors()[0]).toMatchObject({ page: "pg-1", ends: [attached("A", "e"), { kind: "free", x: 250, y: 200 }] });
 });
 
+test("a shape dragged with its connector onto the other page takes the connector along though the connector's centre stays behind", async () => {
+  const { addConnector, pointer, connectors, store, view, settled } = setup(null);
+  // From A's east anchor (150, 90) up to near the top of the page: the connector's centre is well above A's.
+  const c = await addConnector(attached("A", "e"), { kind: "free", x: 150, y: 5 });
+  const gap = pageOriginsPx(store.doc).get("pg-2")!.y;
+  const dy = gap - 70;
+  view.selection.set(["A", c.id]);
+  pointer("pointerdown", [100, 90]);
+  pointer("pointermove", [100, 140]);
+  pointer("pointermove", [100, 90 + dy]);
+  pointer("pointerup", [100, 90 + dy]);
+  await settled();
+  // A's centre (y 90 + dy) is over the second page; the connector's (about 47 + dy) is over the gap between the pages.
+  const a = store.doc.nodes.find((n) => n.id === "A")!;
+  expect(a).toMatchObject({ page: "pg-2", y: roundPx(50 + dy - gap) });
+  expect(connectors()[0]).toMatchObject({ page: "pg-2", ends: [attached("A", "e"), { kind: "free", x: 150, y: roundPx(5 + dy - gap) }] });
+});
+
+test("a connector whose items land on different pages goes by its own centre, and the end on the other page comes free", async () => {
+  const { addConnector, connectors, store, view, registries } = setup(null);
+  // B lower down, so a move takes B's centre onto the second page and leaves A's on the first.
+  store.commit("edit", (d) => {
+    d.nodes.find((n) => n.id === "B")!.y = 250;
+  });
+  const c = await addConnector(attached("A", "e"), attached("B", "w"));
+  const gap = pageOriginsPx(store.doc).get("pg-2")!.y;
+  const dy = gap - 250;
+  await runCall(store, view.commandContext(), prepareCall(registries, { id: "node.move", args: { ids: ["A", "B", c.id], dx: 0, dy } }));
+  const page = (id: string) => store.doc.nodes.find((n) => n.id === id)!.page;
+  expect([page("A"), page("B")]).toEqual(["pg-1", "pg-2"]);
+  // Its centre is over the gap between the pages, so it keeps its page, and A's end stays attached.
+  const [moved] = connectors();
+  expect(moved.page).toBe("pg-1");
+  expect(moved.ends[0]).toEqual(attached("A", "e"));
+  expect(moved.ends[1].kind).toBe("free");
+});
+
 test("UI = API: a body drag gives the document that node.move gives with the same ids and delta", async () => {
   const ui = setup(null);
   const c = await ui.addConnector(attached("A", "e"), { kind: "free", x: 350, y: 300 }, { id: "C" });

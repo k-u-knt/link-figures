@@ -310,9 +310,8 @@ type MoveArgs = { ids?: unknown[]; dx: number; dy: number; pages: boolean };
 /**
  * Moves the nodes `ids` (else the selection) that are not locked by (`dx`, `dy`) page px, each as its type moves (see
  * `translateInto`). With `pages` (the default), each moved node then goes to the page under the centre of its box,
- * keeping its place on the canvas, unless its type keeps it where it is (`NodeType.keepsPage`: a connector whose end is
- * attached to an item that is not moving); a node whose centre is over no page stays on its own. One undo step; its
- * result names the nodes moved.
+ * keeping its place on the canvas, unless its type places it otherwise (`NodeType.pageAfterMove`: a connector follows
+ * its items); a node whose centre is over no page stays on its own. One undo step; its result names the nodes moved.
  */
 function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
   const command = "node.move";
@@ -332,27 +331,44 @@ function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
   }
   // A second commit with the same label, which the store merges into the first: the boxes it reads are the ones the
   // move gave, normalised (a connector's is the area its moved ends draw).
-  if (args.pages) moveToPagesUnderCentres(ctx, command, ids);
+  if (args.pages) placeOnPages(ctx, command, ids);
   return { ids: [...ids] };
 }
 
-/** Each of `ids` to the page under the centre of its box, as `moveNodes` says. */
-function moveToPagesUnderCentres(ctx: CommandContext, command: string, ids: ReadonlySet<NodeId>): void {
+/**
+ * Each of `ids` to the page its move ends on, as `moveNodes` says: the page under the centre of its box, unless its
+ * type says otherwise (`NodeType.pageAfterMove`). Nodes whose type has no such hook are placed first, so a hook can
+ * read where they go (a connector follows its items).
+ */
+function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<NodeId>): void {
   const doc = ctx.store.doc;
   const origins = pageOriginsPx(doc);
-  const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
-  for (const node of doc.nodes) {
+  const centrePage = (node: Node): PageId => {
     const from = origins.get(node.page);
-    if (!ids.has(node.id) || !from) continue;
+    if (!from) return node.page;
     const centre = { x: from.x + node.x + node.width / 2, y: from.y + node.y + node.height / 2 };
-    const target = doc.pages.find((p) => {
+    const under = doc.pages.find((p) => {
       const at = origins.get(p.id);
       return !!at && rectContainsPt({ ...at, ...pageSizePx(p) }, centre);
     });
-    const to = target && origins.get(target.id);
-    if (!target || !to || target.id === node.page) continue;
-    if (ctx.registries.nodeTypes.get(node.type)?.keepsPage?.(node, ids)) continue;
-    moves.set(node.id, { page: target.id, dx: from.x - to.x, dy: from.y - to.y });
+    return under?.id ?? node.page;
+  };
+  const moving = doc.nodes.filter((n) => ids.has(n.id));
+  const hookOf = (node: Node) => ctx.registries.nodeTypes.get(node.type)?.pageAfterMove;
+  const destination = new Map<NodeId, PageId>();
+  for (const node of moving) if (!hookOf(node)) destination.set(node.id, centrePage(node));
+  const pageOf = (id: NodeId): PageId | undefined => destination.get(id) ?? doc.nodes.find((n) => n.id === id)?.page;
+  for (const node of moving) {
+    const hook = hookOf(node);
+    if (hook) destination.set(node.id, hook(node, { moving: ids, pageOf, centrePage: centrePage(node) }));
+  }
+  const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
+  for (const node of moving) {
+    const page = destination.get(node.id);
+    const from = origins.get(node.page);
+    const to = page === undefined ? undefined : origins.get(page);
+    if (page === undefined || page === node.page || !from || !to) continue;
+    moves.set(node.id, { page, dx: from.x - to.x, dy: from.y - to.y });
   }
   if (moves.size === 0) return;
   const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));

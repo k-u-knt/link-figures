@@ -54,20 +54,55 @@ export const curvedRoute: Route = {
   },
 };
 
-/** How far, at most, an orthogonal route runs out along a slanted anchor normal (a rotated item's) before it turns square. */
-const SLANT_STUB_PX = 12;
+/** How far, at most, an orthogonal route runs straight out along an anchor's normal before it may turn. */
+const STUB_PX = 12;
 
-/** Whether a unit direction runs (within rounding) along the page's x or y axis. */
-function onAxis(d: Pt): boolean {
-  return Math.abs(d.x) < 1e-9 || Math.abs(d.y) < 1e-9;
+/** A unit direction along the page axis nearest `d`. */
+function nearestAxis(d: Pt): Pt {
+  return Math.abs(d.x) >= Math.abs(d.y) ? { x: Math.sign(d.x) || 1, y: 0 } : { x: 0, y: Math.sign(d.y) || 1 };
 }
 
 /**
- * A simple elbow, with no obstacle avoidance. Each end runs along its anchor's normal or, when it has none, along the
- * axis on which the ends are further apart. When both run along the same axis the route is three segments, the middle
- * one crossing at `offset` (0–1) of the way from start to end; when they differ it is two, meeting at a corner. An
- * anchor normal that is not on an axis (a rotated item's) first gets a short stub along the normal, so the line still
- * leaves square to the item's edge, and the elbow continues from the stub's end on the normal's nearer axis.
+ * How well a leg leaving `from` toward `to` respects an end that must leave along `dir`: 2 when it goes along `dir` (or
+ * the end has no direction), 1 when it goes square to it, 0 when it doubles back.
+ */
+function legScore(from: Pt, to: Pt, dir: Pt | null): number {
+  if (!dir) return 2;
+  const along = (to.x - from.x) * dir.x + (to.y - from.y) * dir.y;
+  return along > 1e-9 ? 2 : along < -1e-9 ? 0 : 1;
+}
+
+/** The first leg of `pts` (from its first point) that has length, as its two ends; null when every point is the same. */
+function firstLeg(pts: Pt[]): [Pt, Pt] | null {
+  for (let i = 1; i < pts.length; i++) if (pts[i].x !== pts[0].x || pts[i].y !== pts[0].y) return [pts[0], pts[i]];
+  return null;
+}
+
+/** `pts` without repeated points, and without corners where the line runs straight on in the same direction. */
+function simplify(pts: Pt[]): Pt[] {
+  const out: Pt[] = [];
+  for (const pt of pts) {
+    const last = out[out.length - 1];
+    if (last && last.x === pt.x && last.y === pt.y) continue;
+    if (out.length >= 2) {
+      const a = out[out.length - 2];
+      const cross = (last.x - a.x) * (pt.y - last.y) - (last.y - a.y) * (pt.x - last.x);
+      const dot = (last.x - a.x) * (pt.x - last.x) + (last.y - a.y) * (pt.y - last.y);
+      if (Math.abs(cross) < 1e-9 && dot > 0) out.pop();
+    }
+    out.push(pt);
+  }
+  return out;
+}
+
+/**
+ * A simple elbow, with no obstacle avoidance. An end attached to an anchor first runs a short stub straight out along
+ * the anchor's normal (rotated with its item), so the line leaves its item square to the edge and arrives into an anchor
+ * from outside; a free or centre end has no stub. Between the stub ends the route is axis-aligned: of a few candidate
+ * elbows (a Z whose middle segment crosses at `offset`, 0–1, of the way from start to end; an L with one corner; a U
+ * round the far side when both ends face the same way) it takes the first that never doubles back along an end's
+ * normal, preferring legs that carry straight on from a stub. Ends with no normal use the axis on which they are
+ * further apart.
  */
 export const orthogonalRoute: Route = {
   id: "orthogonal",
@@ -76,24 +111,55 @@ export const orthogonalRoute: Route = {
   defaults: () => ({ offset: 0.5 }),
   fields: () => [{ kind: "number", key: "offset", label: "Bend position", min: 0, max: 1, step: 0.05 }],
   path(a, b, params) {
-    const offset = numberParam(params, "offset", 0.5);
-    const stub = Math.min(SLANT_STUB_PX, Math.hypot(b.pt.x - a.pt.x, b.pt.y - a.pt.y) / 3);
-    const out = (e: EndPoint): Pt => (e.dir && !onAxis(e.dir) ? { x: e.pt.x + e.dir.x * stub, y: e.pt.y + e.dir.y * stub } : e.pt);
+    const offset = Math.max(0, Math.min(1, numberParam(params, "offset", 0.5)));
+    const stub = Math.min(STUB_PX, Math.hypot(b.pt.x - a.pt.x, b.pt.y - a.pt.y) / 3);
+    const out = (e: EndPoint): Pt => (e.dir ? { x: e.pt.x + e.dir.x * stub, y: e.pt.y + e.dir.y * stub } : e.pt);
     const p = out(a);
     const q = out(b);
+    const da = a.dir ? nearestAxis(a.dir) : null;
+    const db = b.dir ? nearestAxis(b.dir) : null;
     const wide = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
-    const horizontal = (e: EndPoint): boolean => (e.dir ? Math.abs(e.dir.x) >= Math.abs(e.dir.y) : wide);
-    const ha = horizontal(a);
-    const hb = horizontal(b);
-    let corners: Pt[];
-    if (ha && hb) {
-      const mx = p.x + (q.x - p.x) * offset;
-      corners = [{ x: mx, y: p.y }, { x: mx, y: q.y }];
-    } else if (!ha && !hb) {
-      const my = p.y + (q.y - p.y) * offset;
-      corners = [{ x: p.x, y: my }, { x: q.x, y: my }];
-    } else corners = [ha ? { x: q.x, y: p.y } : { x: p.x, y: q.y }];
-    const pts = [a.pt, ...(p === a.pt ? [] : [p]), ...corners, ...(q === b.pt ? [] : [q]), b.pt];
+    const horizontalA = da ? da.x !== 0 : wide;
+    const horizontalB = db ? db.x !== 0 : wide;
+    const between = (from: number, to: number, lo: number, hi: number): number =>
+      Math.max(Math.min(lo, hi), Math.min(Math.max(lo, hi), from + (to - from) * offset));
+    const mx = between(a.pt.x, b.pt.x, p.x, q.x);
+    const my = between(a.pt.y, b.pt.y, p.y, q.y);
+    // The far side, for a U: beyond both ends in the direction an end faces.
+    const far = (axis: "x" | "y"): number => {
+      const d = (da && da[axis] !== 0 ? da : db && db[axis] !== 0 ? db : null)?.[axis] ?? 1;
+      return d > 0 ? Math.max(p[axis], q[axis]) : Math.min(p[axis], q[axis]);
+    };
+    const zh: Pt[] = [{ x: mx, y: p.y }, { x: mx, y: q.y }];
+    const zv: Pt[] = [{ x: p.x, y: my }, { x: q.x, y: my }];
+    const uh: Pt[] = [{ x: far("x"), y: p.y }, { x: far("x"), y: q.y }];
+    const uv: Pt[] = [{ x: p.x, y: far("y") }, { x: q.x, y: far("y") }];
+    const lh: Pt[] = [{ x: q.x, y: p.y }];
+    const lv: Pt[] = [{ x: p.x, y: q.y }];
+    const candidates =
+      horizontalA && horizontalB
+        ? [zh, uh, lh, lv, zv, uv]
+        : !horizontalA && !horizontalB
+          ? [zv, uv, lv, lh, zh, uh]
+          : horizontalA
+            ? [lh, lv, zh, zv, uh, uv]
+            : [lv, lh, zv, zh, uv, uh];
+    let best = candidates[0];
+    let bestScore = -1;
+    for (const corners of candidates) {
+      const pts = [p, ...corners, q];
+      const first = firstLeg(pts);
+      const last = firstLeg([...pts].reverse());
+      const sa = first ? legScore(first[0], first[1], da) : 2;
+      const sb = last ? legScore(last[0], last[1], db) : 2;
+      const score = sa === 0 || sb === 0 ? 0 : sa + sb;
+      if (score > bestScore) {
+        best = corners;
+        bestScore = score;
+      }
+    }
+    const pts = simplify([a.pt, p, ...best, q, b.pt]);
+    if (pts.length === 1) pts.push(pts[0]);
     return [{ op: "M", x: pts[0].x, y: pts[0].y }, ...pts.slice(1).map((pt) => ({ op: "L" as const, x: pt.x, y: pt.y }))];
   },
 };
@@ -101,10 +167,14 @@ export const orthogonalRoute: Route = {
 /** The routes the plugin registers at load. */
 export const builtinRoutes: Route[] = [straightRoute, curvedRoute, orthogonalRoute];
 
-/** A cap's length along the line in px: its size (a multiple of the stroke width) times that width; never negative. */
-function capLength(size: number, strokeWidthPx: number): number {
-  const l = size * strokeWidthPx;
-  return Number.isFinite(l) && l > 0 ? l : 0;
+/**
+ * A cap's length along the line in px: its size (a multiple of the stroke width) times that width, but never below
+ * `minSize` widths, the smallest at which that kind still makes a sound shape at least as wide as the line. 0 when the
+ * line has no width, which draws no cap.
+ */
+function capLength(size: number, strokeWidthPx: number, minSize: number): number {
+  if (!(Number.isFinite(strokeWidthPx) && strokeWidthPx > 0)) return 0;
+  return Math.max(Number.isFinite(size) ? size : 0, minSize) * strokeWidthPx;
 }
 
 /** No cap: the line runs to its end. */
@@ -115,12 +185,15 @@ export const noCap: CapKind = {
   inset: () => 0,
 };
 
+/** The smallest arrow: two thirds as wide as long, it is then 1 line width wide at its base. */
+const ARROW_MIN_SIZE = 1.5;
+
 /** A filled triangle as long as the cap's size and two thirds as wide, its tip on the end; the line stops at its base. */
 export const arrowCap: CapKind = {
   id: "arrow",
   name: "Arrow",
   path(size, w) {
-    const l = capLength(size, w);
+    const l = capLength(size, w, ARROW_MIN_SIZE);
     if (l === 0) return [];
     return [
       { op: "M", x: 0, y: 0 },
@@ -129,8 +202,14 @@ export const arrowCap: CapKind = {
       { op: "Z" },
     ];
   },
-  inset: (size, w) => capLength(size, w),
+  inset: (size, w) => capLength(size, w, ARROW_MIN_SIZE),
 };
+
+/**
+ * The smallest open arrow. Its arms' inner edges meet √5 line widths behind the tip and reach the axis at 4/√5 ≈ 1.79
+ * widths, where the outline would cross itself; at 2.5 the chevron is still open.
+ */
+const OPEN_ARROW_MIN_SIZE = 2.5;
 
 /**
  * An open chevron, its tip on the end and its arms reaching back the cap's size, as thick as the line, drawn as a
@@ -140,7 +219,7 @@ export const openArrowCap: CapKind = {
   id: "openArrow",
   name: "Open arrow",
   path(size, w) {
-    const l = capLength(size, w);
+    const l = capLength(size, w, OPEN_ARROW_MIN_SIZE);
     if (l === 0) return [];
     const h = l / 2;
     const m = Math.hypot(l, h);
@@ -157,29 +236,29 @@ export const openArrowCap: CapKind = {
     ];
   },
   inset(size, w) {
-    const l = capLength(size, w);
+    const l = capLength(size, w, OPEN_ARROW_MIN_SIZE);
     // Half the inner corner's depth (w·m/h with h = l/2): there the chevron's solid tip is at least the line's width across.
     return l === 0 ? 0 : (w * Math.hypot(l, l / 2)) / l;
   },
 };
 
-/** A filled disc whose diameter is the cap's size, touching the end; the line stops at its centre. */
+/** A filled disc whose diameter is the cap's size (at least the line's width), touching the end; the line stops at its centre. */
 export const circleCap: CapKind = {
   id: "circle",
   name: "Circle",
   path(size, w) {
-    const l = capLength(size, w);
+    const l = capLength(size, w, 1);
     return l === 0 ? [] : ellipsePath({ x: -l, y: -l / 2, width: l, height: l });
   },
-  inset: (size, w) => capLength(size, w) / 2,
+  inset: (size, w) => capLength(size, w, 1) / 2,
 };
 
-/** A bar across the end, as long as the cap's size and as thick as the line, its outer edge on the end; the line stops inside it. */
+/** A bar across the end, as long as the cap's size (at least the line's width) and as thick as the line, its outer edge on the end; the line stops inside it. */
 export const barCap: CapKind = {
   id: "bar",
   name: "Bar",
   path(size, w) {
-    const l = capLength(size, w);
+    const l = capLength(size, w, 1);
     if (l === 0) return [];
     return [
       { op: "M", x: 0, y: -l / 2 },
@@ -189,7 +268,7 @@ export const barCap: CapKind = {
       { op: "Z" },
     ];
   },
-  inset: (size, w) => (capLength(size, w) === 0 ? 0 : w / 2),
+  inset: (size, w) => (capLength(size, w, 1) === 0 ? 0 : w / 2),
 };
 
 /** The cap kinds the plugin registers at load. */

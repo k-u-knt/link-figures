@@ -15,8 +15,14 @@ export interface ResolvedConnector {
   path: PathData;
   /** Each end's cap as a closed area filled with the stroke's paint, or null when the end has none. */
   caps: [PathData | null, PathData | null];
-  /** The bounds of the line and the caps (the stroke's width is not added). */
+  /** The area drawn: the line and the caps, widened by half the stroke's width (more where its line cap is square). */
   bounds: Rect;
+  /**
+   * The box the stroke's paint (a gradient, a pattern) is laid out in, for the line and its caps alike: the bounds of the
+   * whole route, end to end, each dimension at least the stroke's width so a straight horizontal or vertical line still
+   * has a box to lay a paint across.
+   */
+  paintBox: Rect;
   /** Which ends are attached to an item that is missing, on another page, or not attachable. */
   detached: [boolean, boolean];
 }
@@ -124,29 +130,76 @@ function trimPiece(from: Pt, s: Exclude<Seg, { op: "Z" }>, d: number, atStart: b
   return { start: from, seg: { op: "C", x1: p01.x, y1: p01.y, x2: p012.x, y2: p012.y, x: mid.x, y: mid.y } };
 }
 
+/** A drawn piece of an open path: the segment and the point it starts from. */
+type Piece = { from: Pt; seg: Exclude<Seg, { op: "Z" }> };
+
+function pieceLength({ from, seg }: Piece): number {
+  if (seg.op !== "C") return Math.hypot(seg.x - from.x, seg.y - from.y);
+  const lengths = cubicLengths(from, { x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }, seg, 64);
+  return lengths[lengths.length - 1];
+}
+
 /**
- * The open path `M …` shortened by `startBy` px along its first piece and `endBy` px along its last (each at most that
- * piece's length: a cap longer than its piece trims the piece to a point, not into the next one).
+ * The open path `M …` shortened by `startBy` px along its length from the start and `endBy` px from the end. A trim
+ * longer than the end piece carries on into the pieces before it, so a cap always covers the last `inset` px of line
+ * however short the pieces are. When the two trims together are longer than the path, they are scaled down to meet at
+ * one point. A path that is not a single open subpath is returned as it is.
  */
 function trimPath(p: PathData, startBy: number, endBy: number): PathData {
-  if (p.length < 2 || p[0].op !== "M") return p;
-  const segs = p.slice();
-  const last = segs.length - 1;
-  const tail = segs[last];
-  const beforeTail = segs[last - 1];
-  if (endBy > 0 && (tail.op === "L" || tail.op === "C") && beforeTail.op !== "Z") segs[last] = trimPiece(beforeTail, tail, endBy, false).seg;
-  const head = segs[1];
-  if (startBy > 0 && (head.op === "L" || head.op === "C")) {
-    const { start, seg } = trimPiece(p[0], head, startBy, true);
-    segs[0] = { op: "M", x: start.x, y: start.y };
-    segs[1] = seg;
+  if (p.length < 2 || p[0].op !== "M" || p.slice(1).some((s) => s.op === "Z" || s.op === "M")) return p;
+  let start: Pt = p[0];
+  const pieces: Piece[] = [];
+  let at: Pt = start;
+  for (const seg of p.slice(1) as Piece["seg"][]) {
+    pieces.push({ from: at, seg });
+    at = seg;
   }
-  return segs;
+  const lengths = pieces.map(pieceLength);
+  const total = lengths.reduce((a, b) => a + b, 0);
+  if (startBy + endBy > total) {
+    const k = startBy + endBy > 0 ? total / (startBy + endBy) : 0;
+    startBy *= k;
+    endBy *= k;
+  }
+  // Whole pieces the trims swallow go first (keeping at least one piece), then the piece they end in is cut.
+  let rest = endBy;
+  while (pieces.length > 1 && rest > 0 && lengths[lengths.length - 1] <= rest) {
+    rest -= lengths.pop()!;
+    pieces.pop();
+  }
+  if (rest > 0) {
+    const last = pieces[pieces.length - 1];
+    pieces[pieces.length - 1] = { from: last.from, seg: trimPiece(last.from, last.seg, rest, false).seg as Piece["seg"] };
+  }
+  rest = startBy;
+  while (pieces.length > 1 && rest > 0 && pieceLength(pieces[0]) <= rest) {
+    rest -= pieceLength(pieces[0]);
+    pieces.shift();
+  }
+  start = pieces[0].from;
+  if (rest > 0) {
+    const cut = trimPiece(pieces[0].from, pieces[0].seg, rest, true);
+    start = cut.start;
+    pieces[0] = { from: cut.start, seg: cut.seg as Piece["seg"] };
+  }
+  return [{ op: "M", x: start.x, y: start.y }, ...pieces.map((pc) => pc.seg)];
 }
 
 /** A non-negative finite number, else `fallback`. */
 function size(v: number, fallback: number): number {
   return Number.isFinite(v) && v >= 0 ? v : fallback;
+}
+
+/** `r` grown by `by` on every side. */
+function grow(r: Rect, by: number): Rect {
+  return { x: r.x - by, y: r.y - by, width: r.width + 2 * by, height: r.height + 2 * by };
+}
+
+/** `r` with each dimension at least `min`, grown about its centre. */
+function atLeast(r: Rect, min: number): Rect {
+  const w = Math.max(r.width, min);
+  const h = Math.max(r.height, min);
+  return { x: r.x - (w - r.width) / 2, y: r.y - (h - r.height) / 2, width: w, height: h };
 }
 
 /**
@@ -161,6 +214,9 @@ function size(v: number, fallback: number): number {
  *   connector's current box when both ends are detached. The store's normaliser turns such an end into a free end at
  *   its last resolved point within the same commit; this fallback only keeps the geometry finite until it does.
  * - A route that is not registered draws a straight line; a cap kind that is not registered draws nothing.
+ * - Each cap's tip is on its end, and the line is shortened by the cap's inset along its length. The cap's axis runs from
+ *   where the shortened line now stops to the tip, so the line ends inside the cap even where the inset reaches round a
+ *   corner of the route; on a straight end piece that axis is the path's tangent.
  *
  * Every number is finite for any ends, including both ends on one item or at one point.
  */
@@ -186,22 +242,31 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
   const full = withoutEmptyPieces(routed);
 
   const widthPx = size(c.stroke.width, 0) * PT_TO_PX;
-  const capAt = (i: 0 | 1): { path: PathData | null; inset: number } => {
+  const capped = [0, 1].map((i) => {
     const kind = registries.caps.get(c.caps[i].kind);
-    if (!kind) return { path: null, inset: 0 };
+    if (!kind) return { shape: [] as PathData, inset: 0 };
     const capSize = size(c.caps[i].size, DEFAULT_CAP_SIZE);
-    const shape = kind.path(capSize, widthPx);
-    const inset = size(kind.inset(capSize, widthPx), 0);
-    if (shape.length === 0) return { path: null, inset };
-    // The cap points along +x from the origin; turn +x onto the tangent out of the path and move the origin to the end.
-    const { pt, tangent: t } = pointAtEnd(full, i);
-    return { path: transformPath(shape, [t.x, t.y, -t.y, t.x, pt.x, pt.y]), inset };
-  };
-  const startCap = capAt(0);
-  const endCap = capAt(1);
+    return { shape: kind.path(capSize, widthPx), inset: size(kind.inset(capSize, widthPx), 0) };
+  });
+  const path = trimPath(full, capped[0].inset, capped[1].inset);
 
-  const path = trimPath(full, startCap.inset, endCap.inset);
-  const caps: [PathData | null, PathData | null] = [startCap.path, endCap.path];
-  const bounds = unionRect([pathBounds(path), ...caps.filter((p): p is PathData => p !== null).map(pathBounds)]);
-  return { ends, path, caps, bounds, detached: [placed[0] === null, placed[1] === null] };
+  const capAt = (i: 0 | 1): PathData | null => {
+    const { shape } = capped[i];
+    if (shape.length === 0) return null;
+    const tip = pointAtEnd(full, i);
+    const stop = pointAtEnd(path, i).pt;
+    const dx = tip.pt.x - stop.x;
+    const dy = tip.pt.y - stop.y;
+    const len = Math.hypot(dx, dy);
+    const t = len > 1e-9 ? { x: dx / len, y: dy / len } : tip.tangent;
+    // The cap points along +x from the origin; turn +x onto its axis and move the origin to the tip.
+    return transformPath(shape, [t.x, t.y, -t.y, t.x, tip.pt.x, tip.pt.y]);
+  };
+  const caps: [PathData | null, PathData | null] = [capAt(0), capAt(1)];
+
+  // The drawn area: the line and caps, widened by half the line's width (a square line cap reaches √2 times that at a corner).
+  const reach = (widthPx / 2) * (c.stroke.cap === "square" ? Math.SQRT2 : 1);
+  const bounds = grow(unionRect([pathBounds(path), ...caps.filter((p): p is PathData => p !== null).map(pathBounds)]), reach);
+  const paintBox = atLeast(pathBounds(full), widthPx);
+  return { ends, path, caps, bounds, paintBox, detached: [placed[0] === null, placed[1] === null] };
 }

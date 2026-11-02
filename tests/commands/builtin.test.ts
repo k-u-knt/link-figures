@@ -1,11 +1,17 @@
 import { registerBuiltinCommands, restack, type EditorView } from "../../src/commands/builtin";
+import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
+import { resolveConnector } from "../../src/connectors/geometry";
 import { MIN_NODE_PX } from "../../src/constants";
-import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
+import { createFigureStore } from "../../src/model/normalise";
 import { DocumentStore } from "../../src/model/store";
-import type { Document, Node, NodeId } from "../../src/model/types";
-import { createRegistries } from "../../src/registry";
-import type { Command, CommandContext } from "../../src/registry/command";
+import type { ConnectorNode, Document, End, Node, NodeId, Page } from "../../src/model/types";
+import { connectorNodeType } from "../../src/nodes/connector-node";
+import { shapeNodeType } from "../../src/nodes/shape-node";
+import { createRegistries, type Registries } from "../../src/registry";
+import { CommandError, type Command, type CommandContext } from "../../src/registry/command";
+import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { pageInFocus } from "../../src/view/viewport";
 
 /** A view that records what the commands ask of it. */
@@ -26,7 +32,6 @@ class FakeView implements EditorView {
   fitPage(): void { this.calls.push("fit"); }
   zoomTo(z: number): void { this.calls.push(`zoom:${z}`); }
   requestExport(): void { this.calls.push("export"); }
-  deleteSelection(): boolean { this.calls.push("delete"); return true; }
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
   imageSize = (id: NodeId) => (this.sizes[id] ? Promise.resolve(this.sizes[id]) : Promise.reject(new Error("no image")));
   armedTool: Command | null = null;
@@ -38,19 +43,36 @@ class FakeView implements EditorView {
   limitMm = 2000;
   pageLimitMm(): number { return this.limitMm; }
   notePageLimit(limitMm: number): void { this.calls.push(`page-limit:${limitMm}`); }
-  commandContext(): CommandContext { return { app: {} as never, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
+  registries: Registries = createRegistries();
+  commandContext(): CommandContext { return { app: {} as never, registries: this.registries, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
+}
+
+/** Registries with the shape and connector node types, shape kinds, routes and caps, which connectors are resolved through. */
+function builtinRegistries(): Registries {
+  const registries = createRegistries();
+  registries.nodeTypes.register(shapeNodeType);
+  registries.nodeTypes.register(connectorNodeType);
+  for (const kind of builtinShapeKinds) registries.shapes.register(kind);
+  for (const route of builtinRoutes) registries.routes.register(route);
+  for (const cap of builtinCapKinds) registries.caps.register(cap);
+  return registries;
 }
 
 function setup(build: (doc: Document) => void = () => {}) {
   const doc = createDocument("a4-portrait");
   build(doc);
-  const view = new FakeView(new DocumentStore(doc));
-  const plugin = { registries: createRegistries(), commands: [] as any[], addCommand(c: any) { this.commands.push(c); return c; }, activeFigureView: () => view as FakeView | null };
+  const registries = builtinRegistries();
+  // The store a figure view has, with its normalisers.
+  const view = new FakeView(createFigureStore(doc, registries));
+  view.registries = registries;
+  const plugin = { registries, commands: [] as any[], addCommand(c: any) { this.commands.push(c); return c; }, activeFigureView: () => view as FakeView | null };
   registerBuiltinCommands(plugin as never);
   const command = (id: string): Command => plugin.registries.commands.get(id)!;
   const ctx = () => view.commandContext();
-  return { view, plugin, command, ctx, store: view.store };
+  /** What the API gives a command when the figure is not open. */
+  const headless = (): CommandContext => ({ app: {} as never, registries, view: null, store: view.store, selection: [], page: undefined });
+  return { view, plugin, command, ctx, headless, store: view.store };
 }
 
 const fileNode = (doc: Document, partial: Partial<Node> = {}): Node => {
@@ -143,11 +165,96 @@ test("delete applies only when the selection holds an unlocked node", () => {
   expect(command("delete").applies(ctx())).toBe(true);
 });
 
-test("delete is the view's own deletion", () => {
-  const { command, ctx, view } = setup((d) => { fileNode(d); });
-  view.selection = [view.store.doc.nodes[0].id];
-  command("delete").run(ctx());
-  expect(view.calls).toEqual(["delete"]);
+test("delete removes the selected nodes that are not locked, as one undo step, and returns their ids", () => {
+  const { command, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-free" }); fileNode(d, { id: "p-locked", locked: true }); fileNode(d, { id: "p-other" }); });
+  view.selection = ["p-free", "p-locked"];
+  expect(command("delete").run(ctx())).toEqual({ ids: ["p-free"] });
+  expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-locked", "p-other"]);
+  store.undo();
+  expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-free", "p-locked", "p-other"]);
+});
+
+describe("commands that act on nodes take ids", () => {
+  test("delete {ids} works without a view, and leaves the selection alone in one", () => {
+    const { command, headless, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-aaaa" }); fileNode(d, { id: "p-bbbb" }); });
+    expect(command("delete").run(headless(), { ids: ["p-bbbb"] })).toEqual({ ids: ["p-bbbb"] });
+    expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-aaaa"]);
+    view.selection = ["p-aaaa"];
+    command("delete").run(ctx(), { ids: [] });
+    expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-aaaa"]);
+  });
+
+  test("headless, a command that acts on nodes needs ids; a given id must be a node", () => {
+    const { command, headless, store } = setup((d) => { fileNode(d, { id: "p-aaaa" }); });
+    for (const id of ["delete", "duplicate", "bring-forward", "send-backward"]) {
+      expect(() => command(id).run(headless())).toThrow(new CommandError(`${id} needs "ids" when the figure is not open`));
+      expect(() => command(id).run(headless(), { ids: ["p-none"] })).toThrow(CommandError);
+    }
+    expect(store.doc.nodes.map((n) => n.id)).toEqual(["p-aaaa"]);
+  });
+
+  test("bring forward {ids} restacks the nodes named, not the selection", () => {
+    const { command, headless, store } = setup((d) => { fileNode(d, { id: "p-aaaa", z: 0 }); fileNode(d, { id: "p-bbbb", z: 1 }); });
+    command("bring-forward").run(headless(), { ids: ["p-aaaa"] });
+    expect(Object.fromEntries(store.doc.nodes.map((n) => [n.id, n.z]))).toEqual({ "p-aaaa": 1, "p-bbbb": 0 });
+  });
+
+  test("duplicate {ids} copies the nodes named and does not change the selection", () => {
+    const { command, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-aaaa" }); fileNode(d, { id: "p-bbbb" }); });
+    view.selection = ["p-aaaa"];
+    const result = command("duplicate").run(ctx(), { ids: ["p-bbbb"] }) as { ids: NodeId[] };
+    expect(result.ids).toHaveLength(1);
+    expect(store.doc.nodes.find((n) => n.id === result.ids[0])).toMatchObject({ type: "file" });
+    expect(view.selection).toEqual(["p-aaaa"]);
+  });
+});
+
+test("the commands that need a view are flagged, and the rest are not", () => {
+  const { plugin } = setup();
+  const needsView = plugin.registries.commands.all().filter((c) => c.needsView).map((c) => c.id).sort();
+  expect(needsView).toEqual(["export", "fit-page", "insert-text", "open-source", "reset-aspect", "zoom-100"]);
+});
+
+describe("duplicating connectors", () => {
+  const offset = mmToPx(5);
+  const round = (v: number) => Math.round(v * 100) / 100;
+  const connector = (page: Page, id: string, z: number, ends: [End, End]): ConnectorNode => ({
+    id, type: "connector", page: page.id, x: 0, y: 0, width: 0, height: 0, z, rotation: 0, opacity: 1, locked: false, ends,
+    route: "straight", routeParams: {}, stroke: { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" },
+    caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 3 }],
+  });
+  function build(d: Document) {
+    const page = d.pages[0];
+    d.nodes.push({ ...shapeNodeDefaults(page, { kind: "rect", params: {} }, []), id: "p-a", x: 0, y: 0, width: 100, height: 50, z: 0 } as Node);
+    d.nodes.push({ ...shapeNodeDefaults(page, { kind: "rect", params: {} }, []), id: "p-b", x: 300, y: 0, width: 100, height: 50, z: 1 } as Node);
+    d.nodes.push(connector(page, "p-line", 2, [{ kind: "attached", node: "p-a", snap: "anchor", anchor: "e" }, { kind: "attached", node: "p-b", snap: "anchor", anchor: "w" }]));
+    d.nodes.push(connector(page, "p-loose", 3, [{ kind: "free", x: 10, y: 200 }, { kind: "attached", node: "p-a", snap: "center" }]));
+  }
+
+  test("ends on items copied in the same call follow the copies; the rest become free where they are drawn, offset", () => {
+    const { command, headless, store, view } = setup(build);
+    const before = store.doc;
+    const lineEndB = resolveConnector(before, before.nodes.find((n) => n.id === "p-line") as ConnectorNode, view.registries).ends[1].pt;
+    const { ids } = command("duplicate").run(headless(), { ids: ["p-a", "p-line"] }) as { ids: NodeId[] };
+    const [copyA, copyLine] = ids.map((id) => store.doc.nodes.find((n) => n.id === id)!);
+    expect((copyLine as ConnectorNode).ends).toEqual([
+      { kind: "attached", node: copyA.id, snap: "anchor", anchor: "e" },
+      { kind: "free", x: round(lineEndB.x + offset), y: round(lineEndB.y + offset) },
+    ]);
+    // The originals are as they were.
+    expect(store.doc.nodes.find((n) => n.id === "p-line")).toEqual(before.nodes.find((n) => n.id === "p-line"));
+  });
+
+  test("a copied connector's free ends move with the copy, and its box follows its ends", () => {
+    const { command, headless, store, view } = setup(build);
+    const { ids } = command("duplicate").run(headless(), { ids: ["p-loose", "p-a"] }) as { ids: NodeId[] };
+    const copy = store.doc.nodes.find((n) => n.id === ids[1]) as ConnectorNode;
+    expect(copy.type).toBe("connector");
+    expect(copy.ends).toEqual([{ kind: "free", x: round(10 + offset), y: round(200 + offset) }, { kind: "attached", node: ids[0], snap: "center" }]);
+    expect(store.doc.nodes.find((n) => n.id === ids[0])).toMatchObject({ type: "shape", x: round(offset) });
+    const resolved = resolveConnector(store.doc, copy, view.registries);
+    expect({ x: copy.x, y: copy.y, width: copy.width, height: copy.height }).toEqual(resolved.bounds);
+  });
 });
 
 test("duplicate offsets copies by 5 mm, gives them new ids, puts them on top, and selects them", () => {

@@ -100,6 +100,14 @@ export class DocumentStore {
     return true;
   }
 
+  /**
+   * Ends the current run of merging commits: the next commit is an undo step of its own, whatever its label. For edits
+   * that are steps of their own however soon they follow each other (the API's calls).
+   */
+  endMerge(): void {
+    this.mergeTarget = null;
+  }
+
   canUndo(): boolean {
     return this.undoStack.length > 0;
   }
@@ -150,14 +158,19 @@ export class DocumentStore {
     for (const entry of this.redoStack) rebasePathsIn(entry, renames);
   }
 
+  /**
+   * Runs every normaliser on `draft`, as each commit does after its recipe. For a recipe that edits in several steps
+   * (a batch of commands in one commit), so that each step sees a consistent document.
+   */
+  normalise(draft: Document): void {
+    for (const fn of this.normalisers) fn(draft);
+  }
+
   subscribe(fn: (ev: ChangeEvent) => void): () => void {
     this.listeners.add(fn);
     return () => { this.listeners.delete(fn); };
   }
 
-  private normalise(draft: Document): void {
-    for (const fn of this.normalisers) fn(draft);
-  }
 
   private step(kind: "undo" | "redo", entry: HistoryEntry, patches: Patch[]): void {
     const before = this.current;

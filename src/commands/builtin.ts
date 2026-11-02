@@ -1,11 +1,13 @@
+import { resolveConnector } from "../connectors/geometry";
 import { MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
-import type { FileNode, Node, NodeId, Page, PageId } from "../model/types";
+import type { End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
-import type { Command, CommandContext, FigureViewLike } from "../registry/command";
+import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
+import type { ParamSpec } from "../registry/params";
 import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
 
@@ -17,8 +19,6 @@ const DUPLICATE_OFFSET_MM = 5;
  * command is given (`CommandContext.view`) is always that one, and `LinkFiguresView` implements this to keep it so.
  */
 export interface EditorView extends FigureViewLike {
-  /** What the Delete key does: removes the selected nodes that are not locked, and lets go of their links. Whether any went. */
-  deleteSelection(): boolean;
   /** Opens a link target (`file`, `file#subpath`) from the figure's own place in the vault, as the badge on a node does. */
   openLink(linktext: string, newLeaf?: boolean): void;
   /** The natural size of the image a node shows, once it has loaded; rejects for a node that shows no image. */
@@ -31,7 +31,46 @@ export interface EditorView extends FigureViewLike {
   notePageLimit(limitMm: number): void;
 }
 
-const editor = (ctx: CommandContext): EditorView => ctx.view as EditorView;
+/** The view a `needsView` command acts on; the API refuses such a command headless, so this only guards against a slip. */
+function editor(ctx: CommandContext): EditorView {
+  if (!ctx.view) throw new CommandError("this command needs the figure to be open");
+  return ctx.view as EditorView;
+}
+
+/** The arguments of a command that acts on nodes: `ids` names them, in place of the selection. */
+type NodesArgs = { ids?: unknown[] };
+
+/** The parameters of a command that acts on nodes. */
+const NODES_PARAMS: ParamSpec = { ids: { type: "array" } };
+
+/**
+ * The nodes a command acts on: `args.ids` when the call names them, else the selection. Headless there is no selection,
+ * so the ids must be given. A given id that is not a node of the figure is an error, so a script learns of its slip.
+ */
+function targetIds(ctx: CommandContext, command: string, args: NodesArgs | undefined): NodeId[] {
+  const ids = args?.ids;
+  if (ids === undefined) {
+    if (!ctx.view) throw new CommandError(`${command} needs "ids" when the figure is not open`);
+    return ctx.selection;
+  }
+  const present = new Set(ctx.store.doc.nodes.map((n) => n.id));
+  for (const id of ids) {
+    if (typeof id !== "string") throw new CommandError(`parameter "ids" must hold node ids (strings)`);
+    if (!present.has(id)) throw new CommandError(`${command}: there is no node "${id}"`);
+  }
+  return ids as NodeId[];
+}
+
+/** The page a page-level command acts on: the one `args.page` names, else the view's focus page; undefined when neither is. */
+function targetPage(ctx: CommandContext, command: string, args: { page?: unknown } | undefined): Page | undefined {
+  if (args?.page === undefined) return ctx.page;
+  const page = ctx.store.doc.pages.find((p) => p.id === args.page);
+  if (!page) throw new CommandError(`${command}: there is no page "${String(args.page)}"`);
+  return page;
+}
+
+/** The parameters of a page-level command. */
+const PAGE_PARAMS: ParamSpec = { page: { type: "string" } };
 
 /**
  * The new `z` of the nodes that move one place up (`forward`) or down (`backward`) the stack of one page: each
@@ -68,16 +107,17 @@ export function restack(
   return changes;
 }
 
-function stackCommand(id: string, name: string, icon: string, direction: "forward" | "backward"): Command {
+function stackCommand(id: string, name: string, icon: string, direction: "forward" | "backward"): Command<NodesArgs> {
   return {
     id,
     name,
     icon,
     group: "arrange",
+    params: NODES_PARAMS,
     applies: (ctx) => ctx.selection.length > 0,
-    run(ctx) {
+    run(ctx, args) {
       const { pages, nodes } = ctx.store.doc;
-      const selected = new Set(ctx.selection);
+      const selected = new Set(targetIds(ctx, id, args));
       const changes = new Map<NodeId, number>();
       for (const page of pages) {
         for (const [nodeId, z] of restack(nodes.filter((n) => n.page === page.id), selected, direction)) changes.set(nodeId, z);
@@ -117,12 +157,19 @@ function pageLike(current: Page | undefined, existingIds: string[], limitMm: num
   return { page, clamped };
 }
 
-function duplicate(ctx: CommandContext): void {
-  const { nodes } = ctx.store.doc;
-  const selected = new Set(ctx.selection);
+/**
+ * Copies the nodes (`args.ids`, else the selection) a little down and to the right, above everything on their pages;
+ * from the selection, the copies become the selection. A copied connector's end that is attached to a node copied in
+ * the same call is attached to that node's copy; one attached to a node that is not copied becomes a free end where it
+ * is drawn now, moved by the same offset as the copies.
+ */
+function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
+  const doc = ctx.store.doc;
+  const { nodes } = doc;
+  const selected = new Set(targetIds(ctx, "duplicate", args));
   // In stacking order, so the copies keep their order among themselves.
   const originals = nodes.filter((n) => selected.has(n.id)).sort((a, b) => a.z - b.z);
-  if (originals.length === 0) return;
+  if (originals.length === 0) return { ids: [] };
 
   const taken = new Set(nodes.map((n) => n.id));
   const tops = new Map<PageId, number>();
@@ -136,25 +183,63 @@ function duplicate(ctx: CommandContext): void {
     tops.set(original.page, z);
     return { ...structuredClone(original), id, x: roundPx(original.x + offset), y: roundPx(original.y + offset), z };
   });
+  const copyOf = new Map(originals.map((original, i) => [original.id, copies[i].id]));
+  copies.forEach((copy, i) => {
+    const original = originals[i];
+    if (copy.type !== "connector" || original.type !== "connector") return;
+    const resolved = resolveConnector(doc, original, ctx.registries);
+    copy.ends = copy.ends.map((end, which): End => {
+      if (end.kind === "free") return { kind: "free", x: roundPx(end.x + offset), y: roundPx(end.y + offset) };
+      const target = copyOf.get(end.node);
+      if (target !== undefined) return { ...end, node: target };
+      const { pt } = resolved.ends[which];
+      return { kind: "free", x: roundPx(pt.x + offset), y: roundPx(pt.y + offset) };
+    }) as [End, End];
+  });
   ctx.store.commit("duplicate", (draft) => {
     draft.nodes.push(...copies);
   });
-  ctx.view.setSelection(copies.map((c) => c.id));
+  const ids = copies.map((c) => c.id);
+  if (ctx.view && args?.ids === undefined) ctx.view.setSelection(ids);
+  return { ids };
 }
 
-function addPage(ctx: CommandContext): void {
+/** Removes the nodes (`args.ids`, else the selection) that are not locked; a locked node stays, as with the Delete key. */
+function deleteNodes(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
+  const named = new Set(targetIds(ctx, "delete", args));
+  const ids = ctx.store.doc.nodes.filter((n) => named.has(n.id) && !n.locked).map((n) => n.id);
+  if (ids.length === 0) return { ids };
+  const gone = new Set(ids);
+  // The node host lets go of the removed nodes' links.
+  ctx.store.commit("delete", (draft) => {
+    draft.nodes = draft.nodes.filter((node) => !gone.has(node.id));
+  });
+  return { ids };
+}
+
+/**
+ * Adds a page like `args.page` (else the focus page) after it; headless with no page named, like the last page, at the
+ * end. In a view a size over the Maximum page size setting is cut down to it; headless the page copied is one the figure
+ * already has, so it is not cut.
+ */
+function addPage(ctx: CommandContext, args?: { page?: unknown }): { id: PageId } {
   const { pages } = ctx.store.doc;
-  const limit = editor(ctx).pageLimitMm();
-  const { page, clamped } = pageLike(ctx.page, pages.map((p) => p.id), limit);
-  const at = pages.findIndex((p) => p.id === ctx.page?.id);
+  const after = targetPage(ctx, "add-page", args) ?? pages[pages.length - 1];
+  const limit = ctx.view ? editor(ctx).pageLimitMm() : Infinity;
+  const { page, clamped } = pageLike(after, pages.map((p) => p.id), limit);
+  const at = pages.findIndex((p) => p.id === after?.id);
   ctx.store.commit("add-page", (draft) => {
     draft.pages.splice(at === -1 ? draft.pages.length : at + 1, 0, page);
   });
   if (clamped) editor(ctx).notePageLimit(limit);
+  return { id: page.id };
 }
 
-function deletePage(ctx: CommandContext): void {
-  const id = ctx.page?.id;
+/** Removes a page (`args.page`, else the focus page) and everything on it; never the last page. Headless the page must be named. */
+function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
+  const page = targetPage(ctx, "delete-page", args);
+  if (!page && !ctx.view) throw new CommandError(`delete-page needs "page" when the figure is not open`);
+  const id = page?.id;
   if (id === undefined || ctx.store.doc.pages.length < 2) return;
   // One commit, so one undo brings the page back with everything on it. The node host lets go of the removed nodes' links.
   ctx.store.commit("delete-page", (draft) => {
@@ -165,6 +250,7 @@ function deletePage(ctx: CommandContext): void {
 
 /** A new text node with its top-left at `at`, above everything on that page, selected and being edited. */
 function placeText(ctx: CommandContext, at: PlacePoint): void {
+  const view = editor(ctx);
   const { page } = at;
   const { nodes } = ctx.store.doc;
   const node = textNodeDefaults(page, {}, nodes.map((n) => n.id));
@@ -175,9 +261,9 @@ function placeText(ctx: CommandContext, at: PlacePoint): void {
   ctx.store.commit("insert-text", (draft) => {
     draft.nodes.push(node);
   });
-  ctx.view.setSelection([node.id]);
+  view.setSelection([node.id]);
   // The node host drew the label as the commit was made, so it is there to be told; typing replaces "Text".
-  editor(ctx).activateNode(node.id);
+  view.activateNode(node.id);
 }
 
 /** The one file node with a link that is selected, if that is what is selected. */
@@ -225,7 +311,10 @@ async function resetAspect(ctx: CommandContext): Promise<void> {
   });
 }
 
-/** Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). */
+/**
+ * Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). Those
+ * that act on the selection, the zoom, a tool or a dialog are `needsView`; the rest can run headless through the API.
+ */
 function builtinCommands(): Command[] {
   // A tool: the toolbar button and the palette entry arm it, and the next press on a page places a label there.
   const text: Command = {
@@ -234,8 +323,9 @@ function builtinCommands(): Command[] {
     icon: "type",
     group: "insert",
     cursor: "text",
+    needsView: true,
     applies: (ctx) => !!ctx.page,
-    run: (ctx) => ctx.view.armTool(text),
+    run: (ctx) => editor(ctx).armTool(text),
     place: placeText,
   };
   return [
@@ -246,10 +336,11 @@ function builtinCommands(): Command[] {
       name: "Delete",
       icon: "trash",
       group: "edit",
+      params: NODES_PARAMS,
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !n.locked),
-      run: (ctx) => void editor(ctx).deleteSelection(),
+      run: deleteNodes,
     },
-    { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", applies: (ctx) => ctx.selection.length > 0, run: duplicate },
+    { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", params: NODES_PARAMS, applies: (ctx) => ctx.selection.length > 0, run: duplicate },
     text,
     stackCommand("bring-forward", "Bring forward", "arrow-up", "forward"),
     stackCommand("send-backward", "Send backward", "arrow-down", "backward"),
@@ -258,19 +349,29 @@ function builtinCommands(): Command[] {
       name: "Reset aspect ratio",
       icon: "ratio",
       group: "arrange",
+      needsView: true,
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(n)),
       run: resetAspect,
     },
-    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", applies: () => true, run: addPage },
-    { id: "delete-page", name: "Delete page", icon: "file-minus", group: "page", applies: (ctx) => ctx.store.doc.pages.length > 1, run: deletePage },
-    { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", applies: () => true, run: (ctx) => ctx.view.fitPage() },
-    { id: "zoom-100", name: "Zoom to 100%", icon: "search", group: "view", applies: () => true, run: (ctx) => ctx.view.zoomTo(1) },
-    { id: "export", name: "Export", icon: "download", group: "export", applies: () => true, run: (ctx) => ctx.view.requestExport() },
+    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", params: PAGE_PARAMS, applies: () => true, run: addPage },
+    {
+      id: "delete-page",
+      name: "Delete page",
+      icon: "file-minus",
+      group: "page",
+      params: PAGE_PARAMS,
+      applies: (ctx) => ctx.store.doc.pages.length > 1,
+      run: deletePage,
+    },
+    { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).fitPage() },
+    { id: "zoom-100", name: "Zoom to 100%", icon: "search", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).zoomTo(1) },
+    { id: "export", name: "Export", icon: "download", group: "export", needsView: true, applies: () => true, run: (ctx) => editor(ctx).requestExport() },
     {
       id: "open-source",
       name: "Open source",
       icon: "link",
       group: "edit",
+      needsView: true,
       applies: (ctx) => linkedFileNode(ctx) !== undefined,
       run(ctx) {
         const node = linkedFileNode(ctx);

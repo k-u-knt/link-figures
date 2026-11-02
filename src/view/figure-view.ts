@@ -15,7 +15,7 @@ import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
 import { createDocument } from "../model/defaults";
 import type { PlacePoint, Pt, Rect } from "../model/geometry";
-import { connectorNormaliser } from "../model/normalise";
+import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { Command, CommandContext } from "../registry/command";
@@ -342,8 +342,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return pageInFocus(this.store.doc, this.selection.ids, nearest) ?? nearest;
   }
 
+  /** Whether a figure is loaded (not the blank stand-in, nor a file that could not be read): what the API may act on. */
+  hasDocument(): boolean {
+    return this.loaded;
+  }
+
   commandContext(): CommandContext {
-    return { app: this.app, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() };
+    return { app: this.app, registries: this.plugin.registries, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() };
   }
 
   /** Runs `command` on the current context, if it applies; a failure is shown to the user rather than lost. */
@@ -378,7 +383,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   /** Does what `command` does; a failure, thrown or rejected, is shown to the user rather than lost. */
-  private attempt(command: Command, action: () => void | Promise<void>): void {
+  private attempt(command: Command, action: () => unknown): void {
     const fail = (error: unknown): void => {
       console.error(`Link Figures: "${command.name}" failed`, error);
       new Notice(`Link Figures: "${command.name}" failed. ${error instanceof Error ? error.message : String(error)}`);
@@ -578,9 +583,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.unsubscribe?.();
     if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;
-    const store = new DocumentStore(doc, () => this.pointer.commitTime());
-    // Every connector is kept in step with its items in each commit, and the document is brought in line now.
-    store.addNormaliser(connectorNormaliser(this.plugin.registries));
+    const store = createFigureStore(doc, this.plugin.registries, () => this.pointer.commitTime());
     this.store = store;
     // Nothing selected, in progress or drawn belongs to the document that was just replaced.
     this.selection.clear();

@@ -1,4 +1,5 @@
-import { MarkdownView, Notice, Plugin, type TFile, type WorkspaceLeaf } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
+import { createApi, type LinkFiguresApi } from "./api";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
@@ -14,6 +15,7 @@ import { shapeNodeType } from "./nodes/shape-node";
 import { textNodeType } from "./nodes/text-node";
 import { builtinPaintTypes } from "./paint/builtin";
 import { createRegistries, type Registries } from "./registry";
+import { CommandError } from "./registry/command";
 import { builtinShapeKinds } from "./shapes/builtin";
 import { DEFAULT_SETTINGS, LinkFiguresSettingTab, type LinkFiguresSettings } from "./settings/settings";
 import { LinkFiguresView } from "./view/figure-view";
@@ -30,6 +32,19 @@ export default class LinkFiguresPlugin extends Plugin {
   forcedMarkdown = new Set<string>();
   access = new ObsidianVaultAccess(this.app);
   decoders: Decoders = createDecoders(this.registries.adjustments);
+  /** The API for other plugins and scripts (the Obsidian CLI's `eval`): see `LinkFiguresApi`. */
+  api: LinkFiguresApi = createApi({
+    app: this.app,
+    registries: this.registries,
+    files: {
+      read: (path) => this.app.vault.read(this.vaultFile(path)),
+      write: (path, text) => this.app.vault.modify(this.vaultFile(path), text),
+    },
+    openFigure: (path) => this.openFigureView(path),
+  });
+  /** When each figure view was last made active, by a counter: the API acts on the most recent view of a figure. */
+  private readonly viewActivity = new WeakMap<LinkFiguresView, number>();
+  private activityCount = 0;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -47,6 +62,11 @@ export default class LinkFiguresPlugin extends Plugin {
     registerBuiltinCommands(this);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf?.view instanceof LinkFiguresView) this.viewActivity.set(leaf.view, ++this.activityCount);
+      }),
+    );
     // The fallback for an open that did not go through `setViewState` with a figure path; the wrapper below does the work.
     installOpenHook(this);
     this.register(installViewStateRewrite(this));
@@ -86,6 +106,25 @@ export default class LinkFiguresPlugin extends Plugin {
   /** The figure view that has the focus, for the palette commands. */
   activeFigureView(): LinkFiguresView | null {
     return this.app.workspace.getActiveViewOfType(LinkFiguresView);
+  }
+
+  /** The most recently active figure view that has the figure at `path` loaded, or null. */
+  private openFigureView(path: string): LinkFiguresView | null {
+    const target = normalizePath(path);
+    let best: LinkFiguresView | null = null;
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      const view = leaf.view;
+      if (!(view instanceof LinkFiguresView) || view.file?.path !== target || !view.hasDocument()) continue;
+      if (!best || (this.viewActivity.get(view) ?? 0) > (this.viewActivity.get(best) ?? 0)) best = view;
+    }
+    return best;
+  }
+
+  /** The file at vault path `path`; a `CommandError` when there is none. */
+  private vaultFile(path: string): TFile {
+    const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+    if (!(file instanceof TFile)) throw new CommandError(`there is no file "${path}"`);
+    return file;
   }
 
   async loadSettings(): Promise<void> {

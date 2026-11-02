@@ -3,6 +3,7 @@ import { resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
 import { attachTarget } from "./attach";
 import type { Pt } from "./geometry";
+import { DocumentStore } from "./store";
 import type { ConnectorNode, Document, End } from "./types";
 
 /**
@@ -12,6 +13,17 @@ import type { ConnectorNode, Document, End } from "./types";
  * consistent, so a commit it has nothing to say about stays as small as the recipe made it.
  */
 export type Normaliser = (draft: Document) => void;
+
+/**
+ * A store for a figure with every normaliser a figure has: the one way a store for a figure is made, by the view and by
+ * the API's headless calls alike, so the two cannot keep a document differently. `now` is the store's clock.
+ */
+export function createFigureStore(doc: Document, registries: Registries, now?: () => number): DocumentStore {
+  const store = new DocumentStore(doc, now);
+  // Every connector is kept in step with its items in each commit, and the document is brought in line now.
+  store.addNormaliser(connectorNormaliser(registries));
+  return store;
+}
 
 const isConnector = (n: { type: string }): n is ConnectorNode => n.type === "connector";
 

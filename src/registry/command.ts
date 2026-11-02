@@ -2,6 +2,19 @@ import type { App, Hotkey } from "obsidian";
 import type { PlacePoint } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { NodeId, Page } from "../model/types";
+import type { Registries } from "./index";
+import type { ParamSpec } from "./params";
+
+/**
+ * A command's failure that is the caller's to fix (a bad argument, an unknown node, a command that needs the figure
+ * open): its message is meant to be read by whoever made the call, a person or a script.
+ */
+export class CommandError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandError";
+  }
+}
 
 /** The slice of the figure view that commands may use; keeps commands testable without a real view. */
 export interface FigureViewLike {
@@ -19,12 +32,22 @@ export interface FigureViewLike {
   disarmTool(): void;
 }
 
+/**
+ * What commands edit the document through: the figure's store, or within a batch a stand-in that applies each commit
+ * to the batch's one draft (see `commands/headless`).
+ */
+export type CommandStore = Pick<DocumentStore, "doc" | "commit" | "undo" | "redo" | "canUndo" | "canRedo">;
+
 export interface CommandContext {
   app: App;
-  view: FigureViewLike;
-  store: DocumentStore;
+  registries: Registries;
+  /** The figure's view, or null when the command runs headless (through the API, with the figure not open). */
+  view: FigureViewLike | null;
+  store: CommandStore;
+  /** The view's selection; empty when headless. */
   selection: NodeId[];
-  page: Page;
+  /** The page that page-level commands act on: the view's focus page, or undefined when headless. */
+  page: Page | undefined;
 }
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";
@@ -32,14 +55,23 @@ export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute
 /** Display order of groups in the toolbar, context menu and palette. */
 export const GROUP_ORDER: CommandGroup[] = ["edit", "insert", "arrange", "align", "distribute", "style", "page", "view", "export"];
 
-export interface Command {
+/**
+ * One thing a person can do to a figure, which a toolbar button, the palette, a tool, or a script through the plugin
+ * API all run the same way. `A` is the JSON arguments (`params` describes them) and `R` the JSON result.
+ */
+export interface Command<A = unknown, R = unknown> {
   id: string;
   name: string;
   icon?: string;
   group: CommandGroup;
   hotkeys?: Hotkey[];
+  /** The arguments the command takes; calls are checked against it before `run`. None means it takes none. */
+  params?: ParamSpec;
+  /** True for a command that acts on what only an open view has (the selection, the zoom, a tool, a dialog); the API refuses it headless. */
+  needsView?: boolean;
   applies(ctx: CommandContext): boolean;
-  run(ctx: CommandContext): void | Promise<void>;
+  /** `args` are the validated arguments (with defaults filled in) when the command has `params`; a UI call gives none. */
+  run(ctx: CommandContext, args?: A): R | void | Promise<R | void>;
   /**
    * Makes the command a tool: its `run` arms it (`ctx.view.armTool`), and the next press on a page calls this with
    * the point pressed, once, and disarms it. Escape, or a press off every page, disarms it without placing anything.

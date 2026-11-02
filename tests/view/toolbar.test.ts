@@ -104,3 +104,21 @@ test("the armed tool's button is active", () => {
   toolbar.render();
   expect(text.hasClass("is-active")).toBe(false);
 });
+
+test("a command that shows the view's state has its button's name, icon and pressed look follow it", () => {
+  let mode = "anchor";
+  const toggle: Command = { ...cmd("snap", "insert"), state: () => (mode === "center" ? { name: "Snap: centre", icon: "locate-fixed", active: true } : { name: "Snap: anchor", icon: "anchor" }) };
+  const { el, toolbar } = setup([toggle]);
+  const [button] = el.children;
+  expect(button.attrs["aria-label"]).toBe("Snap: anchor");
+  expect(icons.map(([, name]) => name)).toEqual(["icon-snap", "anchor"]);
+  expect(button.hasClass("is-active")).toBe(false);
+  mode = "center";
+  toolbar.render();
+  expect(button.attrs["aria-label"]).toBe("Snap: centre");
+  expect(icons.map(([, name]) => name)).toEqual(["icon-snap", "anchor", "locate-fixed"]);
+  expect(button.hasClass("is-active")).toBe(true);
+  // Drawn again in the same state, the icon is not set again.
+  toolbar.render();
+  expect(icons).toHaveLength(3);
+});

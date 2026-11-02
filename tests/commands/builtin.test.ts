@@ -38,6 +38,9 @@ class FakeView implements EditorView {
   /** What the real view does: arming the armed tool again disarms it. */
   armTool(command: Command): void { this.armedTool = this.armedTool?.id === command.id ? null : command; }
   disarmTool(): void { this.armedTool = null; }
+  options = new Map<string, unknown>();
+  viewOption(key: string): unknown { return this.options.get(key); }
+  setViewOption(key: string, value: unknown): void { this.options.set(key, value); }
   activateNode(id: NodeId): void { this.calls.push(`activate:${id}`); }
   /** The Maximum page size setting. */
   limitMm = 2000;

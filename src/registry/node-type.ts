@@ -1,7 +1,8 @@
 import type { App, Component } from "obsidian";
 import type { AssetMap } from "../export/asset-types";
 import type { Attachable } from "../model/attach";
-import type { Rect } from "../model/geometry";
+import type { Pt, Rect } from "../model/geometry";
+import type { PathData } from "../model/path";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
@@ -50,6 +51,33 @@ export interface UpdateContext {
   registries: Registries;
 }
 
+/** What a node type's pointer hooks (`hitTest`, `handles`, `dragHandle`) may depend on besides the node. */
+export interface InteractionContext {
+  registries: Registries;
+  /** The document as it is now: what a node drawn from other nodes reads them from. */
+  doc: Document;
+  /** A setting of the open view, such as the snap mode new connector ends take (see `FigureViewLike.viewOption`). */
+  viewOption(key: string): unknown;
+}
+
+/** A point of a selected node that can be dragged to change it, in page px; `id` is the node type's own. */
+export interface NodeHandle {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * What dragging a node's handle to a point does: `call`, the command the release runs (with its JSON arguments), and
+ * what is drawn while the drag is under way: `preview`, the outline the node would have (page px), and `marks`, points
+ * worth showing (the anchors of the item the end would attach to).
+ */
+export interface HandleDrag {
+  call: { id: string; args: Record<string, unknown> };
+  preview?: PathData;
+  marks?: Pt[];
+}
+
 export interface NodeType<N extends Node = Node> {
   type: N["type"];
   name: string;
@@ -86,6 +114,27 @@ export interface NodeType<N extends Node = Node> {
    * is fine, as the file format keeps unknown keys.
    */
   checkField?(key: string, value: unknown, ctx: UpdateContext): string | null;
+  /**
+   * Whether `pt` (page px) is on the node, for a type that is not hit across its whole box (a line is hit near its path).
+   * `tolerance` is how far off it may be, in page px (a few screen px at the current zoom). Without it, the node's box is
+   * what is hit.
+   */
+  hitTest?(node: N, pt: Pt, tolerance: number, ctx: InteractionContext): boolean;
+  /**
+   * The handles a selected node shows in place of the eight resize handles of its box (a connector's ends and its route's
+   * handles). Without it, the box's resize handles are shown.
+   */
+  handles?(node: N, ctx: InteractionContext): NodeHandle[];
+  /**
+   * What dragging the handle `handle` (an id from `handles`) to `to` (page px, on the node's page) does; `under` are the
+   * other items there, topmost first. Null when the drag does nothing.
+   */
+  dragHandle?(node: N, handle: string, to: Pt, under: readonly NodeId[], ctx: InteractionContext): HandleDrag | null;
+  /**
+   * The node moved by (`dx`, `dy`) page px, as a drag of the selection moves it. Without it the box moves; a connector
+   * moves only its free ends (its attached ends stay with their items). Returns `node` itself when nothing changes.
+   */
+  translate?(node: N, dx: number, dy: number): N;
 }
 
 export class NodeTypeRegistry {

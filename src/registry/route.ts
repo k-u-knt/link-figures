@@ -69,6 +69,19 @@ export interface Route {
   fields(params: Record<string, unknown>): Field[];
   /** The open path from `a` to `b`, starting with a move to `a.pt` and ending on `b.pt`, honouring each end's `lead`. */
   path(a: EndPoint, b: EndPoint, params: Record<string, unknown>): PathData;
+  /**
+   * The points on the route a person can drag to change its params (a curve's bend, an elbow's middle segment), in page
+   * px, each with an id of the route's own. None when not given.
+   */
+  handles?(a: EndPoint, b: EndPoint, params: Record<string, unknown>): RouteHandle[];
+  /** The `routeParams` that the handle `id` dragged to `to` (page px) gives, merged over the connector's own. */
+  dragHandle?(id: string, to: Pt, a: EndPoint, b: EndPoint, params: Record<string, unknown>): Record<string, unknown>;
+}
+
+/** A point on a drawn route that can be dragged: see `Route.handles`. */
+export interface RouteHandle {
+  id: string;
+  pt: Pt;
 }
 
 export class RouteRegistry {

@@ -1,5 +1,6 @@
 import type { App, Hotkey } from "obsidian";
-import type { PlacePoint } from "../model/geometry";
+import type { PlacePoint, Pt } from "../model/geometry";
+import type { PathData } from "../model/path";
 import type { DocumentStore } from "../model/store";
 import type { NodeId, Page } from "../model/types";
 import type { Registries } from "./index";
@@ -36,6 +37,36 @@ export interface FigureViewLike {
    * so a tool and a script make the same document.
    */
   runCommandById(id: string, args?: Record<string, unknown>): void;
+  /** A setting of this view that is not part of the figure (a tool's mode), or undefined when it has not been set. */
+  viewOption(key: string): unknown;
+  /** Sets a view setting (see `viewOption`); the toolbar is drawn again, so a button showing it shows the new value. */
+  setViewOption(key: string, value: unknown): void;
+}
+
+/**
+ * The items under the two points of a tool's drag, each list topmost first: under the press (`from`) and under the
+ * release (`to`). Only items on the press page count; the tool decides what, if anything, it does with them.
+ */
+export interface DragTargets {
+  from: NodeId[];
+  to: NodeId[];
+}
+
+/**
+ * What an armed tool draws over the page under the pointer, in that page's px: `path`, the outline of what a drag
+ * would make (a connector's line), and `marks`, points worth showing (the anchors of the item under the pointer).
+ */
+export interface ToolPreview {
+  path?: PathData;
+  marks?: Pt[];
+}
+
+/** How a command's toolbar button shows the view's current state; each part left out stays as the command has it. */
+export interface CommandState {
+  name?: string;
+  icon?: string;
+  /** Shown pressed. */
+  active?: boolean;
 }
 
 /**
@@ -96,10 +127,18 @@ export interface Command<A = unknown, R = unknown> {
   /**
    * Makes the command a tool that is dragged out, as `place` makes one that is pressed: the press and the release on a
    * page call this once, with the two points on the press page (a release beyond it, over another page or none, is
-   * clamped to it) and whether Shift was held at the release, and disarm it. A click that does not travel (3 screen px
-   * or less) gives `to` equal to `from`.
+   * clamped to it), whether Shift was held at the release, and the items under the press and the release (`targets`),
+   * and disarm it. A click that does not travel (3 screen px or less) gives `to` equal to `from`.
    */
-  placeDrag?(ctx: CommandContext, from: PlacePoint, to: PlacePoint, mods: { shift: boolean }): void;
+  placeDrag?(ctx: CommandContext, from: PlacePoint, to: PlacePoint, mods: { shift: boolean }, targets: DragTargets): void;
+  /**
+   * What a `placeDrag` tool shows while it is armed: with `from` null, for the pointer hovering at `to`; during a drag,
+   * for the drag from `from` to `to` (as `placeDrag` would be given them). Null, or a tool without it, shows the dragged
+   * box as the drag's preview and nothing while hovering.
+   */
+  preview?(ctx: CommandContext, from: PlacePoint | null, to: PlacePoint, targets: DragTargets): ToolPreview | null;
+  /** How the command's toolbar button shows the view's state now (a toggle's mode); without it the button is as the command is. */
+  state?(ctx: CommandContext): CommandState;
   /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */
   cursor?: string;
 }

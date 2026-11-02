@@ -1,12 +1,25 @@
+import { PT_TO_PX } from "../constants";
 import { resolveConnector } from "../connectors/geometry";
-import type { Rect } from "../model/geometry";
+import { endAt, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
+import { rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
-import { toSvgPath } from "../model/path";
-import type { ConnectorNode, Document, NodeId } from "../model/types";
+import { distanceToPath, toSvgPath, type PathData } from "../model/path";
+import type { ConnectorNode, Document, End, NodeId } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext, UpdateContext } from "../registry/node-type";
+import type {
+  HandleDrag,
+  InspectorContext,
+  InteractionContext,
+  NodeHandle,
+  NodeRenderer,
+  NodeType,
+  RenderContext,
+  SvgContext,
+  UpdateContext,
+} from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
 import { fieldError, isCap, isEnd, type ParamSpec } from "../registry/params";
+import { roundPx } from "../view/pointer-math";
 
 /**
  * What drawing a connector needs: the registries (its route, caps and paint) and the SVG it goes into. Warnings are said
@@ -128,6 +141,25 @@ const CONNECTOR_FIELDS: ParamSpec = { route: { type: "string" }, routeParams: { 
 
 const pairOf = (value: unknown, test: (v: unknown) => boolean): boolean => Array.isArray(value) && value.length === 2 && value.every(test);
 
+/** The ids of a connector's two end handles, start then end. A route's own handles are `route.` and the route's id for them. */
+const END_HANDLES = ["start", "end"] as const;
+const ROUTE_HANDLE = "route.";
+
+/** The connector with end `which` replaced by `end`. */
+function withEnd(node: ConnectorNode, which: 0 | 1, end: End): ConnectorNode {
+  return { ...node, ends: which === 0 ? [end, node.ends[1]] : [node.ends[0], end] };
+}
+
+/** The line `node` would draw in `ctx`'s document: what a handle drag shows while it is under way. */
+function previewOf(node: ConnectorNode, ctx: InteractionContext): PathData {
+  return resolveConnector(ctx.doc, node, ctx.registries).path;
+}
+
+/** A free end moved by (dx, dy); an attached end stays with its item. */
+function moveEnd(end: End, dx: number, dy: number): End {
+  return end.kind === "free" ? { kind: "free", x: roundPx(end.x + dx), y: roundPx(end.y + dy) } : end;
+}
+
 export const connectorNodeType: NodeType<ConnectorNode> = {
   type: "connector",
   name: "Connector",
@@ -178,6 +210,59 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     if (key === "ends") return pairOf(value, isEnd) ? null : '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
     if (key === "caps") return pairOf(value, isCap) ? null : '"caps" must be two caps ({kind, size})';
     return fieldError(CONNECTOR_FIELDS, key, value);
+  },
+
+  /** Within `tolerance` of the line (or a cap's outline), widened by half the line's width. */
+  hitTest(node: ConnectorNode, pt: Pt, tolerance: number, ctx: InteractionContext): boolean {
+    const reach = tolerance + (Math.max(node.stroke.width, 0) * PT_TO_PX) / 2;
+    const resolved = resolveConnector(ctx.doc, node, ctx.registries);
+    const b = resolved.bounds;
+    if (!rectContainsPt({ x: b.x - reach, y: b.y - reach, width: b.width + 2 * reach, height: b.height + 2 * reach }, pt)) return false;
+    const parts = [resolved.path, ...resolved.caps.filter((c): c is PathData => c !== null)];
+    return parts.some((p) => distanceToPath(p, pt) <= reach);
+  },
+
+  /** A handle on each end where it is drawn (on an item's edge for a centre-snapped end), then the route's own handles. */
+  handles(node: ConnectorNode, ctx: InteractionContext): NodeHandle[] {
+    const { ends } = resolveConnector(ctx.doc, node, ctx.registries);
+    const route = ctx.registries.routes.get(node.route);
+    const own = route?.handles?.(ends[0], ends[1], node.routeParams) ?? [];
+    return [
+      ...ends.map((e, i) => ({ id: END_HANDLES[i], x: e.pt.x, y: e.pt.y })),
+      ...own.map((h) => ({ id: `${ROUTE_HANDLE}${h.id}`, x: h.pt.x, y: h.pt.y })),
+    ];
+  },
+
+  /**
+   * An end handle dropped on an item attaches the end to it (by the view's snap mode), and anywhere else frees it there:
+   * `connector.setEnd`. A route handle sets what the route makes of the point: `node.update` of those `routeParams`.
+   */
+  dragHandle(node: ConnectorNode, handle: string, to: Pt, under: readonly NodeId[], ctx: InteractionContext): HandleDrag | null {
+    const which = END_HANDLES.indexOf(handle as (typeof END_HANDLES)[number]);
+    if (which === 0 || which === 1) {
+      const mode = snapModeOf(ctx.viewOption(SNAP_MODE_OPTION));
+      const at = { x: roundPx(to.x), y: roundPx(to.y) };
+      const end = endAt(ctx.doc, ctx.registries, node.page, at, under, mode, node.id);
+      return {
+        call: { id: "connector.setEnd", args: { id: node.id, which, end } },
+        preview: previewOf(withEnd(node, which, end), ctx),
+        marks: snapMarks(ctx.doc, ctx.registries, node.page, under, mode, node.id),
+      };
+    }
+    const route = ctx.registries.routes.get(node.route);
+    if (!handle.startsWith(ROUTE_HANDLE) || !route?.dragHandle) return null;
+    const { ends } = resolveConnector(ctx.doc, node, ctx.registries);
+    const routeParams = route.dragHandle(handle.slice(ROUTE_HANDLE.length), to, ends[0], ends[1], node.routeParams);
+    return {
+      call: { id: "node.update", args: { id: node.id, patch: { routeParams } } },
+      preview: previewOf({ ...node, routeParams: { ...node.routeParams, ...routeParams } }, ctx),
+    };
+  },
+
+  /** Only the free ends move; the box follows them (the normaliser's). Nothing changes when both ends are attached. */
+  translate(node: ConnectorNode, dx: number, dy: number): ConnectorNode {
+    if (node.ends.every((e) => e.kind !== "free")) return node;
+    return { ...node, ends: [moveEnd(node.ends[0], dx, dy), moveEnd(node.ends[1], dx, dy)] };
   },
 
   toSvg(node: ConnectorNode, ctx: SvgContext): string {

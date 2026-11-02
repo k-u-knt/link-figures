@@ -426,12 +426,49 @@
 .lf-handle[data-handle="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
 .lf-handle[data-handle="w"] { left: 0; top: 50%; cursor: ew-resize; }
 
+/* A node with handles of its own (a connector's ends and bend): no outline of its box, only those, placed by the pointer
+   controller. Locked, it has no handles and keeps the dashed outline. */
+.lf-selection.has-own-handles:not(.is-locked) {
+  outline: none;
+}
+
+.lf-own-handle {
+  border-radius: 50%;
+  cursor: move;
+}
+
 .lf-marquee {
   position: absolute;
   box-sizing: border-box;
   border: calc(1px / var(--lf-zoom, 1)) dashed var(--interactive-accent);
   background-color: rgba(var(--interactive-accent-rgb), 0.1);
   pointer-events: none;
+}
+
+/* What a tool or a handle drag shows in a page's overlay, in page px: the line it would make and the points it marks (anchors). */
+.lf-tool-preview {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lf-tool-preview-path {
+  fill: none;
+  stroke: var(--interactive-accent);
+  stroke-width: 1.5px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.lf-tool-preview-mark {
+  fill: var(--background-primary);
+  stroke: var(--interactive-accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
 }
 
 /* The box a shape tool is being dragged out to, in its page's overlay. */

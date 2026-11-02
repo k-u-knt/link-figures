@@ -1,3 +1,4 @@
+import { createRegistries } from "../../src/registry";
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
@@ -36,6 +37,8 @@ function setup(build: (doc: Document) => void = () => {}) {
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
+    plugin: { registries: createRegistries() },
+    viewOption: () => undefined,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: (id: string) => els.get(id) },
     pageLayer: { overlayHost: () => { throw new Error("no overlay"); } },

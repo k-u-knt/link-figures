@@ -1,13 +1,16 @@
 import { setIcon } from "obsidian";
-import type { Command, CommandContext } from "../registry/command";
+import type { Command, CommandContext, CommandState } from "../registry/command";
 import type { LinkFiguresView } from "./figure-view";
 
 /**
  * The toolbar from the command registry: one icon button per command that is not `hidden`, a separator between groups. Buttons are disabled
- * when their command does not apply, and the button of the armed tool is shown pressed (`is-active`).
+ * when their command does not apply, and the button of the armed tool is shown pressed (`is-active`). A command that
+ * shows the view's state (`Command.state`, a toggle's mode) has its button's name, icon and pressed look follow it.
  */
 export class Toolbar {
   private readonly buttons = new Map<string, HTMLButtonElement>();
+  /** The name and icon each button shows now, so that a state that has not changed sets neither again. */
+  private readonly shown = new Map<string, { name: string; icon: string }>();
   /** What the buttons were built from, so that a change in the registry (and only that) rebuilds them. */
   private built = "";
 
@@ -24,7 +27,14 @@ export class Toolbar {
       const button = this.buttons.get(command.id);
       if (!button) continue;
       button.disabled = this.view.readOnly || !applies(command, ctx);
-      button.toggleClass("is-active", command.id === armed);
+      const state = stateOf(command, ctx);
+      const name = state.name ?? command.name;
+      const icon = state.icon ?? command.icon ?? "square";
+      const shown = this.shown.get(command.id);
+      if (shown?.name !== name) button.setAttribute("aria-label", name);
+      if (shown?.icon !== icon) setIcon(button, icon);
+      this.shown.set(command.id, { name, icon });
+      button.toggleClass("is-active", command.id === armed || state.active === true);
     }
   }
 
@@ -32,12 +42,14 @@ export class Toolbar {
     this.built = signature;
     this.el.empty();
     this.buttons.clear();
+    this.shown.clear();
     let group: string | null = null;
     for (const command of commands) {
       if (group !== null && command.group !== group) this.el.createDiv({ cls: "lf-sep" });
       group = command.group;
       const button = this.el.createEl("button", { cls: "clickable-icon", attr: { type: "button", "aria-label": command.name } });
       setIcon(button, command.icon ?? "square");
+      this.shown.set(command.id, { name: command.name, icon: command.icon ?? "square" });
       button.addEventListener("click", () => {
         // Keys (Delete, Cmd+Z) belong to the stage, and the button has just taken the focus from it. It also commits an inspector field being typed in.
         this.view.stageEl.focus({ preventScroll: true });
@@ -55,5 +67,15 @@ function applies(command: Command, ctx: CommandContext): boolean {
   } catch (error) {
     console.error(`Link Figures: could not tell whether "${command.name}" applies`, error);
     return false;
+  }
+}
+
+/** How a command's button shows the view's state now; as the command is when it has no `state`, or cannot tell. */
+function stateOf(command: Command, ctx: CommandContext): CommandState {
+  try {
+    return command.state?.(ctx) ?? {};
+  } catch (error) {
+    console.error(`Link Figures: could not tell how "${command.name}" is set`, error);
+    return {};
   }
 }

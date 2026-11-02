@@ -19,7 +19,7 @@ import type { PlacePoint, Pt, Rect } from "../model/geometry";
 import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
-import type { Command, CommandContext } from "../registry/command";
+import type { Command, CommandContext, DragTargets, ToolPreview } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
@@ -69,6 +69,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   readOnly = false;
   /** The tool that the next press on a page places (see `Command.place`), or null. A new document, or none, disarms it. */
   armedTool: Command | null = null;
+
+  /** This view's settings that are not part of the figure (a tool's mode): see `viewOption`. */
+  private readonly options = new Map<string, unknown>();
 
   /** The file text as `setViewData` received it. */
   private rawText = "";
@@ -396,14 +399,35 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /**
    * The release of a drag of an armed tool (`placeDrag`): the tool is disarmed, then given the press and release points
-   * on the press page (once), a failure shown as `runCommand` shows one.
+   * on the press page and the items under them (once), a failure shown as `runCommand` shows one.
    */
-  placeToolDrag(from: PlacePoint, to: PlacePoint, mods: { shift: boolean }): void {
+  placeToolDrag(from: PlacePoint, to: PlacePoint, mods: { shift: boolean }, targets: DragTargets): void {
     const tool = this.armedTool;
     if (!tool?.placeDrag) return;
     this.disarmTool();
     const ctx = this.commandContext();
-    this.attempt(tool, () => tool.placeDrag?.(ctx, from, to, mods));
+    this.attempt(tool, () => tool.placeDrag?.(ctx, from, to, mods, targets));
+  }
+
+  /** What the armed tool shows for the pointer at `to` (see `Command.preview`); null when it shows nothing of its own, or fails to say. */
+  toolPreview(from: PlacePoint | null, to: PlacePoint, targets: DragTargets): ToolPreview | null {
+    const tool = this.armedTool;
+    if (!tool?.preview) return null;
+    try {
+      return tool.preview(this.commandContext(), from, to, targets);
+    } catch (error) {
+      console.error(`Link Figures: "${tool.name}" could not show its preview`, error);
+      return null;
+    }
+  }
+
+  viewOption(key: string): unknown {
+    return this.options.get(key);
+  }
+
+  setViewOption(key: string, value: unknown): void {
+    this.options.set(key, value);
+    this.renderChrome();
   }
 
   /** What a double-click tells a node, from a command: an `lf-activate` event on its element (a text node starts editing). */

@@ -11,7 +11,7 @@ import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries, type Registries } from "../../src/registry";
-import type { CommandContext } from "../../src/registry/command";
+import type { CommandContext, DragTargets } from "../../src/registry/command";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { PointerController } from "../../src/view/pointer";
 import { SelectionState } from "../../src/view/selection";
@@ -49,6 +49,8 @@ function setup(build: (doc: Document) => void = () => {}) {
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
+    plugin: { registries: createRegistries() },
+    viewOption: () => undefined,
     isPanGesture: () => false,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: () => undefined },
@@ -187,6 +189,10 @@ function drawSetup(toolId: string) {
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
+    plugin: { registries },
+    options: new Map<string, unknown>(),
+    viewOption: (key: string) => view.options.get(key),
+    setViewOption: (key: string, value: unknown) => view.options.set(key, value),
     isPanGesture: () => false,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: () => undefined },
@@ -198,11 +204,12 @@ function drawSetup(toolId: string) {
     armTool: () => {},
     disarmTool: () => void (view.armedTool = null),
     commandContext: (): CommandContext => ({ app: {} as never, registries, view, store, selection: view.selectedIds(), page: store.doc.pages[0] }),
-    placeToolDrag: (from: PlacePoint, to: PlacePoint, mods: { shift: boolean }) => {
+    placeToolDrag: (from: PlacePoint, to: PlacePoint, mods: { shift: boolean }, targets: DragTargets) => {
       const tool = view.armedTool;
       view.disarmTool();
-      tool.placeDrag(view.commandContext(), from, to, mods);
+      tool.placeDrag(view.commandContext(), from, to, mods, targets);
     },
+    toolPreview: (from: PlacePoint | null, to: PlacePoint, targets: DragTargets) => view.armedTool?.preview?.(view.commandContext(), from, to, targets) ?? null,
     runCommandById: (id: string, args?: Record<string, unknown>) => {
       pending.push(runCall(store, view.commandContext(), prepareCall(registries, { id, args })));
     },

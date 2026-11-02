@@ -1,5 +1,5 @@
 import type { Pt } from "../model/geometry";
-import { ellipsePath } from "../model/path";
+import { ellipsePath, type PathData, type Seg } from "../model/path";
 import type { CapKind } from "../registry/cap";
 import { maxLead, type EndPoint, type Route } from "../registry/route";
 
@@ -53,7 +53,46 @@ export const curvedRoute: Route = {
       { op: "C", x1: c1.x, y1: c1.y, x2: c2.x, y2: c2.y, x: b.pt.x, y: b.pt.y },
     ];
   },
+  /** One handle, `bend`, on the curve half way along it. */
+  handles(a, b, params) {
+    const seg = curvedRoute.path(a, b, params)[1];
+    if (seg?.op !== "C") return [];
+    // The cubic at t = 1/2.
+    const pt = { x: (a.pt.x + 3 * seg.x1 + 3 * seg.x2 + b.pt.x) / 8, y: (a.pt.y + 3 * seg.y1 + 3 * seg.y2 + b.pt.y) / 8 };
+    return [{ id: "bend", pt }];
+  },
+  /**
+   * The bend that puts the curve's middle (between two free ends) at `to`'s distance to the side of the line: that
+   * middle lies 3/4 of the control points' push off the line, so the bend is that distance over 3/4 of the length,
+   * within the field's −1 to 1. A line with no length keeps its bend.
+   */
+  dragHandle(id, to, a, b, params) {
+    const dx = b.pt.x - a.pt.x;
+    const dy = b.pt.y - a.pt.y;
+    const len2 = dx * dx + dy * dy;
+    if (id !== "bend" || len2 === 0) return { bend: numberParam(params, "bend", 0.25) };
+    const mid = { x: (a.pt.x + b.pt.x) / 2, y: (a.pt.y + b.pt.y) / 2 };
+    const side = (to.x - mid.x) * -dy + (to.y - mid.y) * dx;
+    return { bend: Math.round(Math.max(-1, Math.min(1, side / (0.75 * len2))) * 1000) / 1000 };
+  },
 };
+
+/**
+ * The middle segment of an elbow path and the axis it moves along when its `offset` changes: "x" when it is upright (a
+ * horizontal Z), "y" when it lies flat. Null when the path has no segment between its first and last legs (a straight
+ * run, an L) or that segment is slanted.
+ */
+function middleSegment(path: PathData): { from: Pt; to: Pt; axis: "x" | "y" } | null {
+  const pts = path.filter((s): s is Extract<Seg, { op: "M" | "L" }> => s.op === "M" || s.op === "L");
+  // Three or more legs: the middle one. Fewer (a straight line, an L) have no middle segment to move.
+  if (pts.length < 4) return null;
+  const i = Math.floor((pts.length - 2) / 2);
+  const from = pts[i];
+  const to = pts[i + 1];
+  if (from.x === to.x && from.y !== to.y) return { from, to, axis: "x" };
+  if (from.y === to.y && from.x !== to.x) return { from, to, axis: "y" };
+  return null;
+}
 
 /** How far, at most, an orthogonal route runs straight out along an anchor's normal before it may turn. */
 const STUB_PX = 12;
@@ -170,6 +209,23 @@ export const orthogonalRoute: Route = {
     const pts = simplify([a.pt, p, ...best, q, b.pt]);
     if (pts.length === 1) pts.push(pts[0]);
     return [{ op: "M", x: pts[0].x, y: pts[0].y }, ...pts.slice(1).map((pt) => ({ op: "L" as const, x: pt.x, y: pt.y }))];
+  },
+  /** One handle, `offset`, half way along the elbow's middle segment; none for a route with no middle segment (a straight run, an L). */
+  handles(a, b, params) {
+    const middle = middleSegment(orthogonalRoute.path(a, b, params));
+    return middle ? [{ id: "offset", pt: { x: (middle.from.x + middle.to.x) / 2, y: (middle.from.y + middle.to.y) / 2 } }] : [];
+  },
+  /**
+   * The offset that puts the middle segment through `to`: how far `to` is from the start toward the end, across the
+   * segment, as a fraction 0–1. Ends level on that axis keep their offset.
+   */
+  dragHandle(id, to, a, b, params) {
+    const offset = numberParam(params, "offset", 0.5);
+    const middle = id === "offset" ? middleSegment(orthogonalRoute.path(a, b, params)) : null;
+    if (!middle) return { offset };
+    const span = b.pt[middle.axis] - a.pt[middle.axis];
+    if (span === 0) return { offset };
+    return { offset: Math.round(Math.max(0, Math.min(1, (to[middle.axis] - a.pt[middle.axis]) / span)) * 1000) / 1000 };
   },
 };
 

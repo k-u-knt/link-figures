@@ -1,3 +1,4 @@
+import { createRegistries } from "../../src/registry";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import { DocumentStore } from "../../src/model/store";
 import type { Document, Node } from "../../src/model/types";
@@ -58,6 +59,8 @@ function setup(build: (doc: Document) => void) {
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
+    plugin: { registries: createRegistries() },
+    viewOption: () => undefined,
     isPanGesture: () => false,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: () => undefined },

@@ -1,4 +1,4 @@
-import { dragRect, HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
+import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
 
 const r = { x: 10, y: 10, width: 100, height: 50 };
 test("se handle grows width and height", () => expect(resizeRect(r, "se", 20, 10, { keepAspect: false, min: 1 })).toEqual({ x: 10, y: 10, width: 120, height: 60 }));
@@ -209,4 +209,26 @@ test("dragRect is the dragged box either way, and with square a square on the si
   expect(dragRect({ x: 50, y: 50 }, { x: 10, y: 80 }, false)).toEqual({ x: 10, y: 50, width: 40, height: 30 });
   expect(dragRect({ x: 50, y: 50 }, { x: 10, y: 80 }, true)).toEqual({ x: 10, y: 50, width: 40, height: 40 });
   expect(dragRect({ x: 50, y: 50 }, { x: 60, y: 0 }, true)).toEqual({ x: 50, y: 0, width: 50, height: 50 });
+});
+
+test("hitTest: an item with its own hit test is hit where it says, inside its box or not, and keeps its place in the stacking", () => {
+  // A line along y = 30 inside r, hit within 4 px of it, drawn above a box under it.
+  const line = { id: "line", rect: r, z: 5, locked: false, hit: (p: { x: number; y: number }) => Math.abs(p.y - 30) <= 4 };
+  const box = { id: "box", rect: r, z: 0, locked: false };
+  expect(hitTest([box, line], { x: 50, y: 33 })).toBe("line");
+  expect(hitTest([box, line], { x: 50, y: 36 })).toBe("box");
+  // Off the box's edge, only the line's own test counts.
+  expect(hitTest([{ ...line, hit: (p: { x: number; y: number }) => Math.abs(p.y - 8) <= 4 }], { x: 50, y: 6 })).toBe("line");
+});
+
+test("hitAll lists everything under the point, topmost first", () => {
+  const items = [
+    { id: "low", rect: r, z: 0, locked: false },
+    { id: "high", rect: r, z: 5, locked: false },
+    { id: "tie", rect: r, z: 0, locked: false },
+    { id: "away", rect: { x: 500, y: 500, width: 10, height: 10 }, z: 9, locked: false },
+    { id: "later-page", rect: r, z: -1, locked: false, layer: 1 },
+  ];
+  expect(hitAll(items, { x: 20, y: 20 })).toEqual(["later-page", "high", "tie", "low"]);
+  expect(hitAll(items, { x: 0, y: 0 })).toEqual([]);
 });

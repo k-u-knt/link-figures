@@ -92,6 +92,10 @@ export class FakeEl {
     return this.cls.includes(name);
   }
 
+  setAttribute(name: string, value: string): void {
+    this.attrs[name] = value;
+  }
+
   toggleClass(name: string, on: boolean): void {
     this.cls = this.cls.filter((c) => c !== name);
     if (on) this.cls.push(name);

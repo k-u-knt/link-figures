@@ -1,15 +1,23 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
+import { toSvgPath } from "../model/path";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
+import type { DragTargets, ToolPreview } from "../registry/command";
+import type { HandleDrag, InteractionContext, NodeType } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
-import { dragRect, HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle } from "./pointer-math";
+import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
 import { pagePointAt, pageWorldRect } from "./viewport";
 
 /** Screen pixels a press has to travel before it is a drag; a click that wobbles is still a click. */
 const DRAG_THRESHOLD_PX = 3;
 /** How far from a handle's centre, in screen pixels, a press still grabs it. The drawn handle is 8 px across. */
 const HANDLE_GRAB_PX = 6;
+/** How far from a line, in screen pixels, a press still hits it (see `NodeType.hitTest`). */
+const LINE_HIT_PX = 4;
+/** The radius, in screen pixels, of the points a preview marks (the anchors of the item under the pointer). */
+const MARK_RADIUS_PX = 3.5;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Text being typed into must keep its keys. */
 export function isEditable(target: EventTarget | null): boolean {
@@ -21,32 +29,41 @@ export function isEditable(target: EventTarget | null): boolean {
 type Intent =
   | { kind: "move" }
   | { kind: "resize"; id: NodeId; handle: Handle }
+  | { kind: "handle"; id: NodeId; handle: string }
   | { kind: "marquee"; pageId: PageId; base: NodeId[] };
 
 /**
- * `idle -> pressed -> moving | resizing | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool that is
- * dragged out. (Panning the canvas is the view's own gesture, which this one stays out of: see
+ * `idle -> pressed -> moving | resizing | handling | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool
+ * that is dragged out. (Panning the canvas is the view's own gesture, which this one stays out of: see
  * `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels; `from` is the same point on the
- * press page, and `el` the dragged box drawn in that page's overlay, once the press has become a drag.
+ * press page, `under` the items there (topmost first), and `el` what the drag draws in that page's overlay (the dragged
+ * box, or the tool's own preview), once the press has become a drag. `handling` drags a handle of a node's own (see
+ * `NodeType.handles`): `drag` is what its release does, as the node type last said.
  */
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
-  | { kind: "moving"; pointerId: number; world: Pt; origins: Map<NodeId, Pt> }
+  | { kind: "moving"; pointerId: number; world: Pt; origins: Map<NodeId, Node> }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect }
+  | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; el: HTMLElement }
-  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; el: HTMLElement | null };
+  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
 type Resizing = Extract<Gesture, { kind: "resizing" }>;
+type Handling = Extract<Gesture, { kind: "handling" }>;
 type Marquee = Extract<Gesture, { kind: "marquee" }>;
 type Drawing = Extract<Gesture, { kind: "drawing" }>;
 
-/** What is drawn for one selected node in its page's overlay: an outlined box holding the handles. */
+/**
+ * What is drawn for one selected node in its page's overlay: an outlined box holding the handles, the eight resize
+ * handles or, for a node type with handles of its own (`own`), those.
+ */
 interface SelectionParts {
   box: HTMLElement;
   locked: boolean;
+  own: boolean;
 }
 
 /**
@@ -63,6 +80,8 @@ export class PointerController {
   /** When the drag under way began, or null when there is none; see `commitTime`. */
   private dragStartedAt: number | null = null;
   private readonly parts = new Map<NodeId, SelectionParts>();
+  /** What an armed tool shows for the pointer hovering over a page (see `Command.preview`), or null. */
+  private hoverEl: Element | null = null;
 
   constructor(private readonly view: LinkFiguresView) {}
 
@@ -78,6 +97,7 @@ export class PointerController {
     on("pointerup", (ev) => this.onPointerUp(ev));
     on("pointercancel", (ev) => this.onPointerLost(ev));
     on("lostpointercapture", (ev) => this.onPointerLost(ev));
+    on("pointerleave", () => this.clearHover());
     // A press the controller took is not also a text selection or a native drag: that is the mouse event's default.
     on("mousedown", (ev) => {
       if (this.gesture.kind !== "idle" && ev.button === 0) ev.preventDefault();
@@ -91,6 +111,7 @@ export class PointerController {
 
   detach(): void {
     this.endGesture();
+    this.clearHover();
     this.listening?.abort();
     this.listening = null;
     this.unsubscribeStore?.();
@@ -155,6 +176,7 @@ export class PointerController {
       ev.preventDefault();
       const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
       const at = pagePointAt(this.store.doc, world);
+      this.clearHover();
       if (!at) this.view.disarmTool();
       else if (tool.placeDrag) this.startDrawing(ev, world, at);
       else this.view.placeTool(at);
@@ -170,7 +192,7 @@ export class PointerController {
 
     const grabbed = this.grabbedHandle(doc, world);
     if (grabbed) {
-      this.press(ev, world, { kind: "resize", ...grabbed }, null);
+      this.press(ev, world, grabbed, null);
       return;
     }
 
@@ -212,7 +234,11 @@ export class PointerController {
 
   private onPointerMove(ev: PointerEvent): void {
     let g = this.gesture;
-    if (g.kind === "idle" || ev.pointerId !== g.pointerId) return;
+    if (g.kind === "idle") {
+      this.hover(ev);
+      return;
+    }
+    if (ev.pointerId !== g.pointerId) return;
     if (g.kind === "drawing") {
       this.drawPreview(g, ev);
       return;
@@ -233,6 +259,7 @@ export class PointerController {
     const dy = now.y - g.world.y;
     if (g.kind === "moving") this.moveBy(g, dx, dy);
     else if (g.kind === "resizing") this.resizeBy(g, dx, dy, ev.shiftKey);
+    else if (g.kind === "handling") this.dragHandleTo(g, now);
     else if (g.kind === "marquee") this.sweep(g, now);
   }
 
@@ -243,13 +270,13 @@ export class PointerController {
    * background say, does not keep what lies over it from being selected by a sweep. That marquee starts afresh, as
    * one from bare paper does without shift: the locked node leaves the selection as the sweep begins.
    */
-  private begin(g: Pressed): Moving | Resizing | Marquee | null {
+  private begin(g: Pressed): Moving | Resizing | Handling | Marquee | null {
     const doc = this.store.doc;
     const { intent } = g;
     if (intent.kind === "move") {
       const editable = this.editableSelection(doc);
-      const origins = new Map<NodeId, Pt>();
-      for (const node of doc.nodes) if (editable.has(node.id)) origins.set(node.id, { x: node.x, y: node.y });
+      const origins = new Map<NodeId, Node>();
+      for (const node of doc.nodes) if (editable.has(node.id)) origins.set(node.id, node);
       if (origins.size > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, origins };
       const page = this.selectionPage(doc);
       return page === null ? null : this.beginMarquee(g, page, []);
@@ -259,6 +286,10 @@ export class PointerController {
       if (!node) return null;
       const start = { x: node.x, y: node.y, width: node.width, height: node.height };
       return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start };
+    }
+    if (intent.kind === "handle") {
+      if (!doc.nodes.some((n) => n.id === intent.id)) return null;
+      return { kind: "handling", pointerId: g.pointerId, world: g.world, id: intent.id, handle: intent.handle, drag: null, el: null };
     }
     return this.beginMarquee(g, intent.pageId, intent.base);
   }
@@ -284,11 +315,26 @@ export class PointerController {
     this.store.commit("move", (draft) => {
       for (const node of draft.nodes) {
         const origin = g.origins.get(node.id);
-        if (!origin) continue;
-        node.x = roundPx(origin.x + dx);
-        node.y = roundPx(origin.y + dy);
+        if (origin) this.translate(node, origin, dx, dy);
       }
     });
+  }
+
+  /**
+   * Moves `target` (a draft node) to `origin` moved by (`dx`, `dy`): its box, or what its type's `translate` changes (a
+   * connector's free ends). Only what the type changes is written, so a node whose type moves nothing stays as it is.
+   */
+  private translate(target: Node, origin: Node, dx: number, dy: number): void {
+    const type = this.nodeType(origin);
+    if (!type?.translate) {
+      target.x = roundPx(origin.x + dx);
+      target.y = roundPx(origin.y + dy);
+      return;
+    }
+    const next = type.translate(origin, dx, dy) as unknown as Record<string, unknown>;
+    const before = origin as unknown as Record<string, unknown>;
+    const draft = target as unknown as Record<string, unknown>;
+    for (const key of Object.keys(next)) if (next[key] !== before[key]) draft[key] = next[key];
   }
 
   /**
@@ -299,7 +345,7 @@ export class PointerController {
   private movePagesToCentres(g: Moving): void {
     const doc = this.store.doc;
     const origins = pageOriginsPx(doc);
-    const moves = new Map<NodeId, { page: PageId; x: number; y: number }>();
+    const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
     for (const node of doc.nodes) {
       if (!g.origins.has(node.id)) continue;
       const from = origins.get(node.page);
@@ -308,13 +354,17 @@ export class PointerController {
       const target = pageAt(doc, centre);
       const to = target && origins.get(target.id);
       if (!target || !to || target.id === node.page) continue;
-      moves.set(node.id, { page: target.id, x: roundPx(from.x + node.x - to.x), y: roundPx(from.y + node.y - to.y) });
+      moves.set(node.id, { page: target.id, dx: from.x - to.x, dy: from.y - to.y });
     }
     if (moves.size === 0) return;
+    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     this.store.commit("move", (draft) => {
       for (const node of draft.nodes) {
         const to = moves.get(node.id);
-        if (to) Object.assign(node, to);
+        const origin = byId.get(node.id);
+        if (!to || !origin) continue;
+        node.page = to.page;
+        this.translate(node, origin, to.dx, to.dy);
       }
     });
     this.select([...this.view.selection.ids]);
@@ -355,10 +405,44 @@ export class PointerController {
     this.view.selection.set([...g.base, ...marqueeSelect(this.itemsOn(doc, page), rect)]);
   }
 
+  // Dragging a handle of a node's own
+
+  /**
+   * Asks the node's type what dragging the handle to `world` does (the point on the node's page, clamped to its paper,
+   * with the other items there), and draws what it says: the outline the node would have and the points it marks.
+   */
+  private dragHandleTo(g: Handling, world: Pt): void {
+    const doc = this.store.doc;
+    const node = doc.nodes.find((n) => n.id === g.id);
+    const page = node && doc.pages.find((p) => p.id === node.page);
+    const type = node && this.nodeType(node);
+    if (!node || !page || !type?.dragHandle) {
+      this.endGesture();
+      return;
+    }
+    const to = clampToPaper(doc, page, world);
+    const under = this.itemsUnder(doc, page.id, world).filter((id) => id !== node.id);
+    try {
+      g.drag = type.dragHandle(node, g.handle, to, under, this.interaction(doc));
+    } catch (error) {
+      console.error(`Link Figures: could not drag a handle of ${node.id}`, error);
+      g.drag = null;
+    }
+    g.el = this.drawPreviewIn(page.id, g.drag && { path: g.drag.preview, marks: g.drag.marks }, g.el);
+  }
+
+  /** The release of a handle: the command the node's type last named runs, as a script would run it (one undo step). */
+  private finishHandle(g: Handling): void {
+    const call = g.drag?.call;
+    this.endGesture();
+    if (call) this.view.runCommandById(call.id, call.args);
+  }
+
   // Drawing with a tool that is dragged out
 
   private startDrawing(ev: PointerEvent, world: Pt, from: PlacePoint): void {
-    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, el: null };
+    const under = this.itemsUnder(this.store.doc, from.page.id, world);
+    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null };
     try {
       this.stage?.setPointerCapture(ev.pointerId);
     } catch {
@@ -367,26 +451,32 @@ export class PointerController {
   }
 
   /**
-   * Where the pointer of `ev` puts the far corner of the drawing: `from` itself while the pointer has not gone further
-   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper. Null when
-   * the press page has gone.
+   * Where the pointer of `ev` puts the far end of the drawing: `from` itself while the pointer has not gone further
+   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper; and the items
+   * of the press page under the pointer (under the press, for a click). Null when the press page has gone.
    */
-  private drawingEnd(g: Drawing, ev: PointerEvent): PlacePoint | null {
+  private drawingEnd(g: Drawing, ev: PointerEvent): { to: PlacePoint; targets: DragTargets } | null {
     const doc = this.store.doc;
     const page = doc.pages.find((p) => p.id === g.from.page.id);
     if (!page) return null;
-    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return g.from;
-    const paper = pageWorldRect(doc, page);
+    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under } };
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max);
-    return { page, x: clamp(world.x - paper.x, paper.width), y: clamp(world.y - paper.y, paper.height) };
+    return { to: clampToPaper(doc, page, world), targets: { from: g.under, to: this.itemsUnder(doc, page.id, world) } };
   }
 
-  /** Draws the box being dragged out in the press page's overlay (Shift: a square), as the tool will be given it. */
+  /**
+   * Draws the drawing in the press page's overlay as the tool will be given it: the tool's own preview when it has one
+   * (see `Command.preview`; for a click, what it shows hovering), else the dragged box (Shift: a square).
+   */
   private drawPreview(g: Drawing, ev: PointerEvent): void {
-    const to = this.drawingEnd(g, ev);
-    if (!to) {
+    const end = this.drawingEnd(g, ev);
+    if (!end) {
       this.endGesture();
+      return;
+    }
+    const { to, targets } = end;
+    if (this.view.armedTool?.preview) {
+      g.el = this.drawPreviewIn(g.from.page.id, this.view.toolPreview(to === g.from ? null : g.from, to, targets), g.el);
       return;
     }
     if (to === g.from) {
@@ -402,18 +492,83 @@ export class PointerController {
       host.appendChild(g.el);
     }
     const rect = dragRect(g.from, to, ev.shiftKey);
-    const style = g.el.style;
+    const style = (g.el as HTMLElement).style;
     style.left = `${rect.x}px`;
     style.top = `${rect.y}px`;
     style.width = `${rect.width}px`;
     style.height = `${rect.height}px`;
   }
 
-  /** The release of a drawing: the tool is given the press and release points (see `drawingEnd`) and Shift. */
+  /** The release of a drawing: the tool is given the press and release points (see `drawingEnd`), Shift, and the items under them. */
   private finishDrawing(g: Drawing, ev: PointerEvent): void {
-    const to = this.drawingEnd(g, ev);
+    const end = this.drawingEnd(g, ev);
     this.endGesture();
-    if (to) this.view.placeToolDrag(g.from, to, { shift: ev.shiftKey });
+    if (end) this.view.placeToolDrag(g.from, end.to, { shift: ev.shiftKey }, end.targets);
+  }
+
+  // What an armed tool shows while the pointer hovers
+
+  /** Draws what the armed tool shows for the pointer over a page (the anchors of the item under it), or clears it. */
+  private hover(ev: PointerEvent): void {
+    if (!this.view.armedTool?.preview || this.view.readOnly) {
+      this.clearHover();
+      return;
+    }
+    const doc = this.store.doc;
+    const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    const at = pagePointAt(doc, world);
+    if (!at) {
+      this.clearHover();
+      return;
+    }
+    const under = this.itemsUnder(doc, at.page.id, world);
+    const preview = this.view.toolPreview(null, at, { from: [], to: under });
+    // Over another page than before, it is drawn afresh in that page's overlay.
+    if (this.hoverEl && this.hoverEl.parentElement !== this.overlayOf(at.page.id)) this.clearHover();
+    this.hoverEl = this.drawPreviewIn(at.page.id, preview, this.hoverEl);
+  }
+
+  private clearHover(): void {
+    this.hoverEl?.remove();
+    this.hoverEl = null;
+  }
+
+  /**
+   * Draws `preview` (an outline and marked points, in page px) in the overlay of `pageId`, in `el` when given (it is
+   * replaced), and returns what it drew; null, with `el` removed, when there is nothing to draw or no overlay.
+   */
+  private drawPreviewIn(pageId: PageId, preview: ToolPreview | null, el: Element | null): Element | null {
+    const path = preview?.path;
+    const marks = preview?.marks ?? [];
+    const host = this.overlayOf(pageId);
+    if (!host || ((!path || path.length === 0) && marks.length === 0)) {
+      el?.remove();
+      return null;
+    }
+    const doc = host.ownerDocument;
+    const svg = doc.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "lf-tool-preview");
+    if (path && path.length > 0) {
+      const line = doc.createElementNS(SVG_NS, "path");
+      line.setAttribute("class", "lf-tool-preview-path");
+      line.setAttribute("d", toSvgPath(path));
+      svg.appendChild(line);
+    }
+    const r = MARK_RADIUS_PX / this.view.viewport.zoom;
+    for (const mark of marks) {
+      const dot = doc.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("class", "lf-tool-preview-mark");
+      dot.setAttribute("cx", String(mark.x));
+      dot.setAttribute("cy", String(mark.y));
+      dot.setAttribute("r", String(r));
+      svg.appendChild(dot);
+    }
+    if (el?.parentElement === host) el.replaceWith(svg);
+    else {
+      el?.remove();
+      host.appendChild(svg);
+    }
+    return svg;
   }
 
   private onPointerUp(ev: PointerEvent): void {
@@ -421,6 +576,10 @@ export class PointerController {
     if (g.kind === "idle" || ev.pointerId !== g.pointerId) return;
     if (g.kind === "drawing") {
       this.finishDrawing(g, ev);
+      return;
+    }
+    if (g.kind === "handling") {
+      this.finishHandle(g);
       return;
     }
     const selection = this.view.selection;
@@ -442,7 +601,7 @@ export class PointerController {
     this.gesture = { kind: "idle" };
     this.dragStartedAt = null;
     if (g.kind === "idle") return;
-    if (g.kind === "marquee" || g.kind === "drawing") g.el?.remove();
+    if (g.kind === "marquee" || g.kind === "drawing" || g.kind === "handling") g.el?.remove();
     try {
       if (this.stage?.hasPointerCapture(g.pointerId)) this.stage.releasePointerCapture(g.pointerId);
     } catch {
@@ -510,6 +669,7 @@ export class PointerController {
         // An armed tool is put down first; the selection is cleared by the next Escape.
         if (this.view.armedTool) {
           this.view.disarmTool();
+          this.clearHover();
           handled = true;
           break;
         }
@@ -523,11 +683,11 @@ export class PointerController {
   private nudge(dx: number, dy: number): boolean {
     const ids = this.editableSelection(this.store.doc);
     if (ids.size === 0) return false;
+    const byId = new Map(this.store.doc.nodes.map((n) => [n.id, n] as const));
     this.store.commit("nudge", (draft) => {
       for (const node of draft.nodes) {
-        if (!ids.has(node.id)) continue;
-        node.x = roundPx(node.x + dx);
-        node.y = roundPx(node.y + dy);
+        const origin = byId.get(node.id);
+        if (origin && ids.has(node.id)) this.translate(node, origin, dx, dy);
       }
     });
     return true;
@@ -565,7 +725,7 @@ export class PointerController {
     const host = this.overlayOf(node.page);
     let parts = this.parts.get(node.id);
     // Moved to another page, or its page was drawn afresh, or locked since: what was drawn no longer fits.
-    if (parts && (!host || parts.box.parentElement !== host || parts.locked !== node.locked)) {
+    if (parts && (!host || parts.box.parentElement !== host || parts.locked !== node.locked || parts.own !== this.hasOwnHandles(node))) {
       parts.box.remove();
       this.parts.delete(node.id);
       parts = undefined;
@@ -580,14 +740,17 @@ export class PointerController {
     style.top = `${node.y}px`;
     style.width = `${node.width}px`;
     style.height = `${node.height}px`;
+    if (parts.own && !node.locked) this.placeOwnHandles(parts.box, node);
   }
 
   private draw(host: HTMLElement, node: Node): SelectionParts {
     const doc = host.ownerDocument;
     const box = doc.createElement("div");
-    box.className = node.locked ? "lf-selection lf-selected is-locked" : "lf-selection lf-selected";
+    const own = this.hasOwnHandles(node);
+    box.className = ["lf-selection", "lf-selected", ...(node.locked ? ["is-locked"] : []), ...(own ? ["has-own-handles"] : [])].join(" ");
     // A locked node can be selected (so that the inspector can unlock it) but not reshaped: it gets no handles, and a dashed outline.
-    if (!node.locked) {
+    // A node with handles of its own gets those, drawn where they are each time it changes (see `placeOwnHandles`).
+    if (!node.locked && !own) {
       for (const handle of HANDLES) {
         const el = doc.createElement("div");
         el.className = "lf-handle";
@@ -596,7 +759,37 @@ export class PointerController {
       }
     }
     host.appendChild(box);
-    return { box, locked: node.locked };
+    return { box, locked: node.locked, own };
+  }
+
+  /** Draws the handles of `node`'s own (see `NodeType.handles`) in its selection box, which sits on its box. */
+  private placeOwnHandles(box: HTMLElement, node: Node): void {
+    const handles = this.ownHandles(node);
+    const doc = box.ownerDocument;
+    box.replaceChildren(
+      ...handles.map((h) => {
+        const el = doc.createElement("div");
+        el.className = "lf-handle lf-own-handle";
+        el.dataset.ownHandle = h.id;
+        el.style.left = `${h.x - node.x}px`;
+        el.style.top = `${h.y - node.y}px`;
+        return el;
+      }),
+    );
+  }
+
+  private hasOwnHandles(node: Node): boolean {
+    return !!this.nodeType(node)?.handles;
+  }
+
+  /** The handles of `node`'s own, in page px; none when its type has none, or fails to say. */
+  private ownHandles(node: Node): { id: string; x: number; y: number }[] {
+    try {
+      return this.nodeType(node)?.handles?.(node, this.interaction(this.store.doc)) ?? [];
+    } catch (error) {
+      console.error(`Link Figures: could not find the handles of ${node.id}`, error);
+      return [];
+    }
   }
 
   private clearParts(): void {
@@ -625,24 +818,82 @@ export class PointerController {
     return doc.nodes.find((n) => n.id === first)?.page ?? null;
   }
 
-  /** The selected node whose handle is under `world`, if any. */
-  private grabbedHandle(doc: Document, world: Pt): { id: NodeId; handle: Handle } | null {
+  /**
+   * The selected node whose handle is under `world`, if any: one of its own handles (the nearest, within reach) for a
+   * type that has them, else one of its box's resize handles.
+   */
+  private grabbedHandle(doc: Document, world: Pt): Extract<Intent, { kind: "resize" | "handle" }> | null {
     const tolerance = HANDLE_GRAB_PX / this.view.viewport.zoom;
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+    const origins = pageOriginsPx(doc);
     // The latest selected is the one drawn on top.
     for (const id of [...this.view.selection.ids].reverse()) {
       const node = byId.get(id);
       if (!node || node.locked) continue;
+      if (this.hasOwnHandles(node)) {
+        const origin = origins.get(node.page);
+        if (!origin) continue;
+        let best: { handle: string; distance: number } | null = null;
+        for (const h of this.ownHandles(node)) {
+          const dx = Math.abs(world.x - (origin.x + h.x));
+          const dy = Math.abs(world.y - (origin.y + h.y));
+          const distance = Math.hypot(dx, dy);
+          if (dx <= tolerance && dy <= tolerance && (!best || distance < best.distance)) best = { handle: h.id, distance };
+        }
+        if (best) return { kind: "handle", id, handle: best.handle };
+        continue;
+      }
       const handle = handleAt(nodeWorldRect(doc, node), world, tolerance);
-      if (handle) return { id, handle };
+      if (handle) return { kind: "resize", id, handle };
     }
     return null;
   }
 
-  /** Every node, each with its page's position as `layer`: later pages are drawn over earlier ones. */
-  private itemsOnAllPages(doc: Document): { id: NodeId; rect: Rect; z: number; locked: boolean; layer: number }[] {
+  /**
+   * `nodes` as items to press, each with its page's position as `layer` (later pages are drawn over earlier ones), and
+   * for a type hit by more than its box (see `NodeType.hitTest`), what says whether a world point is on it.
+   */
+  private hitItems(doc: Document, nodes: Node[]): HitItem[] {
     const layers = new Map(doc.pages.map((page, i) => [page.id, i] as const));
-    return doc.nodes.map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), z: n.z, locked: n.locked, layer: layers.get(n.page) ?? 0 }));
+    const origins = pageOriginsPx(doc);
+    const tolerance = LINE_HIT_PX / this.view.viewport.zoom;
+    let ctx: InteractionContext | null = null;
+    return nodes.map((n) => {
+      const type = this.nodeType(n);
+      const origin = origins.get(n.page);
+      const hit =
+        type?.hitTest && origin
+          ? (p: Pt): boolean => {
+              ctx ??= this.interaction(doc);
+              try {
+                return type.hitTest?.(n, { x: p.x - origin.x, y: p.y - origin.y }, tolerance, ctx) ?? false;
+              } catch (error) {
+                console.error(`Link Figures: could not tell whether ${n.id} is under the pointer`, error);
+                return false;
+              }
+            }
+          : undefined;
+      return { id: n.id, rect: nodeWorldRect(doc, n), z: n.z, locked: n.locked, layer: layers.get(n.page) ?? 0, hit };
+    });
+  }
+
+  /** Every node, to press: see `hitItems`. */
+  private itemsOnAllPages(doc: Document): HitItem[] {
+    return this.hitItems(doc, doc.nodes);
+  }
+
+  /** The nodes of the page `pageId` under the world point `world`, topmost first. */
+  private itemsUnder(doc: Document, pageId: PageId, world: Pt): NodeId[] {
+    return hitAll(this.hitItems(doc, doc.nodes.filter((n) => n.page === pageId)), world);
+  }
+
+  private nodeType(node: Node): NodeType | undefined {
+    return this.view.plugin.registries.nodeTypes.get(node.type);
+  }
+
+  /** What a node type's pointer hooks are given: the registries, `doc` and the view's settings. */
+  private interaction(doc: Document): InteractionContext {
+    return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key) };
   }
 
   private itemsOn(doc: Document, page: Page): { id: NodeId; rect: Rect; z: number; locked: boolean }[] {
@@ -650,6 +901,13 @@ export class PointerController {
       .filter((n) => n.page === page.id)
       .map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), z: n.z, locked: n.locked }));
   }
+}
+
+/** The world point `world` as a point on `page`, clamped to its paper. */
+function clampToPaper(doc: Document, page: Page, world: Pt): PlacePoint {
+  const paper = pageWorldRect(doc, page);
+  const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max);
+  return { page, x: clamp(world.x - paper.x, paper.width), y: clamp(world.y - paper.y, paper.height) };
 }
 
 /** The page under a world point, or null when it is over the canvas between or around the pages. */

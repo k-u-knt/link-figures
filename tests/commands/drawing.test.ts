@@ -350,12 +350,12 @@ describe("shape.operate", () => {
   });
 });
 
-test("the drawing commands are listed with their params and need no view; all but the shape tools are hidden from the toolbar", () => {
+test("the drawing commands are listed with their params and need no view; all but the tools and the snap toggle are hidden from the toolbar", () => {
   const { api } = setup();
   const ids = ["shape.create", "connector.create", "node.update", "connector.setEnd", "shape.operate"];
   for (const id of ids) expect(api.commands().find((c) => c.id === id)).toMatchObject({ id, needsView: false, params: expect.any(Object) });
-  // The shape tools are the toolbar's way to them; every command that takes arguments is hidden.
-  expect(drawingCommands().filter((c) => !c.hidden).map((c) => c.id)).toEqual(["tool.rect", "tool.ellipse"]);
+  // The tools (and the connector tool's snap toggle) are the toolbar's way to them; every command that takes arguments is hidden.
+  expect(drawingCommands().filter((c) => !c.hidden).map((c) => c.id)).toEqual(["tool.rect", "tool.ellipse", "tool.connector", "connector.snap-mode"]);
   expect(drawingCommands().filter((c) => c.params).every((c) => c.hidden)).toBe(true);
 });
 

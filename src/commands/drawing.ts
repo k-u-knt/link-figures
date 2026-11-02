@@ -1,8 +1,9 @@
-import { attachTarget } from "../model/attach";
+import { resolveConnector } from "../connectors/geometry";
+import { attachTarget, endAt, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, Paint, ShapeNode, Stroke } from "../model/types";
-import { CommandError, type Command, type CommandContext } from "../registry/command";
+import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { isCap, paramError, type ParamSpec } from "../registry/params";
 import { dragRect, roundPx } from "../view/pointer-math";
 import { targetIds, targetPage, whenCommitted } from "./builtin";
@@ -326,12 +327,74 @@ export function shapeTool(id: string, name: string, icon: string, kind: string):
   return tool;
 }
 
+/** The snap mode new connector ends take in the view of `ctx` (the toolbar toggle); "anchor" headless. */
+function snapModeIn(ctx: CommandContext): SnapMode {
+  return snapModeOf(ctx.view?.viewOption(SNAP_MODE_OPTION));
+}
+
+/** The two ends the Connector tool's drag from `from` to `to` gives (see `endAt`), each rounded as a drag's positions are. */
+function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets: DragTargets): [End, End] {
+  const mode = snapModeIn(ctx);
+  const doc = ctx.store.doc;
+  const page = from.page.id;
+  const at = (p: PlacePoint) => ({ x: roundPx(p.x), y: roundPx(p.y) });
+  return [endAt(doc, ctx.registries, page, at(from), targets.from, mode), endAt(doc, ctx.registries, page, at(to), targets.to, mode)];
+}
+
+/**
+ * The Connector tool: its button arms it, and a drag on a page then runs `connector.create` from the press to the
+ * release, as a script would run it. Each end dropped on an item that can be attached to attaches to it, at its nearest
+ * anchor or at its centre by the view's snap mode (`connector.snap-mode`); anywhere else it is free there. A click draws
+ * nothing. While it is armed, the item under the pointer shows its anchors (its centre in centre mode), and a drag shows
+ * the line it would make.
+ */
+const connectorTool: Command = {
+  id: "tool.connector",
+  name: "Connector",
+  icon: "spline",
+  group: "insert",
+  needsView: true,
+  applies: (ctx) => !!ctx.page,
+  run: (ctx) => ctx.view?.armTool(connectorTool),
+  placeDrag(ctx, from, to, _mods, targets) {
+    if (!ctx.view) throw new CommandError("tool.connector needs the figure to be open");
+    if (from.x === to.x && from.y === to.y) return;
+    const [start, end] = toolEnds(ctx, from, to, targets);
+    ctx.view.runCommandById("connector.create", { page: from.page.id, from: start, to: end });
+  },
+  preview(ctx, from, to, targets): ToolPreview {
+    const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, targets.to, snapModeIn(ctx));
+    if (!from) return { marks };
+    const doc = ctx.store.doc;
+    const line = connectorNodeDefaults(from.page, { ends: toolEnds(ctx, from, to, targets), caps: defaultCaps() }, doc.nodes.map((n) => n.id));
+    return { path: resolveConnector(doc, line, ctx.registries).path, marks };
+  },
+};
+
+/** The toolbar toggle between the two snap modes of new connector ends, anchor and centre; its button names the current one. */
+const snapModeToggle: Command = {
+  id: "connector.snap-mode",
+  name: "Connector snap",
+  icon: "anchor",
+  group: "insert",
+  needsView: true,
+  applies: (ctx) => !!ctx.view,
+  run(ctx) {
+    if (!ctx.view) throw new CommandError("connector.snap-mode needs the figure to be open");
+    ctx.view.setViewOption(SNAP_MODE_OPTION, snapModeIn(ctx) === "anchor" ? "center" : "anchor");
+  },
+  state: (ctx) =>
+    snapModeIn(ctx) === "center" ? { name: "Connector snap: centre", icon: "locate-fixed" } : { name: "Connector snap: anchor", icon: "anchor" },
+};
+
 /** The drawing commands, for the command registry (see the top of this file). */
 export function drawingCommands(): Command[] {
   const always = () => true;
   return [
     shapeTool("tool.rect", "Rectangle", "square", "rect"),
     shapeTool("tool.ellipse", "Ellipse", "circle", "ellipse"),
+    connectorTool,
+    snapModeToggle,
     {
       id: "shape.create",
       name: "Create shape",

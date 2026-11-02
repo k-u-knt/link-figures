@@ -89,21 +89,35 @@ export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean }
 }
 
 /**
- * The item under `p` that is drawn on top: the highest `layer` (the position of its page, later pages being drawn over
- * earlier ones; 0 when not given), then the highest `z`, then the later item. Locked items count, so that they can be
- * selected and unlocked (what may then be done to them is for the callers to refuse).
+ * An item that can be pressed: its box, its stacking (`layer`, the position of its page, 0 when not given; then `z`),
+ * and, for an item that is not hit across its whole box (a line), `hit`, which says whether a point is on it.
  */
-export function hitTest(
-  items: { id: NodeId; rect: Rect; z: number; locked: boolean; layer?: number }[],
-  p: Pt,
-): NodeId | null {
-  let top: { id: NodeId; z: number; layer: number } | null = null;
-  for (const item of items) {
-    if (!rectContainsPt(item.rect, p)) continue;
-    const layer = item.layer ?? 0;
-    if (!top || layer > top.layer || (layer === top.layer && item.z >= top.z)) top = { id: item.id, z: item.z, layer };
-  }
-  return top ? top.id : null;
+export interface HitItem {
+  id: NodeId;
+  rect: Rect;
+  z: number;
+  locked: boolean;
+  layer?: number;
+  hit?: (p: Pt) => boolean;
+}
+
+/**
+ * Every item under `p`, the one drawn on top first: the highest `layer` (later pages are drawn over earlier ones), then
+ * the highest `z`, then the later item. An item with `hit` is under `p` when it says so, any other when its box holds
+ * `p`. Locked items count, so that they can be selected and unlocked (what may then be done to them is for the callers
+ * to refuse).
+ */
+export function hitAll(items: HitItem[], p: Pt): NodeId[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => (item.hit ? item.hit(p) : rectContainsPt(item.rect, p)))
+    .sort((a, b) => (b.item.layer ?? 0) - (a.item.layer ?? 0) || b.item.z - a.item.z || b.index - a.index)
+    .map(({ item }) => item.id);
+}
+
+/** The item under `p` that is drawn on top (see `hitAll`), or null when there is none. */
+export function hitTest(items: HitItem[], p: Pt): NodeId | null {
+  return hitAll(items, p)[0] ?? null;
 }
 
 /** Where a handle sits on `rect`. */

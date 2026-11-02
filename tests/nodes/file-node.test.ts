@@ -12,6 +12,7 @@ const { fileNodeSvg: pureFileNodeSvg, fileFrameSvg } = await import("../../src/n
 
 const page = createPage("a4-portrait", []);
 const noCtx = { registries: createRegistries() };
+const updateCtx = { ...noCtx, doc: { version: 1, pages: [page], nodes: [], edges: [] } as never };
 const node = (over: Partial<FileNode> = {}): FileNode => ({
   ...fileNodeDefaults(page, { file: "a.png", subpath: "", show: "image" }, []),
   x: 10,
@@ -41,8 +42,8 @@ test("the inspector offers a Page field for pdf and tiff targets only", () => {
 
 test("the inspector's Frame toggle is off for no frame; with a frame, its paint, width and dashes follow", () => {
   expect(fileNodeType.inspector(node({ frame: defaultBorder() }), noCtx)).toEqual([FRAME_TOGGLE, ...strokeFields("frame", "Frame")]);
-  expect(fileNodeType.checkField?.("frame", null, noCtx)).toBeNull();
-  expect(fileNodeType.checkField?.("frame", defaultBorder(), noCtx)).toBeNull();
+  expect(fileNodeType.checkField?.("frame", null, updateCtx, node({}))).toBeNull();
+  expect(fileNodeType.checkField?.("frame", defaultBorder(), updateCtx, node({}))).toBeNull();
 });
 
 test("file-node re-exports the pure SVG function", () => expect(fileNodeSvg).toBe(pureFileNodeSvg));

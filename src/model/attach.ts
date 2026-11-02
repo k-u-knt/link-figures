@@ -102,9 +102,27 @@ export function endAt(doc: Document, registries: Registries, page: string, at: P
   if (!found) return { kind: "free", x: at.x, y: at.y };
   const { anchors } = found.target;
   if (mode === "center" || anchors.length === 0) return { kind: "attached", node: found.id, snap: "center" };
-  const away = (p: Pt): number => Math.hypot(p.x - at.x, p.y - at.y);
-  const nearest = anchors.reduce((best, a) => (away(a) < away(best) ? a : best));
-  return { kind: "attached", node: found.id, snap: "anchor", anchor: nearest.id };
+  return { kind: "attached", node: found.id, snap: "anchor", anchor: nearestAnchor(anchors, at).id };
+}
+
+/** The anchor of `anchors` (at least one) nearest `at`; the first of those as near as it. */
+export function nearestAnchor(anchors: readonly Anchor[], at: Pt): Anchor {
+  const away = (p: Pt): number => (p.x - at.x) ** 2 + (p.y - at.y) ** 2;
+  return anchors.reduce((best, a) => (away(a) < away(best) ? a : best));
+}
+
+/**
+ * What is wrong with `end` as an end of a connector on `page`, or null when nothing is: a free end is fine, and an
+ * attached one must be attached to a node of `doc` on that page whose type can be attached to. Which anchor it names is
+ * the connector normaliser's to settle. The message follows the end's name: `is attached to "a", which is …`.
+ */
+export function endError(doc: Document, registries: Registries, end: End, page: string): string | null {
+  if (end.kind === "free") return null;
+  const target = doc.nodes.find((n) => n.id === end.node);
+  if (!target) return `is attached to "${end.node}", which is not a node of the figure`;
+  if (!attachTarget(doc, registries, end.node)) return `cannot attach to "${end.node}" (a ${target.type})`;
+  if (target.page !== page) return `is attached to "${end.node}", which is on another page`;
+  return null;
 }
 
 /**

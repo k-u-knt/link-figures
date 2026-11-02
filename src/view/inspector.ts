@@ -306,7 +306,7 @@ interface Section {
  * with nodes selected it shows the first one's fields (the base fields and its node type's), and writes go to every
  * selected node. A node's write runs the `node.update` command for each node it changes, all in one commit labelled
  * `inspect:<key>`, so a run of edits to one field is one undo step, and the inspector makes the same documents as a
- * script that sends the same patches. A page's write is a commit labelled `inspect:<key>` too.
+ * script that sends the same patches; a write the command refuses is shown as a notice and changes nothing. A page's write is a commit labelled `inspect:<key>` too.
  * Values are shown as the user thinks of them: a node's position and size in millimetres, though it stores pixels.
  */
 export class Inspector {
@@ -314,11 +314,15 @@ export class Inspector {
   /** A change of section is waiting for the control being typed into to lose the focus. */
   private pending = false;
 
-  /** `onPageLimit` is told the limit when a page edit had to be cut down to it (the view shows a notice). */
+  /**
+   * `onPageLimit` is told the limit when a page edit had to be cut down to it, and `onWriteFailed` what went wrong when
+   * a write was refused (the view shows both as notices).
+   */
   constructor(
     private readonly view: LinkFiguresView,
     private readonly el: HTMLElement,
     private readonly onPageLimit: (limitMm: number) => void = () => {},
+    private readonly onWriteFailed: (message: string) => void = () => {},
   ) {
     // `change` has committed the field's write by the time the focus leaves it, so the section that was held back is then drawn.
     this.el.addEventListener("focusout", () => {
@@ -361,6 +365,21 @@ export class Inspector {
   private isTypingIn(): boolean {
     const active = this.el.ownerDocument?.activeElement;
     return !!active && this.el.contains(active) && typedInto.has(active as Control);
+  }
+
+  /**
+   * Runs `calls`, a write of the field `key` (one of `fields`, or a part of one), in one commit labelled `inspect:<key>`.
+   * One that is refused leaves the document as it was, and says so in a notice naming the field and why.
+   */
+  private runWrite(key: string, fields: readonly Field[], calls: PreparedCall[]): void {
+    try {
+      runInOneCommit(this.view.store, this.view.commandContext(), calls, `inspect:${key}`);
+    } catch (error) {
+      const label = fields.find((f) => f.key === key)?.label ?? key;
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`Link Figures: the inspector could not set "${key}"`, error);
+      this.onWriteFailed(`Link Figures: could not change ${label}: ${reason}`);
+    }
   }
 
   private describe(): Section | null {
@@ -444,12 +463,7 @@ export class Inspector {
           calls.push(prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
         }
         if (calls.length === 0) return;
-        try {
-          runInOneCommit(this.view.store, this.view.commandContext(), calls, `inspect:${key}`);
-        } catch (error) {
-          // What the controls offer is valid, so this is a slip of the code, not the user's; the document is left as it was.
-          console.error(`Link Figures: the inspector could not set "${key}"`, error);
-        }
+        this.runWrite(key, fields, calls);
       },
     };
   }

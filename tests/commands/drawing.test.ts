@@ -4,7 +4,7 @@ import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
 import { loadDocument } from "../../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
-import { createDocument, defaultBorder, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, defaultBorder, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { createFigureStore } from "../../src/model/normalise";
 import type { DocumentStore } from "../../src/model/store";
 import type { ConnectorNode, Document, ShapeNode } from "../../src/model/types";
@@ -53,10 +53,11 @@ function registriesForDrawing(): Registries {
   return registries;
 }
 
-/** A figure with one page (`pg-1`) and a label `t` on it. */
-function figure(): Document {
+/** A figure with one page (`pg-1`) and a label `t` on it; with `secondPage`, an empty page `pg-2` after it. */
+function figure(secondPage = false): Document {
   const doc = createDocument("a4-portrait");
   doc.pages[0].id = "pg-1";
+  if (secondPage) doc.pages.push({ ...createPage("a4-portrait", ["pg-1"]), id: "pg-2" });
   doc.nodes.push(textNodeDefaults(doc.pages[0], { id: "t" }, []));
   return doc;
 }
@@ -82,16 +83,16 @@ function openView(doc: Document, registries: Registries): OpenFigure & { store: 
 }
 
 /** The API on one figure file, kept in memory; with `open`, an open view of the figure too. */
-function setup(options: { open?: boolean } = {}) {
+function setup(options: { open?: boolean; secondPage?: boolean } = {}) {
   const registries = registriesForDrawing();
-  const text = new Map([[PATH, serializeFigureFile(figure(), emptyParsed())]]);
+  const text = new Map([[PATH, serializeFigureFile(figure(options.secondPage), emptyParsed())]]);
   const files = {
     read: async (path: string) => text.get(path)!,
     async process(path: string, edit: (t: string) => string) {
       text.set(path, edit(text.get(path)!));
     },
   };
-  const view = options.open ? openView(figure(), registries) : null;
+  const view = options.open ? openView(figure(options.secondPage), registries) : null;
   const api = createApi({ app: {} as never, registries, files, normalizePath, openFigure: (path) => (path === PATH ? view : null) });
   /** The figure as the API reads it: the view's document, else the file's. */
   const doc = () => api.read(PATH);
@@ -206,7 +207,7 @@ test("a batch of two shapes with given ids and a connector between them is one u
 
 describe("node.update", () => {
   /** A figure with a rectangle `s` and a straight connector `c` from free (0, 0) to the rectangle's west anchor. */
-  async function withShapeAndConnector(options: { open?: boolean } = {}) {
+  async function withShapeAndConnector(options: { open?: boolean; secondPage?: boolean } = {}) {
     const s = setup(options);
     await s.api.batch(PATH, [
       { id: "shape.create", args: { id: "s", page: "pg-1", x: 100, y: 100, width: 100, height: 50 } },
@@ -269,6 +270,16 @@ describe("node.update", () => {
     expect((await nodeOf<ConnectorNode>(doc(), "c")).routeParams).toEqual({ offset: 0.2 });
   });
 
+  test("an end snapped to an anchor without naming one takes the anchor nearest where it is drawn", async () => {
+    const { api, doc } = await withShapeAndConnector();
+    // The box is (100, 100, 100 × 50). Snapped to its centre, the end is drawn where the line from the other end leaves
+    // the box: from (150, 0), straight above, that is the top middle, the north anchor.
+    await api.run(PATH, "node.update", { id: "c", patch: { ends: [{ kind: "free", x: 0, y: 125 }, { kind: "attached", node: "s", snap: "center" }] } });
+    expect((await nodeOf<ConnectorNode>(doc(), "c")).ends[1]).toEqual({ kind: "attached", node: "s", snap: "center" });
+    await api.run(PATH, "node.update", { id: "c", patch: { ends: [{ kind: "free", x: 150, y: 0 }, { kind: "attached", node: "s", snap: "anchor" }] } });
+    expect((await nodeOf<ConnectorNode>(doc(), "c")).ends[1]).toEqual({ kind: "attached", node: "s", snap: "anchor", anchor: "n" });
+  });
+
   test.each([
     ["a missing node", { id: "p-none", patch: {} }, /no node "p-none"/],
     ["a new id", { id: "s", patch: { id: "s2" } }, /"id" cannot change/],
@@ -279,9 +290,12 @@ describe("node.update", () => {
     ["a base field of the wrong type", { id: "s", patch: { locked: "yes" } }, /"locked" must be true or false/],
     ["an unknown page", { id: "s", patch: { page: "pg-9" } }, /no page "pg-9"/],
     ["one end", { id: "c", patch: { ends: [{ kind: "free", x: 0, y: 0 }] } }, /"ends" must be two ends/],
+    ["an end on a missing node", { id: "c", patch: { ends: [{ kind: "free", x: 0, y: 0 }, { kind: "attached", node: "nope", snap: "center" }] } }, /"ends.1" is attached to "nope", which is not a node/],
+    ["an end on a connector", { id: "c", patch: { ends: [{ kind: "attached", node: "c", snap: "center" }, { kind: "free", x: 0, y: 0 }] } }, /"ends.0" cannot attach to "c" \(a connector\)/],
+    ["an end on a node of another page", { id: "c", patch: { page: "pg-2", ends: [{ kind: "free", x: 0, y: 0 }, { kind: "attached", node: "s", snap: "center" }] } }, /"ends.1" is attached to "s", which is on another page/],
     ["a prototype key", { id: "s", patch: JSON.parse('{"__proto__": {"x": 1}}') }, /may not have a key "__proto__"/],
   ])("%s is an error that changes nothing", async (_name, args, message) => {
-    const { api, saved } = await withShapeAndConnector();
+    const { api, saved } = await withShapeAndConnector({ secondPage: true });
     const before = saved();
     await expect(api.run(PATH, "node.update", args)).rejects.toThrow(message);
     expect(saved()).toEqual(before);

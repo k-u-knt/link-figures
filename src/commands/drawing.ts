@@ -1,5 +1,5 @@
 import { resolveConnector } from "../connectors/geometry";
-import { attachTarget, endAt, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
+import { endAt, endError, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
 import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } from "../model/geometry";
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
@@ -112,11 +112,8 @@ function createShape(ctx: CommandContext, args: ShapeCreateArgs): { id: NodeId }
  * that page whose type can be attached to. Which anchor it names is the connector normaliser's to settle.
  */
 function checkEnd(ctx: CommandContext, command: string, name: string, end: End, page: string): void {
-  if (end.kind === "free") return;
-  const target = ctx.store.doc.nodes.find((n) => n.id === end.node);
-  if (!target) throw new CommandError(`${command}: "${name}" is attached to "${end.node}", which is not a node of the figure`);
-  if (!attachTarget(ctx.store.doc, ctx.registries, end.node)) throw new CommandError(`${command}: "${name}" cannot attach to "${end.node}" (a ${target.type})`);
-  if (target.page !== page) throw new CommandError(`${command}: "${name}" is attached to "${end.node}", which is on another page`);
+  const error = endError(ctx.store.doc, ctx.registries, end, page);
+  if (error !== null) throw new CommandError(`${command}: "${name}" ${error}`);
 }
 
 type ConnectorCreateArgs = {
@@ -218,13 +215,13 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   let after: Record<string, unknown> = { ...before };
   for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
   const type = ctx.registries.nodeTypes.get(node.type);
-  const updateCtx = { registries: ctx.registries };
+  const updateCtx = { registries: ctx.registries, doc: ctx.store.doc };
   if (type?.completeUpdate) after = type.completeUpdate(node, after as unknown as Node, patch, updateCtx) as unknown as Record<string, unknown>;
   // A value the patch gives again as it is, is no change: the commit stays as small as what actually changes.
   const changed = Object.keys(after).filter((key) => !sameValue(after[key], before[key]));
   for (const key of changed) {
     const value = after[key];
-    const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx) ?? null);
+    const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null);
     if (error !== null) throw new CommandError(`${command}: ${error}`);
     if (key === "page" && !ctx.store.doc.pages.some((p) => p.id === value)) throw new CommandError(`${command}: there is no page "${String(value)}"`);
   }

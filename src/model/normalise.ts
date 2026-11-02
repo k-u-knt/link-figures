@@ -1,7 +1,7 @@
 import { current, isDraft } from "immer";
 import { resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
-import { attachTarget } from "./attach";
+import { attachTarget, nearestAnchor } from "./attach";
 import { pageOriginsPx, type Pt } from "./geometry";
 import { DocumentStore } from "./store";
 import type { ConnectorNode, Document, End } from "./types";
@@ -28,8 +28,6 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
 }
 
 const isConnector = (n: { type: string }): n is ConnectorNode => n.type === "connector";
-
-const squaredDistance = (a: Pt, b: Pt): number => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 
 /**
  * Keeps every connector in step with what its ends are attached to:
@@ -60,9 +58,7 @@ export function connectorNormaliser(registries: Registries): Normaliser {
         } else if (end.snap === "anchor") {
           const anchors = attachTarget(now, registries, end.node)?.anchors ?? [];
           if (anchors.length > 0 && !anchors.some((a) => a.id === end.anchor)) {
-            const at = resolved.ends[i].pt;
-            const nearest = anchors.reduce((a, b) => (squaredDistance(b, at) < squaredDistance(a, at) ? b : a));
-            ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "anchor", anchor: nearest.id });
+            ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "anchor", anchor: nearestAnchor(anchors, resolved.ends[i].pt).id });
           }
         } else if ("anchor" in end) {
           ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "center" });

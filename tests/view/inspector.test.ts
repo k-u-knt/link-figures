@@ -1,5 +1,6 @@
 import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
+import { createFigureStore } from "../../src/model/normalise";
 import { DocumentStore } from "../../src/model/store";
 import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
@@ -28,15 +29,24 @@ const fileType = {
   ],
 } as unknown as NodeType;
 
-function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {}) {
+/**
+ * An inspector on a figure that `build` fills. With `figure`, the connector node type, the routes and the caps are
+ * registered and the store is a figure's (`createFigureStore`, with the connector normaliser), as the view's is.
+ */
+function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {}, options: { figure?: boolean } = {}) {
   const doc = createDocument("a4-portrait");
   build(doc);
-  const store = new DocumentStore(doc);
   const registries = createRegistries();
   registries.nodeTypes.register(fileType);
   for (const paint of builtinPaintTypes) registries.paints.register(paint);
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
   registries.nodeTypes.register(shapeNodeType);
+  if (options.figure) {
+    registries.nodeTypes.register(connectorNodeType);
+    for (const route of builtinRoutes) registries.routes.register(route);
+    for (const cap of builtinCapKinds) registries.caps.register(cap);
+  }
+  const store = options.figure ? createFigureStore(doc, registries) : new DocumentStore(doc);
   // The inspector's node writes run the node.update command.
   for (const command of drawingCommands()) registries.commands.register(command);
   const selection = new SelectionState();
@@ -52,12 +62,14 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
     commandContext: () => ({ app: {} as never, registries, view, store, selection: selection.ids, page: view.focusPage() }),
   };
   const el = new FakeEl("div");
-  const inspector = new Inspector(view as never, el as never);
+  // What the view shows as notices.
+  const notices: string[] = [];
+  const inspector = new Inspector(view as never, el as never, undefined, (message) => notices.push(message));
   // What the figure view does: render on every store change and every selection change.
   store.subscribe(() => inspector.render());
   selection.onChange(() => inspector.render());
   inspector.render();
-  return { doc, store, selection, view, el, inspector, labels: () => labelsOf(store) };
+  return { doc, store, selection, view, el, inspector, notices, labels: () => labelsOf(store) };
 }
 
 const labelsOf = (store: DocumentStore) => {
@@ -716,21 +728,24 @@ describe("shape fields", () => {
 });
 
 describe("connector fields", () => {
+  /**
+   * A rectangle `p-a` (10, 20, 100 × 50) and a connector `p-c` from its east anchor to a free point straight below its
+   * centre, on a figure's store (the real connector normaliser), with the connector selected.
+   */
   function connected() {
     const s = setup((d) => {
+      // One page id, so two figures built this way are equal.
+      d.pages[0].id = "pg-1";
       d.nodes.push({ ...shapeNodeDefaults(d.pages[0], { id: "p-a" }, []), x: 10, y: 20, width: 100, height: 50 });
       const c: ConnectorNode = {
         id: "p-c", type: "connector", page: d.pages[0].id, x: 0, y: 0, width: 0, height: 0, z: 1, rotation: 0, opacity: 1, locked: false,
-        ends: [{ kind: "attached", node: "p-a", snap: "anchor", anchor: "e" }, { kind: "free", x: 300, y: 200 }],
+        ends: [{ kind: "attached", node: "p-a", snap: "anchor", anchor: "e" }, { kind: "free", x: 60, y: 300 }],
         route: "straight", routeParams: {},
         stroke: { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" },
         caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 3 }],
       };
       d.nodes.push(c);
-    });
-    s.view.plugin.registries.nodeTypes.register(connectorNodeType);
-    for (const r of builtinRoutes) s.view.plugin.registries.routes.register(r);
-    for (const c of builtinCapKinds) s.view.plugin.registries.caps.register(c);
+    }, { figure: true });
     s.selection.set(["p-c"]);
     return s;
   }
@@ -745,10 +760,50 @@ describe("connector fields", () => {
     el.control("caps.1.kind").fire("change");
     expect(connectorOf(store).caps).toEqual([{ kind: "none", size: 3 }, { kind: "circle", size: 3 }]);
 
-    el.control("ends.0.snap").value = "center";
+  });
+
+  test("an end's snap switches from anchor to centre and back to the anchor nearest where it is drawn", () => {
+    const { el, store, notices } = connected();
+    const snap = () => el.control("ends.0.snap");
+    snap().value = "center";
+    snap().fire("change");
+    // The figure's normaliser drops the anchor id of a centre-snapped end.
+    expect(connectorOf(store).ends[0]).toEqual({ kind: "attached", node: "p-a", snap: "center" });
+    expect(snap().value).toBe("center");
+
+    // Snapped to the centre, the end is drawn where the line to (60, 300) leaves the box: its bottom middle, the south anchor.
+    snap().value = "anchor";
+    snap().fire("change");
+    expect(connectorOf(store).ends[0]).toEqual({ kind: "attached", node: "p-a", snap: "anchor", anchor: "s" });
+    expect(snap().value).toBe("anchor");
+    expect(notices).toEqual([]);
+  });
+
+  test("a switch to anchor snap gives the document node.update gives for the same patch", () => {
+    const ui = connected();
+    const api = connected();
+    for (const s of [ui, api]) {
+      s.el.control("ends.0.snap").value = "center";
+      s.el.control("ends.0.snap").fire("change");
+    }
+    ui.el.control("ends.0.snap").value = "anchor";
+    ui.el.control("ends.0.snap").fire("change");
+    const command = api.view.plugin.registries.commands.get("node.update")!;
+    command.run(api.view.commandContext() as never, { id: "p-c", patch: { ends: [{ kind: "attached", node: "p-a", snap: "anchor" }, { kind: "free", x: 60, y: 300 }] } });
+    expect(ui.store.doc).toEqual(api.store.doc);
+  });
+
+  test("a write node.update refuses changes nothing and is shown as a notice naming the field", () => {
+    const { el, store, notices } = connected();
+    const before = store.doc;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    el.control("ends.0.snap").value = "sideways";
     el.control("ends.0.snap").fire("change");
-    // This store has no normaliser; the view's drops the anchor id (see the connector normaliser's tests).
-    expect(connectorOf(store).ends[0]).toEqual({ kind: "attached", node: "p-a", snap: "center", anchor: "e" });
+    expect(store.doc).toBe(before);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/^Link Figures: could not change Start snap: node\.update: "ends" must be two ends/);
+    expect(logged).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
   });
 
   test("choosing a route writes that route's default params, as node.update does", () => {

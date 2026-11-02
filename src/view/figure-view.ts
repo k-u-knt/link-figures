@@ -500,7 +500,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.intake = new Intake(this);
     // Once per view: they read `store` when they render, so a new store needs nothing from them (`setDocument` re-renders).
     this.toolbar = new Toolbar(this, this.toolbarEl);
-    this.inspector = new Inspector(this, this.inspectorEl, (limit) => this.notePageLimit(limit));
+    this.inspector = new Inspector(
+      this,
+      this.inspectorEl,
+      (limit) => this.notePageLimit(limit),
+      (message) => new Notice(message),
+    );
     this.selection.onChange(() => this.renderChrome());
     this.applyViewport();
   }

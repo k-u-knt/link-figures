@@ -1,6 +1,6 @@
 import { PT_TO_PX } from "../constants";
 import { resolveConnector } from "../connectors/geometry";
-import { endAt, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
+import { attachTarget, endAt, endError, nearestAnchor, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
 import { rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import { distanceToPath, toSvgPath, type PathData } from "../model/path";
@@ -139,6 +139,8 @@ const SNAP_OPTIONS = [
 /** What `node.update` checks of a connector's own fields, besides its ends and caps (two of each). */
 const CONNECTOR_FIELDS: ParamSpec = { route: { type: "string" }, routeParams: { type: "object" }, stroke: { type: "stroke" } };
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
 const pairOf = (value: unknown, test: (v: unknown) => boolean): boolean => Array.isArray(value) && value.length === 2 && value.every(test);
 
 /** The ids of a connector's two end handles, start then end. A route's own handles are `route.` and the route's id for them. */
@@ -153,6 +155,27 @@ function withEnd(node: ConnectorNode, which: 0 | 1, end: End): ConnectorNode {
 /** The line `node` would draw in `ctx`'s document: what a handle drag shows while it is under way. */
 function previewOf(node: ConnectorNode, ctx: InteractionContext): PathData {
   return resolveConnector(ctx.doc, node, ctx.registries).path;
+}
+
+/**
+ * `node` with each end that is snapped to an anchor but names none given its item's anchor nearest to where the end is
+ * drawn (where an end with an anchor id its item does not have is drawn: as if snapped to the centre). An end whose item
+ * is missing or has no anchors is left as it is, for the checks to refuse. Returns `node` itself when no end needs one.
+ */
+function withNearestAnchors(node: ConnectorNode, ctx: UpdateContext): ConnectorNode {
+  const ends = Array.isArray(node.ends) ? node.ends : [];
+  const lacking = (end: unknown): end is { kind: "attached"; node: string; snap: "anchor" } =>
+    isRecord(end) && end.kind === "attached" && typeof end.node === "string" && end.snap === "anchor" && end.anchor === undefined;
+  if (ends.length !== 2 || !ends.some(lacking)) return node;
+  // Drawn with an anchor id no item has, an end is placed as a centre-snapped one: where the normaliser looks too.
+  const placeholder = ends.map((end) => (lacking(end) ? { ...end, anchor: "" } : end)) as [End, End];
+  const drawn = resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends;
+  const filled = ends.map((end, i) => {
+    if (!lacking(end)) return end;
+    const anchors = attachTarget(ctx.doc, ctx.registries, end.node)?.anchors ?? [];
+    return anchors.length === 0 ? end : { ...end, anchor: nearestAnchor(anchors, drawn[i].pt).id };
+  }) as [End, End];
+  return { ...node, ends: filled };
 }
 
 /** A free end moved by (dx, dy); an attached end stays with its item. */
@@ -198,16 +221,29 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
 
   /**
    * A new route brings its own `routeParams`: the route's defaults (none for a route that is not registered) with the
-   * ones the patch gives over them, in place of the old route's.
+   * ones the patch gives over them, in place of the old route's. An end snapped to an anchor without naming one (the
+   * inspector's switch from centre to anchor) takes its item's anchor nearest to where the end is drawn, the rule the
+   * connector normaliser keeps.
    */
   completeUpdate(before: ConnectorNode, after: ConnectorNode, patch: Record<string, unknown>, ctx: UpdateContext): ConnectorNode {
-    if (after.route === before.route) return after;
-    const given = typeof patch.routeParams === "object" && patch.routeParams !== null ? structuredClone(patch.routeParams) : {};
-    return { ...after, routeParams: { ...ctx.registries.routes.get(after.route)?.defaults(), ...given } };
+    let next = after;
+    if (after.route !== before.route) {
+      const given = typeof patch.routeParams === "object" && patch.routeParams !== null ? structuredClone(patch.routeParams) : {};
+      next = { ...next, routeParams: { ...ctx.registries.routes.get(after.route)?.defaults(), ...given } };
+    }
+    return withNearestAnchors(next, ctx);
   },
 
-  checkField(key: string, value: unknown): string | null {
-    if (key === "ends") return pairOf(value, isEnd) ? null : '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
+  /** Two ends, each free or attached to an item on the connector's page that can be attached to; two caps; the rest by `CONNECTOR_FIELDS`. */
+  checkField(key: string, value: unknown, ctx: UpdateContext, node: ConnectorNode): string | null {
+    if (key === "ends") {
+      if (!pairOf(value, isEnd)) return '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
+      for (const i of [0, 1] as const) {
+        const error = endError(ctx.doc, ctx.registries, (value as End[])[i], node.page);
+        if (error !== null) return `"ends.${i}" ${error}`;
+      }
+      return null;
+    }
     if (key === "caps") return pairOf(value, isCap) ? null : '"caps" must be two caps ({kind, size})';
     return fieldError(CONNECTOR_FIELDS, key, value);
   },

@@ -49,6 +49,8 @@ export interface InspectorContext {
 /** What a node type's part in `node.update` may depend on besides the node. */
 export interface UpdateContext {
   registries: Registries;
+  /** The document as it is before the update: what a node that refers to other nodes (a connector's ends) is checked against. */
+  doc: Document;
 }
 
 /** What a node type's pointer hooks (`hitTest`, `handles`, `dragHandle`) may depend on besides the node. */
@@ -115,10 +117,11 @@ export interface NodeType<N extends Node = Node> {
   completeUpdate?(before: N, after: N, patch: Record<string, unknown>, ctx: UpdateContext): N;
   /**
    * For `node.update`: what is wrong with `value`, one of the type's own top-level fields (`"fill"`, `"ends"`) as the
-   * patch leaves it, or null when it is fine. Called for each such field a patch touches; a key the type does not know
-   * is fine, as the file format keeps unknown keys.
+   * patch leaves it, or null when it is fine. `node` is the whole node as the patch leaves it (after `completeUpdate`),
+   * for a field that depends on another (a connector's ends must be on its page). Called for each such field a patch
+   * touches; a key the type does not know is fine, as the file format keeps unknown keys.
    */
-  checkField?(key: string, value: unknown, ctx: UpdateContext): string | null;
+  checkField?(key: string, value: unknown, ctx: UpdateContext, node: N): string | null;
   /**
    * Whether `pt` (page px) is on the node, for a type that is not hit across its whole box (a line is hit near its path).
    * `tolerance` is how far off it may be, in page px (a few screen px at the current zoom). Without it, the node's box is

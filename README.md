@@ -4,7 +4,7 @@ Link Figures is an Obsidian desktop plugin: a page-based figure and slide editor
 
 A figure is a note (`<name>.lnkfig.md`) that lists its links in a `## Links` section and holds the layout as JSON. Obsidian keeps those links up to date when a source is renamed or moved, like any other link in your vault.
 
-Status: milestone 1, the walking skeleton. Desktop only.
+Status: milestone 2, part 1: shapes, connectors, paints and scripting are in, on top of the milestone 1 walking skeleton. Desktop only.
 
 ## Usage
 
@@ -38,11 +38,11 @@ PDF export sets text in the built-in Helvetica for Arial and Helvetica, and in T
 
 **Shapes.** "Rectangle" and "Ellipse" in the toolbar (the commands `tool.rect` and `tool.ellipse`) arm a drawing tool: drag on a page to draw the shape in the dragged box (hold Shift for a square or a circle), or click to place one of 30 × 20 mm centred on the click. The tool puts itself down after the shape, which is selected. A new shape is filled white and has a 1 pt solid black border. Select it and the inspector shows its fields: for a rectangle "Corner radius" (in mm; rounds the corners, kept within half the short side), then "Fill", a "Border" toggle (off is no border) and, while there is a border, "Border paint", "Border width" (pt) and "Border dash" (Solid, Dashed, Dotted, Dash-dot). An ellipse has no field of its own. "Fill" and every "… paint" field take any of the paint types below.
 
-**Paints.** A fill or a line is painted with one of five types, chosen in the paint's select: None, Solid (a colour and an opacity), Linear gradient (an angle in degrees, 0 left to right and 90 top to bottom, and colour stops), Radial gradient (a centre and a radius as fractions of the box, and colour stops) and Pattern (hatch, reversed hatch, crosshatch, dots or grid, in a colour over an optional background, with a scale and an angle). Gradients and patterns stay vector in both exports.
+**Paints.** A fill or a line is painted with one of five types, chosen in the paint's select: None, Solid (a colour and an opacity), Linear gradient (an angle in degrees, 0 left to right and 90 top to bottom, and colour stops), Radial gradient (a centre as fractions of the box's width and height, a radius as a fraction of its longer side, and colour stops) and Pattern (hatch, reversed hatch, crosshatch, dots or grid, in a colour over an optional background, with a scale and an angle). Gradients and patterns stay vector in both exports.
 
 **Connectors.** "Connector" in the toolbar (`tool.connector`) arms the line tool: drag from one item to another, and the line is drawn between them with an arrowhead at its end. Anything that can be attached to takes an end: a shape, a text label, an image panel or a content card (not another connector). While the tool is armed, the item under the pointer shows its anchors (its four edge midpoints, named `n`, `e`, `s` and `w`), and a drag shows the line it would make. An end dropped on an item is attached to it and follows it when it is moved, resized or rotated (the line leaves along the item's edge, as the item is turned); an end dropped on empty paper is free there. A click draws nothing. The toolbar's "Connector snap" toggle (`connector.snap-mode`) chooses what an end dropped on an item attaches to: "Connector snap: anchor", the nearest anchor, or "Connector snap: centre", the item's centre. The choice is for the open figure and is not saved with it; each end's "Start snap" and "End snap" in the inspector change an attached end afterwards.
 
-Select a connector and the inspector shows its "Route" (Straight, Curved or Orthogonal), the route's own field ("Bend" for curved, from −1 to 1; "Bend position" for orthogonal, from 0 to 1), the line's "Line paint", "Line width" (pt) and "Line dash", and for each end its "Start cap" and "End cap" (None, Arrow, Open arrow, Circle or Bar) with "Start cap size" and "End cap size" (a multiple of the line's width, 3 by default). A selected connector has a handle on each end (drag one onto another item to attach it, or onto paper to free it) and, on a curved or an orthogonal route, a handle on the line that sets its bend. A curved connector whose ends are attached leaves each item square to its edge, so its bend handle may not follow the pointer exactly.
+Select a connector and the inspector shows its "Route" (Straight, Curved or Orthogonal), the route's own field ("Bend" for curved, from −1 to 1; "Bend position" for orthogonal, from 0 to 1), the line's "Line paint", "Line width" (pt) and "Line dash", and for each end its "Start cap" and "End cap" (None, Arrow, Open arrow, Circle or Bar) with "Start cap size" and "End cap size" (a multiple of the line's width, 3 by default). A selected connector has a handle on each end (drag one onto another item to attach it, or onto paper to free it) and, on a curved or an orthogonal route, a handle on the line that sets its bend (on an orthogonal route it is shown only when moving it changes the line: not for a straight run, an L or a U). A curved connector whose ends are attached leaves each item square to its edge, so its bend handle may not follow the pointer exactly.
 
 A connector's box is the area it draws and is set for it; it is never rotated. Deleting an item a connector is attached to leaves the connector's end where it was drawn, free; undo brings the item and the attachment back.
 
@@ -77,7 +77,7 @@ Calls on one figure run one after another, so a script need not await each. With
 | `shape.create` | `kind` (`"rect"`), `x`, `y`, `width`, `height` (page px; required), `id`, `page`, `params`, `fill`, `border` | `{ id }` |
 | `connector.create` | `from`, `to` (ends; required), `route` (`"straight"`), `routeParams`, `stroke`, `caps`, `id`, `page` | `{ id }` |
 | `node.update` | `id`, `patch` (required): a part of the node in its JSON form, merged into it | `{ id }` |
-| `node.move` | `ids` (the selection), `dx`, `dy` (page px; required), `pages` (`true`: each moved node goes to the page under its centre) | `{ ids }` |
+| `node.move` | `ids` (the selection when the figure is open; required headless), `dx`, `dy` (page px; required), `pages` (`true`; with `true` each moved node goes to the page under its centre) | `{ ids }` |
 | `connector.setEnd` | `id`, `which` (0 the start, 1 the end), `end` (required) | `{ id }` |
 | `shape.operate` | `operation` (a registered shape operation), `ids` (required) | `{ added, removed }` |
 
@@ -173,7 +173,7 @@ Milestone 1 also settles three things the design leaves open. Run each check in 
 
 ## Roadmap
 
-M2 is the editor (shapes and lines, fills, alignment, crop, groups, PNG, TIFF and PowerPoint export); M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission. The design, the file format and the milestones are in [docs/superpowers/specs/2026-10-27-link-figures-design.md](docs/superpowers/specs/2026-10-27-link-figures-design.md).
+M2 is the editor: its first part (shapes and connectors, fills and paints, scripting) is in, and alignment, crop, groups, PNG, TIFF and PowerPoint export follow; M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission. The design, the file format and the milestones are in [docs/superpowers/specs/2026-10-27-link-figures-design.md](docs/superpowers/specs/2026-10-27-link-figures-design.md).
 
 ## Development
 

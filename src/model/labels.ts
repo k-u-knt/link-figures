@@ -5,7 +5,7 @@ const LABEL_WORDS = 4;
 
 /**
  * A node as a person would name it, for messages: a panel by its file's name, a text node by its first words, a shape
- * by its kind, each followed by its page's name (left out when the node's page is not in the document).
+ * by its kind, a connector as such, each followed by its page's name (left out when the node's page is not in the document).
  */
 export function nodeLabel(doc: Document, node: Node): string {
   const page = doc.pages.find((p) => p.id === node.page);
@@ -15,6 +15,7 @@ export function nodeLabel(doc: Document, node: Node): string {
     return name === "" ? `Panel (no link)${where}` : `Panel "${name}"${where}`;
   }
   if (node.type === "shape") return `Shape "${node.kind}"${where}`;
+  if (node.type === "connector") return `Connector${where}`;
   const words = node.text.split(/\s+/).filter((w) => w !== "");
   const quoted = words.slice(0, LABEL_WORDS).join(" ") + (words.length > LABEL_WORDS ? "…" : "");
   return `Text "${quoted}"${where}`;

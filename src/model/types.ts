@@ -113,7 +113,33 @@ export interface ShapeNode extends NodeBase {
   border: Stroke | null;
 }
 
-export type Node = FileNode | TextNode | ShapeNode;
+/**
+ * One end of a connector: a free point in page px, or attached to an item (any node whose type is `attachable`) at one of
+ * its anchors or at its centre. An attached end stores no point of its own; it is resolved from the item at render time.
+ */
+export type End =
+  | { kind: "free"; x: number; y: number }
+  | { kind: "attached"; node: NodeId; snap: "anchor"; anchor: string }
+  | { kind: "attached"; node: NodeId; snap: "center" };
+
+/** What a connector draws at one end: `kind` is a registered cap kind's id (an unknown one is kept as it is), `size` a multiple of the stroke's width. */
+export type Cap = { kind: string; size: number };
+
+/**
+ * A line between two ends: `route` is a registered route's id (an unknown one is kept as it is) and `routeParams` that
+ * route's own attributes. `caps` are drawn at the start and the end. The box (`x, y, width, height`) holds the bounds of
+ * what is drawn; a connector is never rotated.
+ */
+export interface ConnectorNode extends NodeBase {
+  type: "connector";
+  ends: [End, End];
+  route: string;
+  routeParams: Record<string, unknown>;
+  stroke: Stroke;
+  caps: [Cap, Cap];
+}
+
+export type Node = FileNode | TextNode | ShapeNode | ConnectorNode;
 
 export interface Document {
   version: 1;

@@ -1,6 +1,7 @@
 import { MarkdownView, Notice, Plugin, type TFile, type WorkspaceLeaf } from "obsidian";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
+import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE, normalisePageLimit } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
 import { svgExporter } from "./export/exporters/svg";
@@ -39,6 +40,8 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.exporters.register(pdfExporter);
     for (const paint of builtinPaintTypes) this.registries.paints.register(paint);
     for (const kind of builtinShapeKinds) this.registries.shapes.register(kind);
+    for (const route of builtinRoutes) this.registries.routes.register(route);
+    for (const cap of builtinCapKinds) this.registries.caps.register(cap);
     registerBuiltinCommands(this);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));

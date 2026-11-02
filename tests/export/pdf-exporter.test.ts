@@ -259,6 +259,28 @@ test("each layer is its own single-page jsPDF at the figure page's size, and the
   expect(calls).toHaveLength(9);
 });
 
+test("what a PDF panel's node type draws over it (its frame) is a layer of its own, right above the panel", async () => {
+  const f = panelFigure();
+  // The file type's overlay: a marker for a node with a frame, nothing for one without.
+  f.i.registries.nodeTypes.register({ ...markerType("file"), overlaySvg: (node: Node) => ((node as FileNode).frame ? `<g id="${node.id}-frame"/>` : "") } as NodeType);
+  const source = await sourcePdf([[300, 200]]);
+  const framed = f.panel(f.first, 0, [40, 30, 300, 200], pdfAsset(source), { frame: { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" } });
+  f.panel(f.first, 1, [0, 0, 100, 100], pdfAsset(source));
+  const drawPage = spyOnDrawPage();
+
+  await pdfExporter.run(f.i, {});
+
+  // The paper, the framed panel, its frame, the plain panel (with no overlay layer), then page 2.
+  const [paper, frame, second] = svgCalls();
+  expect(paper).toContain("<rect width=");
+  expect(frame).toContain(`id="${framed.id}-frame"`);
+  expect(frame).not.toContain("<rect");
+  expect(frame).not.toContain(`id="${framed.id}"`);
+  expect(second).toBe("<svg>Page 2</svg>");
+  const sizes = drawn(drawPage).map((o) => o.width);
+  expect(sizes).toEqual([expect.closeTo(183 * MM_TO_PT), expect.closeTo(300), expect.closeTo(183 * MM_TO_PT), expect.closeTo(100), expect.closeTo(210 * MM_TO_PT)]);
+});
+
 test("a PDF panel below everything leaves an empty first layer that still draws the paper", async () => {
   const f = panelFigure();
   f.panel(f.first, 0, [0, 0, 300, 200], pdfAsset(await sourcePdf([[300, 200]])));

@@ -15,6 +15,8 @@ export interface BuildOptions {
   only?: Set<NodeId>;
   /** `false` leaves the paper rectangle out, for a transparent layer. */
   paper?: boolean;
+  /** Draw only the nodes' overlays (`NodeType.overlaySvg`), for what is drawn over a PDF panel embedded on its own. */
+  overlaysOnly?: boolean;
 }
 
 /** A node's fragment, wrapped in a group when it is translucent or rotated (about its own centre). */
@@ -32,6 +34,7 @@ function wrap(node: Node, fragment: string): string {
  *
  * A node type that returns `"raster"` is drawn from the raster asset the caller made of it (see `collectAssets`).
  * What could not be drawn faithfully is reported in `warnings`: nodes that were rasterised, and nodes that were skipped.
+ * A node type's overlay (`overlaySvg`) is drawn over the node, in the same group. `drawn` counts the nodes that drew something.
  */
 export function buildPageSvg(
   doc: Document,
@@ -39,7 +42,7 @@ export function buildPageSvg(
   registries: Registries,
   assets: AssetMap,
   opts: BuildOptions = {},
-): { svg: string; warnings: string[] } {
+): { svg: string; warnings: string[]; drawn: number } {
   const size = pageSizePx(page);
   const defs: string[] = [];
   const warnings: string[] = [];
@@ -70,6 +73,11 @@ export function buildPageSvg(
       warnings.push(`${nodeLabel(doc, node)}: no node type "${node.type}" is registered, skipped`);
       continue;
     }
+    if (opts.overlaysOnly) {
+      const overlay = type.overlaySvg?.(node, ctx) ?? "";
+      if (overlay !== "") body.push(wrap(node, overlay));
+      continue;
+    }
     const before = warnings.length;
     let fragment = type.toSvg(node, ctx);
     if (fragment === "raster") {
@@ -84,7 +92,7 @@ export function buildPageSvg(
         `preserveAspectRatio="none"/>`;
       warnings.push(`${nodeLabel(doc, node)} rasterised`);
     }
-    body.push(wrap(node, fragment));
+    body.push(wrap(node, fragment + (type.overlaySvg?.(node, ctx) ?? "")));
   }
 
   const parts = [
@@ -93,5 +101,5 @@ export function buildPageSvg(
   if (defs.length > 0) parts.push(`<defs>${defs.join("")}</defs>`);
   if (opts.paper !== false) parts.push(`<rect width="${size.width}" height="${size.height}" fill="${escapeAttr(page.paper)}"/>`);
   parts.push(...body, "</svg>");
-  return { svg: parts.join("\n"), warnings };
+  return { svg: parts.join("\n"), warnings, drawn: body.length };
 }

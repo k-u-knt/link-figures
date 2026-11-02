@@ -88,6 +88,11 @@ export interface NodeType<N extends Node = Node> {
   /** An SVG fragment, or `"raster"` to have the node rendered by the DOM and embedded as an image. */
   toSvg(node: N, ctx: SvgContext): string | "raster";
   /**
+   * An SVG fragment drawn over the node's own drawing, whether that is `toSvg`'s fragment, a raster the DOM made of the
+   * node, or a PDF panel's page embedded as vectors (a file panel's frame). The empty string draws nothing.
+   */
+  overlaySvg?(node: N, ctx: SvgContext): string;
+  /**
    * Opts the type in to being attached to by connectors: its outline and anchors in page px, with the node's rotation
    * applied. A type that does not implement it (a connector) cannot be attached to.
    */

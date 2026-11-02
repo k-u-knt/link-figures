@@ -2,9 +2,27 @@ import { inlineSvg, svgIntrinsicSize, svgRootAttributes } from "../export/inline
 import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { cropPlacement, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
+import { rectPath, toSvgPath } from "../model/path";
 import type { Resolved } from "../links/types";
 import type { Crop, FileNode } from "../model/types";
 import type { SvgContext } from "../registry/node-type";
+import { paintToSvg, strokeAttrs } from "../registry/paint";
+
+/** What drawing a frame needs: the paints and the SVG it goes into. Warnings are said without the node's label; the caller adds it. */
+export type FrameSvgContext = Pick<SvgContext, "registries" | "defs" | "warnings" | "uid">;
+
+/**
+ * The node's frame as an SVG fragment, in page px and unrotated: its box (the panel's rectangle, whatever the crop and
+ * fit show inside it) stroked on its edge, half inside and half outside, with the paint laid out in the box. A node
+ * without a frame draws nothing (the empty string).
+ */
+export function fileFrameSvg(node: FileNode, ctx: FrameSvgContext): string {
+  if (!node.frame) return "";
+  const box = { x: node.x, y: node.y, width: node.width, height: node.height };
+  const paint = paintToSvg(ctx.registries.paints, node.frame.paint, box, ctx);
+  ctx.defs.push(...paint.defs);
+  return `<path d="${toSvgPath(rectPath(box, 0))}" fill="none" ${strokeAttrs(node.frame, paint.ref, paint.opacity)}/>`;
+}
 
 /**
  * The node's image drawn at its crop and fit, clipped to the crop's region of the node's rectangle, so that with `contain`

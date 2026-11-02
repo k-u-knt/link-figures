@@ -1,11 +1,14 @@
-import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
+import { Window } from "happy-dom";
+import { builtinPaintTypes } from "../../src/paint/builtin";
+import { createDocument, createPage, defaultBorder, fileNodeDefaults } from "../../src/model/defaults";
+import { strokeFields } from "../../src/registry/paint";
 import type { FileNode } from "../../src/model/types";
 import { createRegistries } from "../../src/registry";
 
 // `obsidian` ships only typings, so this module cannot be loaded for real; the parts under test never touch it.
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
 const { fileNodeType, fileNodeSvg } = await import("../../src/nodes/file-node");
-const { fileNodeSvg: pureFileNodeSvg } = await import("../../src/nodes/file-node-svg");
+const { fileNodeSvg: pureFileNodeSvg, fileFrameSvg } = await import("../../src/nodes/file-node-svg");
 
 const page = createPage("a4-portrait", []);
 const noCtx = { registries: createRegistries() };
@@ -24,14 +27,22 @@ test("the type is registered as 'file', named, with the image icon", () => {
 
 test("bounds are the node's rectangle", () => expect(fileNodeType.bounds(node())).toEqual({ x: 10, y: 20, width: 100, height: 50 }));
 
+const FRAME_TOGGLE = { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() };
+
 test("the inspector offers a Page field for pdf and tiff targets only", () => {
-  const page = [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }];
+  const page = [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }, FRAME_TOGGLE];
   expect(fileNodeType.inspector(node({ file: "plot.pdf" }), noCtx)).toEqual(page);
   expect(fileNodeType.inspector(node({ file: "figs/cells.TIF" }), noCtx)).toEqual(page);
   expect(fileNodeType.inspector(node({ file: "cells.tiff" }), noCtx)).toEqual(page);
-  expect(fileNodeType.inspector(node({ file: "plot.png" }), noCtx)).toEqual([]);
-  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2" }), noCtx)).toEqual([]);
-  expect(fileNodeType.inspector(node({ file: "v1.2/analysis" }), noCtx)).toEqual([]);
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), noCtx)).toEqual([FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2" }), noCtx)).toEqual([FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "v1.2/analysis" }), noCtx)).toEqual([FRAME_TOGGLE]);
+});
+
+test("the inspector's Frame toggle is off for no frame; with a frame, its paint, width and dashes follow", () => {
+  expect(fileNodeType.inspector(node({ frame: defaultBorder() }), noCtx)).toEqual([FRAME_TOGGLE, ...strokeFields("frame", "Frame")]);
+  expect(fileNodeType.checkField?.("frame", null, noCtx)).toBeNull();
+  expect(fileNodeType.checkField?.("frame", defaultBorder(), noCtx)).toBeNull();
 });
 
 test("file-node re-exports the pure SVG function", () => expect(fileNodeSvg).toBe(pureFileNodeSvg));
@@ -73,6 +84,10 @@ class FakeEl {
   naturalHeight = 0;
   private readonly listeners = new Map<string, (() => void)[]>();
   readonly classList = { toggle: () => true };
+  readonly ownerDocument = { importNode: <T>(node: T) => node };
+  replaceChildren(...nodes: FakeEl[]): void {
+    this.children = nodes;
+  }
   createEl(_tag: string, info: { cls?: string | string[] } = {}): FakeEl {
     const el = new FakeEl();
     if (info.cls) el.cls = Array.isArray(info.cls) ? info.cls : [info.cls];
@@ -149,5 +164,38 @@ describe("the picture on the stage", () => {
     renderer.update({ ...n, crop: rightHalf, fit: "contain", height: 50 });
     expect(box(frame)).toEqual(["75px", "0px", "50px", "50px"]);
     expect(box(img)).toEqual(["-50px", "0px", "100px", "50px"]);
+  });
+});
+
+describe("the frame on the stage", () => {
+  const registries = () => {
+    const r = createRegistries();
+    for (const paint of builtinPaintTypes) r.paints.register(paint);
+    return r;
+  };
+  const hatch = { type: "pattern", pattern: "hatch", fg: "#123456", bg: null, scale: 1, angle: 0 };
+
+  beforeEach(() => vi.stubGlobal("DOMParser", new Window().DOMParser));
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("is an SVG of the export's fragment over the node's box, between the body and the badge, and follows edits", () => {
+    const n = node({ frame: { paint: hatch, width: 3, dash: "solid" } });
+    const host = new FakeEl();
+    const ctx = { registries: registries(), resolved: () => undefined, openLink: () => {}, component: {} };
+    const renderer = fileNodeType.mount(n, host as unknown as HTMLElement, ctx as never);
+    const [, frameEl] = host.children[0].children;
+    expect(frameEl.cls).toEqual(["lf-frame"]);
+    const svg = frameEl.children[0] as unknown as Element;
+    expect(svg.getAttribute("viewBox")).toBe("10 20 100 50");
+    const defs: string[] = [];
+    const uids = new Map<string, number>();
+    const fragment = fileFrameSvg(n, { registries: ctx.registries, defs, warnings: [], uid: (p) => `${p}-${(uids.set(p, (uids.get(p) ?? 0) + 1), uids.get(p))}` });
+    // The DOM writes empty elements with an end tag; the export writes them self-closed.
+    const markup = svg.outerHTML.replace(/lf-file-\d+-/g, "").replace(/><\/(path|stop|rect|circle)>/g, "/>");
+    expect(markup).toContain(fragment);
+    expect(markup).toContain(defs[0]);
+
+    renderer.update({ ...n, frame: null });
+    expect(frameEl.children).toEqual([]);
   });
 });

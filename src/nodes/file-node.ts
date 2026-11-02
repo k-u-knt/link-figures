@@ -3,14 +3,22 @@ import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
 import { boxAttachable } from "../model/attach";
+import { defaultBorder } from "../model/defaults";
 import { cropPlacement, type Rect } from "../model/geometry";
+import { nodeLabel } from "../model/labels";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import { strokeFields } from "../registry/paint";
 import { fieldError, type ParamSpec } from "../registry/params";
-import { fileNodeSvg, skippedReason } from "./file-node-svg";
+import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
 
-export { fileNodeSvg, skippedReason };
+export { fileFrameSvg, fileNodeSvg, skippedReason };
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Stage renderers made so far: each one's ids start with its own number, so two frames' gradients never share an id. */
+let renderers = 0;
 
 type Size = { width: number; height: number };
 /** A caller of `naturalSize()` waiting for the image to load. */
@@ -40,15 +48,22 @@ function extensionOf(path: string): string {
 type BodyKind = "pending" | "image" | "content" | "missing";
 
 /**
- * One file node's DOM: `.lf-node` holding the body (the image, the rendered note section, or a placeholder) and the
- * badge that opens the link. What the body shows comes from `ctx.resolved(id)`; `update` re-reads it.
+ * One file node's DOM: `.lf-node` holding the body (the image, the rendered note section, or a placeholder), the frame
+ * (an inline `<svg>` of the fragment the export draws, `fileFrameSvg`, over the body) and the badge that opens the link.
+ * What the body shows comes from `ctx.resolved(id)`; `update` re-reads it.
  * Also answers `naturalSize()` (see `NodeHost.naturalSize`).
  */
 class FileNodeRenderer implements NodeRenderer {
   private node: FileNode;
   private readonly el: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly frameEl: HTMLElement;
   private readonly badge: HTMLElement;
+  private readonly idPrefix = `lf-file-${++renderers}`;
+  /** The markup the frame was last drawn from (empty for no frame), so an update that does not change it leaves it be. */
+  private frameMarkup = "";
+  /** What drawing the frame last warned about, so it is logged once, and again only when it changes. */
+  private warned = "";
 
   /** The `Resolved` the body was built from; `null` before the first build, `undefined` while the node is unresolved. */
   private renderedResolved: Resolved | undefined | null = null;
@@ -70,6 +85,7 @@ class FileNodeRenderer implements NodeRenderer {
     this.node = node;
     this.el = host.createDiv({ cls: "lf-node" });
     this.body = this.el.createDiv({ cls: "lf-node-body" });
+    this.frameEl = this.el.createDiv({ cls: "lf-frame" });
     this.badge = this.el.createDiv({ cls: "lf-badge" });
     setIcon(this.badge, "link");
     this.badge.addEventListener("click", (evt) => this.ctx.openLink(joinLinktext(this.node.file, this.node.subpath), evt));
@@ -79,6 +95,7 @@ class FileNodeRenderer implements NodeRenderer {
   update(node: FileNode): void {
     this.node = node;
     this.applyBox();
+    this.drawFrame();
     const resolved = this.ctx.resolved(node.id);
     if (resolved !== this.renderedResolved) this.renderBody(resolved);
     else this.refreshBody();
@@ -107,6 +124,41 @@ class FileNodeRenderer implements NodeRenderer {
     style.zIndex = String(n.z);
     style.transform = n.rotation === 0 ? "" : `rotate(${n.rotation}deg)`;
     style.opacity = n.opacity === 1 ? "" : String(n.opacity);
+  }
+
+  /** The frame drawn over the node's box, or nothing when the node has none. */
+  private drawFrame(): void {
+    const n = this.node;
+    const defs: string[] = [];
+    const warnings: string[] = [];
+    const counters = new Map<string, number>();
+    const uid = (prefix: string): string => {
+      const count = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, count);
+      return `${this.idPrefix}-${prefix}-${count}`;
+    };
+    const fragment = fileFrameSvg(n, { registries: this.ctx.registries, defs, warnings, uid });
+    const said = warnings.join("\n");
+    if (said !== "" && said !== this.warned) console.warn(`Link Figures: frame of ${n.id}: ${warnings.join("; ")}`);
+    this.warned = said;
+    const markup =
+      fragment === ""
+        ? ""
+        : `<svg xmlns="${SVG_NS}" viewBox="${n.x} ${n.y} ${n.width} ${n.height}" preserveAspectRatio="none">` +
+          `${defs.length > 0 ? `<defs>${defs.join("")}</defs>` : ""}${fragment}</svg>`;
+    if (markup === this.frameMarkup) return;
+    this.frameMarkup = markup;
+    if (markup === "") {
+      this.frameEl.replaceChildren();
+      return;
+    }
+    const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
+    if (parsed.getElementsByTagName("parsererror").length > 0) {
+      console.error(`Link Figures: could not draw the frame of ${n.id}`);
+      this.frameEl.replaceChildren();
+      return;
+    }
+    this.frameEl.replaceChildren(this.el.ownerDocument.importNode(parsed.documentElement, true));
   }
 
   private renderBody(resolved: Resolved | undefined): void {
@@ -263,9 +315,17 @@ export const fileNodeType: NodeType<FileNode> = {
     return { x: node.x, y: node.y, width: node.width, height: node.height };
   },
 
-  /** M2 adds the rest. */
+  /**
+   * The page of a paged file, then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
+   * frame, its paint, width and dashes.
+   */
   inspector(node: FileNode): Field[] {
-    return PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
+    const page: Field[] = PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
+    return [
+      ...page,
+      { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() },
+      ...(node.frame ? strokeFields("frame", "Frame") : []),
+    ];
   },
 
   /** Its box, rotated: anchors `n e s w`. */
@@ -278,5 +338,13 @@ export const fileNodeType: NodeType<FileNode> = {
     // A rasterised content card is the exporter's business, not an asset of this node type.
     const fileAsset: FileAsset | SkippedAsset | undefined = asset && asset.kind !== "raster" ? asset : undefined;
     return fileNodeSvg(node, fileAsset, ctx);
+  },
+
+  /** The frame, over whatever draws the panel: its picture, a raster of its card, or its PDF page embedded as vectors. */
+  overlaySvg(node: FileNode, ctx: SvgContext): string {
+    const warnings: string[] = [];
+    const fragment = fileFrameSvg(node, { registries: ctx.registries, defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix) });
+    for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
+    return fragment;
   },
 };

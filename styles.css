@@ -287,12 +287,20 @@
 
 /* A shape draws its outline in an SVG over its box; a border wider than the box shows outside it. A connector's box is already the area it draws. */
 .lf-shape > svg,
-.lf-connector > svg {
+.lf-connector > svg,
+.lf-frame > svg {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+/* A file panel's frame, drawn over its body and centred on its box's edge; clicks go through to the node. */
+.lf-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 /* The picture is placed by script (crop and fit), not by object-fit: the frame at the crop's region, the image inside it. */

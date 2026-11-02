@@ -9,6 +9,7 @@ import type { AssetMap, PdfAsset } from "../asset-types";
 import { pdfPanelPlacement, splitLayers, type Layer, type PdfPlacement } from "../pdf-layers";
 import { buildPageSvg } from "../svg-builder";
 import { normaliseUserSpaceMarkers } from "../svg-markers";
+import { outlinePaintedStrokes } from "../svg-stroke-paints";
 
 const PDF_MIME = "application/pdf";
 const SVG_MIME = "image/svg+xml";
@@ -45,20 +46,40 @@ function createPdf(jsPDF: JsPdfConstructor, page: Page): JsPdf {
 }
 
 /**
- * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
- * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width).
+ * Names what an element of the page's SVG belongs to, for a warning: the node whose inlined content it is (the SVG
+ * builder starts the ids of a linked SVG's content with the node's id and a hyphen), else the page.
  */
-async function drawSvg(pdf: JsPdf, svg: string, page: Page): Promise<void> {
-  await pdf.svg(parseSvg(normaliseUserSpaceMarkers(svg), page), { x: 0, y: 0, width: page.width, height: page.height });
+function ownerLabel(doc: Document, page: Page): (el: Element) => string {
+  const nodes = doc.nodes.filter((n) => n.page === page.id);
+  return (el) => {
+    for (let node: Element | null = el; node; node = node.parentElement) {
+      const id = node.getAttribute("id");
+      const owner = id === null ? undefined : nodes.find((n) => id.startsWith(`${n.id}-`));
+      if (owner) return nodeLabel(doc, owner);
+    }
+    return `Page "${page.name}"`;
+  };
+}
+
+/**
+ * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
+ * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width), and gradient
+ * and pattern strokes, which svg2pdf.js leaves unpainted, for their outlines filled with the paint. What could not be
+ * drawn so is added to `warnings`.
+ */
+async function drawSvg(pdf: JsPdf, svg: string, doc: Document, page: Page, warnings: Set<string>): Promise<void> {
+  const outlined = outlinePaintedStrokes(normaliseUserSpaceMarkers(svg), ownerLabel(doc, page));
+  for (const warning of outlined.warnings) warnings.add(warning);
+  await pdf.svg(parseSvg(outlined.svg, page), { x: 0, y: 0, width: page.width, height: page.height });
 }
 
 /** One PDF holding a page per figure page, each drawn from its own SVG. */
-async function plainPdf(jsPDF: JsPdfConstructor, pages: Page[], svgs: string[]): Promise<Blob> {
+async function plainPdf(jsPDF: JsPdfConstructor, doc: Document, pages: Page[], svgs: string[], warnings: Set<string>): Promise<Blob> {
   // jsPDF starts with one page, so the first page sets the document up and the rest are added.
   const pdf = createPdf(jsPDF, pages[0]);
   for (const [i, page] of pages.entries()) {
     if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
-    await drawSvg(pdf, svgs[i], page);
+    await drawSvg(pdf, svgs[i], doc, page, warnings);
   }
   return pdf.output("blob");
 }
@@ -111,9 +132,9 @@ interface PagePlan {
 }
 
 /** The layer's SVG drawn by svg2pdf.js on a jsPDF page of its own, as the bytes of that one-page PDF. */
-async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, page: Page): Promise<ArrayBuffer> {
+async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, doc: Document, page: Page, warnings: Set<string>): Promise<ArrayBuffer> {
   const pdf = createPdf(jsPDF, page);
-  await drawSvg(pdf, svg, page);
+  await drawSvg(pdf, svg, doc, page, warnings);
   return pdf.output("arraybuffer");
 }
 
@@ -162,9 +183,10 @@ async function drawPdfPanel(doc: Document, lib: PdfLib, out: PDFDocument, target
 /**
  * The same document for figures with PDF panels. svg2pdf.js can only draw a PDF panel from its raster, so the page is
  * composed in layers instead: each run of other nodes is drawn on its own as vectors and embedded as a page, and each PDF
- * panel's source page is embedded as a page of its own, all stacked on one output page in z order.
+ * panel's source page is embedded as a page of its own, with what its node type draws over it (its frame) as a layer
+ * of its own on top, all stacked on one output page in z order.
  */
-async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: PagePlan[]): Promise<Blob> {
+async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: PagePlan[], warnings: Set<string>): Promise<Blob> {
   const lib = await import("@cantoo/pdf-lib");
   const out = await lib.PDFDocument.create();
   for (const { page, svg: pageSvg, panels, layers } of plans) {
@@ -179,6 +201,12 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
           throw new Error(`${node ? nodeLabel(input.doc, node) : `Node ${layer.nodeId}`} is not a PDF panel`);
         }
         await drawPdfPanel(input.doc, lib, out, target, page, panel);
+        const assets = input.assets.get(page.id) ?? new Map();
+        const overlay = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([layer.nodeId]), paper: false, overlaysOnly: true });
+        if (overlay.drawn > 0) {
+          const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, overlay.svg, input.doc, page, warnings));
+          target.drawPage(embedded, { x: 0, y: 0, width, height });
+        }
         continue;
       }
       // Only the first layer has the paper; a layer with no nodes (the first, below a panel) is just that.
@@ -191,7 +219,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
               only: new Set(layer.nodeIds),
               paper: index === 0,
             }).svg;
-      const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, page));
+      const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, input.doc, page, warnings));
       target.drawPage(embedded, { x: 0, y: 0, width, height });
     }
   }
@@ -231,11 +259,12 @@ export const pdfExporter: Exporter = {
     await import("svg2pdf.js");
 
     const name = `${input.baseName}.pdf`;
+    const strokes = new Set<string>();
     if (plans.every((plan) => plan.panels.size === 0)) {
-      const blob = await plainPdf(jsPDF, input.pages, plans.map((plan) => plan.svg));
-      return { files: [{ name, blob }], warnings: [...input.warnings, ...fonts] };
+      const blob = await plainPdf(jsPDF, input.doc, input.pages, plans.map((plan) => plan.svg), strokes);
+      return { files: [{ name, blob }], warnings: [...input.warnings, ...fonts, ...strokes] };
     }
-    const blob = await layeredPdf(jsPDF, input, plans);
-    return { files: [{ name, blob }], warnings: [...input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)), ...fonts] };
+    const blob = await layeredPdf(jsPDF, input, plans, strokes);
+    return { files: [{ name, blob }], warnings: [...input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)), ...fonts, ...strokes] };
   },
 };

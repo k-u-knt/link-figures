@@ -1,7 +1,7 @@
 import { nodeLabel } from "../../src/model/labels";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { Resolved } from "../../src/links/types";
-import { NodeTypeRegistry } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
 import type { Exporter } from "../../src/registry/exporter";
 import { fakeVault, FakeTFile } from "./fake-vault";
 
@@ -54,9 +54,9 @@ class FakeImage {
 beforeEach(() => vi.stubGlobal("Image", FakeImage));
 afterEach(() => vi.unstubAllGlobals());
 
-const nodeTypes = () => {
-  const r = new NodeTypeRegistry();
-  r.register(fileNodeType);
+const registries = () => {
+  const r = createRegistries();
+  r.nodeTypes.register(fileNodeType);
   return r;
 };
 
@@ -98,7 +98,7 @@ test("each page gets its own assets and SVG, and the files are written to the fo
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "exports", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(vault.calls).toEqual(["createFolder exports", "createBinary exports/Fig - Page 1.svg", "createBinary exports/Fig - Page 2.svg"]);
@@ -113,7 +113,7 @@ test("each page gets its own assets and SVG, and the files are written to the fo
 test("the exporter is given the pages asked for, with their SVGs, their assets, the node types, the dpi and the base name", async () => {
   const { doc, png, resolved } = figure();
   const { app } = world();
-  const types = nodeTypes();
+  const types = registries();
   let seen: Parameters<Exporter["run"]>[0] | undefined;
   const spy: Exporter = {
     ...svgExporter,
@@ -124,10 +124,10 @@ test("the exporter is given the pages asked for, with their SVGs, their assets, 
   };
   await runExport(
     { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 150, maxPageSizeMm: 2000 },
-    { app, nodeTypes: types, resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: types, resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(seen?.pages).toEqual([doc.pages[0]]);
-  expect(seen?.nodeTypes).toBe(types);
+  expect(seen?.registries).toBe(types);
   expect([...(seen?.svgs.keys() ?? [])]).toEqual([doc.pages[0].id]);
   expect(seen?.assets.get(doc.pages[0].id)?.get(png.id)?.kind).toBe("image");
   expect(seen).toMatchObject({ baseName: "Fig", dpi: 150, doc });
@@ -139,7 +139,7 @@ test("what could not be embedded comes back as warnings, from the collection and
   const { app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(out.warnings).toEqual([
@@ -155,7 +155,7 @@ test("an exporter that fails stops the export before anything is written", async
   await expect(
     runExport(
       { exporter: failing, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300, maxPageSizeMm: 2000 },
-      { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+      { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
     ),
   ).rejects.toThrow("no way");
   expect(vault.calls).toEqual([]);
@@ -166,7 +166,7 @@ test("a figure with an empty page exports a sheet of paper", async () => {
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Blank", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out).toEqual({ files: 1, warnings: [] });
   expect(text(vault.content.get("Blank - Page 1.svg"))).toContain('<rect width="793.7007874015749" height="1122.5196850393702" fill="#ffffff"/>');
@@ -185,7 +185,7 @@ test("two pages with the same name are written to two files, and the rename is a
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.files).toBe(2);
   expect(vault.calls).toEqual(["createBinary Fig - Page 2.svg", "createBinary Fig - Page 2 (2).svg"]);
@@ -199,7 +199,7 @@ test("names that only become the same once unsafe characters are replaced do not
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "out", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.files).toBe(3);
   expect(vault.calls).toEqual([
@@ -219,7 +219,7 @@ test("pages with different names produce no rename warning, and the exporter's o
   const { app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.warnings).toEqual([]);
 });
@@ -241,7 +241,7 @@ describe("an export never writes over a source of the figure", () => {
     vault.content.set("Figures/Figure 2.pdf", new TextEncoder().encode("the plot").buffer as ArrayBuffer);
     const out = await runExport(
       { exporter: named("Figure 2.pdf", "Figure 2 - Page 1.svg"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 },
-      { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard("Figures/Figure 2.pdf") },
+      { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard("Figures/Figure 2.pdf") },
     );
     expect(out.files).toBe(1);
     expect(out.warnings).toEqual(["Refused to overwrite Figures/Figure 2.pdf: it is a source of this figure"]);
@@ -254,7 +254,7 @@ describe("an export never writes over a source of the figure", () => {
     const { vault, app } = world();
     const out = await runExport(
       { exporter: named("Figure 2.lnkfig.md", "Legend.md"), doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 },
-      { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard() },
+      { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard() },
     );
     expect(out.files).toBe(0);
     expect(out.warnings).toEqual([
@@ -268,7 +268,7 @@ describe("an export never writes over a source of the figure", () => {
     const doc = createDocument("nature-double");
     const { vault, app } = world();
     const run = { exporter: svgExporter, doc, pages: doc.pages, baseName: "Figure 2", folder: "Figures", dpi: 300, maxPageSizeMm: 2000 };
-    const deps = { app, nodeTypes: nodeTypes(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard("Figures/plot.svg") };
+    const deps = { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard("Figures/plot.svg") };
     await runExport(run, deps);
     const again = await runExport(run, deps);
     expect(again).toEqual({ files: 1, warnings: [] });
@@ -297,7 +297,7 @@ test("a page over the page limit is still exported, with a warning", async () =>
   const { vault, app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.files).toBe(1);
   expect(vault.content.has("Fig - Page 1.svg")).toBe(true);
@@ -315,7 +315,7 @@ test("each cropped panel is trimmed after collection and before the page is buil
   cuts.length = 0;
   const out = await runExport(
     { exporter: svgExporter, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   // The fake image is 640×480.
   expect(cuts).toEqual([{ x: 160, y: 120, width: 320, height: 240 }]);
@@ -344,7 +344,7 @@ test("the report puts panels that could not be trimmed first, then the warnings,
   };
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim: failing, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim: failing, isProtected: () => false },
   );
   expect(out.warnings).toEqual([
     `${nodeLabel(doc, bad)}: could not be trimmed, embedded whole (out of memory)`,
@@ -369,7 +369,7 @@ test.each([
   pdfTrims.length = 0;
   const out = await runExport(
     { exporter: spy, doc, pages: [doc.pages[0]], baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(cuts).toHaveLength(cutCount);
   expect(pdfTrims).toHaveLength(pdfCount);
@@ -383,7 +383,7 @@ test("a panel over the decode limit is reported with that reason, once, and not 
   const { app } = world();
   const out = await runExport(
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Fig", folder: "", dpi: 300, maxPageSizeMm: 2000 },
-    { app, nodeTypes: nodeTypes(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
+    { app, registries: registries(), resolved: (id) => resolved.get(id), elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
   expect(out.warnings).toEqual([
     `${nodeLabel(doc, png)}: could not be decoded (over the 50 MP limit), skipped`,

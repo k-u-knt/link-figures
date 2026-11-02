@@ -4,18 +4,14 @@ import { nodeLabel } from "../model/labels";
 import { pathBounds, rectPath, toSvgPath } from "../model/path";
 import type { ShapeNode } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { NodeRenderer, NodeType, SvgContext } from "../registry/node-type";
-import { paintToSvg, strokeAttrs, strokeFields, type PaintRegistry } from "../registry/paint";
-import type { ShapeKindRegistry } from "../registry/shape-kind";
+import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
 
-/** The registries a shape draws from: its kind's outline, and the paints of its fill and border. */
-export interface ShapeNodeDeps {
-  shapes: ShapeKindRegistry;
-  paints: PaintRegistry;
-}
-
-/** What drawing a shape needs from the SVG it goes into. Warnings are said without the node's label; the caller adds it. */
-export type ShapeSvgContext = Pick<SvgContext, "defs" | "warnings" | "uid">;
+/**
+ * What drawing a shape needs: the registries (its kind's outline, its paints) and the SVG it goes into. Warnings are
+ * said without the node's label; the caller adds it.
+ */
+export type ShapeSvgContext = Pick<SvgContext, "registries" | "defs" | "warnings" | "uid">;
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -30,21 +26,22 @@ const boxOf = (node: ShapeNode): Rect => ({ x: node.x, y: node.y, width: node.wi
  * and patterns go into `ctx.defs`. A kind that is not registered draws a placeholder of the box and says so in
  * `ctx.warnings`; the node keeps its kind and params as they are.
  */
-export function shapeNodeSvg(node: ShapeNode, deps: ShapeNodeDeps, ctx: ShapeSvgContext): string {
+export function shapeNodeSvg(node: ShapeNode, ctx: ShapeSvgContext): string {
+  const { shapes, paints } = ctx.registries;
   const box = boxOf(node);
-  const kind = deps.shapes.get(node.kind);
+  const kind = shapes.get(node.kind);
   if (!kind) {
     ctx.warnings.push(`no shape kind "${node.kind}" is registered, drawn as a placeholder`);
     return `<path d="${toSvgPath(rectPath(box, 0))}" ${PLACEHOLDER_ATTRS}/>`;
   }
   const outline = kind.outline(box, node.params);
   const attrs = [`d="${toSvgPath(outline)}"`];
-  const fill = paintToSvg(deps.paints, node.fill, box, ctx);
+  const fill = paintToSvg(paints, node.fill, box, ctx);
   ctx.defs.push(...fill.defs);
   attrs.push(`fill="${fill.ref}"`);
   if (fill.opacity !== undefined) attrs.push(`fill-opacity="${fill.opacity}"`);
   if (node.border) {
-    const stroke = paintToSvg(deps.paints, node.border.paint, pathBounds(outline), ctx);
+    const stroke = paintToSvg(paints, node.border.paint, pathBounds(outline), ctx);
     ctx.defs.push(...stroke.defs);
     attrs.push(strokeAttrs(node.border, stroke.ref, stroke.opacity));
   }
@@ -64,7 +61,7 @@ class ShapeNodeRenderer implements NodeRenderer {
   private readonly idPrefix = `lf-shape-${++renderers}`;
   private warned = "";
 
-  constructor(node: ShapeNode, host: HTMLElement, private readonly deps: ShapeNodeDeps) {
+  constructor(node: ShapeNode, host: HTMLElement, private readonly ctx: RenderContext) {
     this.el = host.createDiv({ cls: ["lf-node", "lf-shape"] });
     this.update(node);
   }
@@ -94,7 +91,7 @@ class ShapeNodeRenderer implements NodeRenderer {
       counters.set(prefix, n);
       return `${this.idPrefix}-${prefix}-${n}`;
     };
-    const fragment = shapeNodeSvg(node, this.deps, { defs, warnings, uid });
+    const fragment = shapeNodeSvg(node, { registries: this.ctx.registries, defs, warnings, uid });
     const said = warnings.join("\n");
     if (said !== "" && said !== this.warned) console.warn(`Link Figures: shape ${node.id}: ${warnings.join("; ")}`);
     this.warned = said;
@@ -113,38 +110,36 @@ class ShapeNodeRenderer implements NodeRenderer {
 }
 
 /**
- * The shape node type, drawing from `deps` (the plugin's registries, so kinds and paints registered later are used).
- * Its inspector is the kind's own fields (under `params.`), the fill, a Border toggle (off is `border: null`, on is the
- * default border) and, while there is a border, the border's paint, width and dashes.
+ * A drawn shape, of any registered kind, filled and bordered with any registered paint (both found through the
+ * context's registries). Its inspector is the kind's own fields (under `params.`), the fill, a Border toggle (off is
+ * `border: null`, on is the default border) and, while there is a border, the border's paint, width and dashes.
  */
-export function createShapeNodeType(deps: ShapeNodeDeps): NodeType<ShapeNode> {
-  return {
-    type: "shape",
-    name: "Shape",
-    icon: "shapes",
+export const shapeNodeType: NodeType<ShapeNode> = {
+  type: "shape",
+  name: "Shape",
+  icon: "shapes",
 
-    mount(node: ShapeNode, host: HTMLElement): NodeRenderer {
-      return new ShapeNodeRenderer(node, host, deps);
-    },
+  mount(node: ShapeNode, host: HTMLElement, ctx: RenderContext): NodeRenderer {
+    return new ShapeNodeRenderer(node, host, ctx);
+  },
 
-    bounds: boxOf,
+  bounds: boxOf,
 
-    inspector(node: ShapeNode): Field[] {
-      const kind = deps.shapes.get(node.kind);
-      const kindFields = kind ? kind.fields(node.params).map((f) => ({ ...f, key: `params.${f.key}` })) : [];
-      return [
-        ...kindFields,
-        { kind: "paint", key: "fill", label: "Fill" },
-        { kind: "toggle", key: "border", label: "Border", onValue: defaultBorder() },
-        ...(node.border ? strokeFields("border", "Border") : []),
-      ];
-    },
+  inspector(node: ShapeNode, ctx: InspectorContext): Field[] {
+    const kind = ctx.registries.shapes.get(node.kind);
+    const kindFields = kind ? kind.fields(node.params).map((f) => ({ ...f, key: `params.${f.key}` })) : [];
+    return [
+      ...kindFields,
+      { kind: "paint", key: "fill", label: "Fill" },
+      { kind: "toggle", key: "border", label: "Border", onValue: defaultBorder() },
+      ...(node.border ? strokeFields("border", "Border") : []),
+    ];
+  },
 
-    toSvg(node: ShapeNode, ctx: SvgContext): string {
-      const warnings: string[] = [];
-      const fragment = shapeNodeSvg(node, deps, { defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix) });
-      for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
-      return fragment;
-    },
-  };
-}
+  toSvg(node: ShapeNode, ctx: SvgContext): string {
+    const warnings: string[] = [];
+    const fragment = shapeNodeSvg(node, { registries: ctx.registries, defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix) });
+    for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
+    return fragment;
+  },
+};

@@ -5,14 +5,14 @@ import { MM_TO_PX } from "../../src/constants";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
 import { fileNodeType } from "../../src/nodes/file-node";
-import { NodeTypeRegistry } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
 
 // The file node type imports the real Obsidian API for its DOM; this suite only builds strings.
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
 
 const reg = () => {
-  const r = new NodeTypeRegistry();
-  r.register(fileNodeType);
+  const r = createRegistries();
+  r.nodeTypes.register(fileNodeType);
   return r;
 };
 const docWith = (over: Partial<FileNode>) => {
@@ -134,7 +134,7 @@ test("a content card whose link is missing gets its reason as the only line", ()
 
 test("a node whose type is not registered is skipped with a warning", () => {
   const d = docWith({});
-  const { svg, warnings } = buildPageSvg(d, d.pages[0], new NodeTypeRegistry(), new Map([[d.nodes[0].id, image()]]));
+  const { svg, warnings } = buildPageSvg(d, d.pages[0], createRegistries(), new Map([[d.nodes[0].id, image()]]));
   expect(svg).not.toContain("<image");
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain('"file"');

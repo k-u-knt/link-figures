@@ -4,9 +4,12 @@ import type { Rect } from "../model/geometry";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
+import type { Registries } from "./index";
 
 export interface RenderContext {
   app: App;
+  /** The plugin's registries: what a node type draws with (shape kinds, paints…). */
+  registries: Registries;
   figurePath: string;
   resolved(id: NodeId): Resolved | undefined;
   openLink(linktext: string, evt: MouseEvent): void;
@@ -19,6 +22,8 @@ export interface NodeRenderer {
 }
 
 export interface SvgContext {
+  /** The plugin's registries, as in `RenderContext`. */
+  registries: Registries;
   doc: Document;
   page: Page;
   assets: AssetMap;
@@ -27,13 +32,18 @@ export interface SvgContext {
   uid(prefix: string): string;
 }
 
+/** What a node type's inspector fields may depend on besides the node. */
+export interface InspectorContext {
+  registries: Registries;
+}
+
 export interface NodeType<N extends Node = Node> {
   type: N["type"];
   name: string;
   icon: string;
   mount(node: N, host: HTMLElement, ctx: RenderContext): NodeRenderer;
   bounds(node: N): Rect;
-  inspector(node: N): Field[];
+  inspector(node: N, ctx: InspectorContext): Field[];
   /** An SVG fragment, or `"raster"` to have the node rendered by the DOM and embedded as an image. */
   toSvg(node: N, ctx: SvgContext): string | "raster";
 }

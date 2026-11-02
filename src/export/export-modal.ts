@@ -2,7 +2,7 @@ import { Modal, Notice, Setting, type App, type ButtonComponent } from "obsidian
 import { MAX_DPI, MIN_DPI } from "../constants";
 import type { Decoders, Resolved } from "../links/types";
 import type { Document, NodeId, Page, PageId } from "../model/types";
-import type { NodeTypeRegistry } from "../registry/node-type";
+import type { Registries } from "../registry";
 import type { Exporter } from "../registry/exporter";
 import type { LinkFiguresView } from "../view/figure-view";
 import type { AssetMap } from "./asset-types";
@@ -30,7 +30,7 @@ export interface ExportRun {
 
 export interface ExportDeps {
   app: App;
-  nodeTypes: NodeTypeRegistry;
+  registries: Registries;
   resolved: (id: NodeId) => Resolved | undefined;
   elementFor: (id: NodeId) => HTMLElement | undefined;
   /** The stage's decoders, so panels are drawn in the export as they are on the stage. */
@@ -78,14 +78,14 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       warnings,
     });
     const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, trimReport, run.exporter.pdfPanels);
-    const built = buildPageSvg(run.doc, page, deps.nodeTypes, pageAssets);
+    const built = buildPageSvg(run.doc, page, deps.registries, pageAssets);
     warnings.push(...built.warnings);
     assets.set(page.id, pageAssets);
     svgs.set(page.id, built.svg);
   }
 
   const result = await run.exporter.run(
-    { doc: run.doc, pages: run.pages, svgs, assets, nodeTypes: deps.nodeTypes, warnings, baseName: run.baseName, dpi: run.dpi },
+    { doc: run.doc, pages: run.pages, svgs, assets, registries: deps.registries, warnings, baseName: run.baseName, dpi: run.dpi },
     {},
   );
 
@@ -236,7 +236,7 @@ export class ExportModal extends Modal {
         { exporter, doc, pages, baseName: view.getDisplayText(), folder, dpi: Math.round(dpi), maxPageSizeMm: plugin.settings.maxPageSizeMm },
         {
           app: view.app,
-          nodeTypes: plugin.registries.nodeTypes,
+          registries: plugin.registries,
           resolved: (id) => view.resolvedCache.get(id),
           elementFor: (id) => view.nodeHost.elementFor(id),
           decoders: plugin.decoders,

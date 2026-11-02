@@ -438,7 +438,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.inspectorEl = main.createDiv({ cls: "lf-inspector" });
     this.pageLayer = new PageLayer(this.viewportEl);
     // Made here, not in `onOpen`, because this is what makes sure a page layer exists whichever of the two runs first.
-    this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries.nodeTypes);
+    this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries);
     this.selection = new SelectionState();
     this.pointer = new PointerController(this);
     this.intake = new Intake(this);

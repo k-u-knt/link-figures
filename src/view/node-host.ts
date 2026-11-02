@@ -2,7 +2,8 @@ import { Keymap } from "obsidian";
 import { resolveFileNode } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
-import type { NodeRenderer, NodeTypeRegistry, RenderContext } from "../registry/node-type";
+import type { Registries } from "../registry";
+import type { NodeRenderer, RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
@@ -45,10 +46,11 @@ export class NodeHost {
   constructor(
     private readonly view: LinkFiguresView,
     private readonly pageLayer: PageLayer,
-    private readonly nodeTypes: NodeTypeRegistry,
+    private readonly registries: Registries,
   ) {
     this.ctx = {
       app: view.app,
+      registries,
       // A getter: the figure file can be renamed while it is open.
       get figurePath() {
         return view.file?.path ?? "";
@@ -182,7 +184,7 @@ export class NodeHost {
   }
 
   private mountNode(node: Node): void {
-    const type = this.nodeTypes.get(node.type);
+    const type = this.registries.nodeTypes.get(node.type);
     if (!type) {
       console.warn(`Link Figures: no node type "${node.type}" is registered, so node ${node.id} is not drawn`);
       return;

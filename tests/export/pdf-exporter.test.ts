@@ -6,7 +6,8 @@ import { pdfExporter } from "../../src/export/exporters/pdf";
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import type { FileNode, Node, Page } from "../../src/model/types";
 import type { ExportInput } from "../../src/registry/exporter";
-import { NodeTypeRegistry, type NodeType } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
+import type { NodeType } from "../../src/registry/node-type";
 
 // jsPDF and svg2pdf.js are replaced by a recorder: what is checked here is what the exporter asks of them, per page.
 // (Whether the PDF they make is right can only be seen in a real browser.)
@@ -63,7 +64,7 @@ const input = (over: Partial<ExportInput> = {}): ExportInput => {
     pages: doc.pages,
     svgs: new Map(doc.pages.map((p) => [p.id, `<svg>${p.name}</svg>`])),
     assets: new Map(),
-    nodeTypes: new NodeTypeRegistry(),
+    registries: createRegistries(),
     warnings: [],
     baseName: "Untitled figure",
     dpi: 300,
@@ -146,16 +147,16 @@ const pdfAsset = (bytes: ArrayBuffer, over: Partial<PdfAsset> = {}): PdfAsset =>
 const markerType = (type: string): NodeType =>
   ({ type, name: type, icon: "", mount: () => ({ update() {}, unmount() {} }), bounds: () => ({ x: 0, y: 0, width: 0, height: 0 }), inspector: () => [], toSvg: (node: Node) => `<g id="${node.id}"/>` }) as NodeType;
 
-function markerTypes(): NodeTypeRegistry {
-  const types = new NodeTypeRegistry();
-  types.register(markerType("file"));
-  types.register(markerType("text"));
-  return types;
+function markerTypes() {
+  const registries = createRegistries();
+  registries.nodeTypes.register(markerType("file"));
+  registries.nodeTypes.register(markerType("text"));
+  return registries;
 }
 
 /** The default two-page figure (183 x 170 mm, then A4), with helpers to put panels on its pages. */
 function panelFigure() {
-  const i = input({ nodeTypes: markerTypes() });
+  const i = input({ registries: markerTypes() });
   const [first, second] = i.doc.pages;
   const ids = () => i.doc.nodes.map((n) => n.id);
   return {

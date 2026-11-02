@@ -187,7 +187,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
       const svg =
         panels.size === 0
           ? pageSvg
-          : buildPageSvg(input.doc, page, input.nodeTypes, input.assets.get(page.id) ?? new Map(), {
+          : buildPageSvg(input.doc, page, input.registries, input.assets.get(page.id) ?? new Map(), {
               only: new Set(layer.nodeIds),
               paper: index === 0,
             }).svg;

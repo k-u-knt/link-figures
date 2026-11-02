@@ -11,7 +11,8 @@ import { createDocument, fileNodeDefaults } from "../../src/model/defaults";
 import { nodeLabel } from "../../src/model/labels";
 import type { FileNode } from "../../src/model/types";
 import type { ExportInput } from "../../src/registry/exporter";
-import { NodeTypeRegistry, type NodeType } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
+import type { NodeType } from "../../src/registry/node-type";
 
 // The layered PDF export draws its SVG layers with jsPDF and svg2pdf.js, which need a browser: a stand-in hands back a
 // real one-page PDF for each layer, so that pdf-lib composes a real output that can be read back.
@@ -545,8 +546,8 @@ describe("through the PDF export", () => {
     expect(report).toEqual([`${nodeLabel(doc, node)}: 1 item outside the crop removed`]);
     expect([trimmed.pageIndex, trimmed.widthPt, trimmed.heightPt]).toEqual([0, 200, 200]);
 
-    const types = new NodeTypeRegistry();
-    types.register({
+    const types = createRegistries();
+    types.nodeTypes.register({
       type: "file",
       name: "file",
       icon: "",
@@ -561,7 +562,7 @@ describe("through the PDF export", () => {
       pages: doc.pages,
       svgs: new Map([[page.id, "<svg/>"]]),
       assets: new Map([[page.id, new Map([[node.id, trimmed]])]]),
-      nodeTypes: types,
+      registries: types,
       warnings: [],
       baseName: "fig",
       dpi: 300,

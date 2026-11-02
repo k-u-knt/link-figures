@@ -8,7 +8,7 @@ import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { createDocument, createPage, defaultBorder, shapeNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import type { ShapeNode } from "../../src/model/types";
-import { createShapeNodeType, shapeNodeSvg } from "../../src/nodes/shape-node";
+import { shapeNodeSvg, shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries } from "../../src/registry";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
@@ -27,7 +27,7 @@ function registries() {
   const r = createRegistries();
   for (const paint of builtinPaintTypes) r.paints.register(paint);
   for (const kind of builtinShapeKinds) r.shapes.register(kind);
-  r.nodeTypes.register(createShapeNodeType(r));
+  r.nodeTypes.register(shapeNodeType);
   return r;
 }
 
@@ -39,7 +39,7 @@ function docWith(over: Partial<ShapeNode>) {
   return d;
 }
 
-const exportOf = (d: ReturnType<typeof docWith>, r = registries()) => buildPageSvg(d, d.pages[0], r.nodeTypes, new Map());
+const exportOf = (d: ReturnType<typeof docWith>, r = registries()) => buildPageSvg(d, d.pages[0], r, new Map());
 /** Ids as the SVG builder makes them: numbered per prefix. */
 const uids = () => {
   const counters = new Map<string, number>();
@@ -111,7 +111,7 @@ describe("SVG", () => {
     const r = registries();
     const node = { ...docWith({}).nodes[0], kind: "ellipse", params: {}, fill: { type: "solid", color: "#00ff00", opacity: 0.5 }, border: { paint: linear, width: 2, dash: "solid" } } as ShapeNode;
     const defs: string[] = [];
-    const fragment = shapeNodeSvg(node, r, { defs, warnings: [], uid: uids() });
+    const fragment = shapeNodeSvg(node, { registries: r, defs, warnings: [], uid: uids() });
     expect(fragment).toMatch(/^<path d="M110 45 C[^"]+Z" fill="#00ff00" fill-opacity="0.5" stroke="url\(#grad-1\)" stroke-width="[^"]+"\/>$/);
     expect(defs).toEqual([expect.stringContaining('<linearGradient id="grad-1" gradientUnits="userSpaceOnUse" x1="10" y1="45" x2="110" y2="45">')]);
   });
@@ -147,7 +147,7 @@ describe("SVG", () => {
 describe("stage", () => {
   const mount = (node: ShapeNode, r = registries()) => {
     const host = document.createElement("div");
-    const renderer = r.nodeTypes.get("shape")!.mount(node, host, {} as never);
+    const renderer = r.nodeTypes.get("shape")!.mount(node, host, { registries: r } as never);
     return { host, renderer, el: host.firstElementChild as HTMLElement };
   };
   /** The page's ids made generic, so the stage's own (prefixed) ids compare with the export's. */
@@ -164,7 +164,7 @@ describe("stage", () => {
     expect(svg.getAttribute("viewBox")).toBe("10 20 100 50");
 
     const defs: string[] = [];
-    const fragment = shapeNodeSvg(node, registries(), { defs, warnings: [], uid: uids() });
+    const fragment = shapeNodeSvg(node, { registries: registries(), defs, warnings: [], uid: uids() });
     const parse = (markup: string) => new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${markup}</svg>`, "image/svg+xml").documentElement;
     const attrsOf = (e: Element) => Object.fromEntries(Array.from(e.attributes, (a) => [a.name, genericIds(a.value)]));
     const stagePath = svg.querySelector("path")!;
@@ -218,22 +218,28 @@ describe("node type", () => {
   });
 
   test("the inspector is the kind's fields under params, the fill, a Border toggle and, with a border, its paint, width and dashes", () => {
-    const type = registries().nodeTypes.get("shape")!;
+    const r = registries();
+    const type = r.nodeTypes.get("shape")!;
     const node = docWith({}).nodes[0] as ShapeNode;
-    const keys = (n: ShapeNode) => type.inspector(n).map((f) => `${f.kind}:${f.key}`);
+    const fieldsOf = (n: ShapeNode) => type.inspector(n, { registries: r });
+    const keys = (n: ShapeNode) => fieldsOf(n).map((f) => `${f.kind}:${f.key}`);
     expect(keys(node)).toEqual(["number:params.cornerRadius", "paint:fill", "toggle:border", "paint:border.paint", "number:border.width", "select:border.dash"]);
-    expect(type.inspector(node).find((f) => f.key === "border")!.onValue).toEqual(defaultBorder());
-    expect(type.inspector(node).find((f) => f.key === "params.cornerRadius")!.unit).toBe("mm");
+    expect(fieldsOf(node).find((f) => f.key === "border")!.onValue).toEqual(defaultBorder());
+    expect(fieldsOf(node).find((f) => f.key === "params.cornerRadius")!.unit).toBe("mm");
     expect(keys({ ...node, border: null })).toEqual(["number:params.cornerRadius", "paint:fill", "toggle:border"]);
     expect(keys({ ...node, kind: "ellipse" })[0]).toBe("paint:fill");
     expect(keys({ ...node, kind: "x.star" })[0]).toBe("paint:fill");
   });
 
-  test("kinds registered after the node type are used", () => {
+  test("kinds and paints come from the context's registries, whatever is registered there", () => {
     const r = createRegistries();
     for (const paint of builtinPaintTypes) r.paints.register(paint);
-    const type = createShapeNodeType(r);
+    const node = docWith({}).nodes[0] as ShapeNode;
+    expect(shapeNodeType.inspector(node, { registries: r })[0].key).toBe("fill");
     r.shapes.register(builtinShapeKinds[0]);
-    expect(type.inspector(docWith({}).nodes[0] as ShapeNode)[0].key).toBe("params.cornerRadius");
+    expect(shapeNodeType.inspector(node, { registries: r })[0].key).toBe("params.cornerRadius");
+    const warnings: string[] = [];
+    shapeNodeSvg(node, { registries: createRegistries(), defs: [], warnings, uid: uids() });
+    expect(warnings).toEqual(['no shape kind "rect" is registered, drawn as a placeholder']);
   });
 });

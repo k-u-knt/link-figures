@@ -2,9 +2,11 @@ import { createDocument, createPage, fileNodeDefaults } from "../../src/model/de
 import type { FileNode } from "../../src/model/types";
 import { nodeLabel } from "../../src/model/labels";
 import { fileNodeSvg, skippedReason } from "../../src/nodes/file-node-svg";
+import { createRegistries } from "../../src/registry";
 
 const page = createPage("a4-portrait", []);
 const ctx = () => ({
+  registries: createRegistries(),
   doc: { ...createDocument("a4-portrait"), pages: [page] },
   page,
   assets: new Map(),

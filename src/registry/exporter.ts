@@ -1,7 +1,7 @@
 import type { AssetMap } from "../export/asset-types";
 import type { Document, Page, PageId } from "../model/types";
 import type { Field } from "./fields";
-import type { NodeTypeRegistry } from "./node-type";
+import type { Registries } from "./index";
 
 export interface ExportInput {
   doc: Document;
@@ -9,7 +9,7 @@ export interface ExportInput {
   svgs: Map<PageId, string>;
   assets: Map<PageId, AssetMap>;
   /** For an exporter that has to build SVG again, a part of a page at a time (the PDF exporter's layers). */
-  nodeTypes: NodeTypeRegistry;
+  registries: Registries;
   /** The SVG builder's warnings; exporters pass these through in their result. */
   warnings: string[];
   baseName: string;

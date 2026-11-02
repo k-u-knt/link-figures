@@ -1,7 +1,8 @@
 import { pageSizePx } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import type { Document, Node, NodeId, Page } from "../model/types";
-import type { NodeTypeRegistry, SvgContext } from "../registry/node-type";
+import type { Registries } from "../registry";
+import type { SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
 
 /** For a value written between double quotes. */
@@ -35,7 +36,7 @@ function wrap(node: Node, fragment: string): string {
 export function buildPageSvg(
   doc: Document,
   page: Page,
-  nodeTypes: NodeTypeRegistry,
+  registries: Registries,
   assets: AssetMap,
   opts: BuildOptions = {},
 ): { svg: string; warnings: string[] } {
@@ -44,6 +45,7 @@ export function buildPageSvg(
   const warnings: string[] = [];
   const counters = new Map<string, number>();
   const ctx: SvgContext = {
+    registries,
     doc,
     page,
     assets,
@@ -63,7 +65,7 @@ export function buildPageSvg(
 
   const body: string[] = [];
   for (const node of nodes) {
-    const type = nodeTypes.get(node.type);
+    const type = registries.nodeTypes.get(node.type);
     if (!type) {
       warnings.push(`${nodeLabel(doc, node)}: no node type "${node.type}" is registered, skipped`);
       continue;

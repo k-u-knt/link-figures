@@ -3,7 +3,8 @@ import type { Decoders, FileRef, Resolved } from "../../src/links/types";
 import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { DocumentStore } from "../../src/model/store";
 import type { Document, FileNode, Node, NodeId } from "../../src/model/types";
-import type { NodeRenderer, NodeType, NodeTypeRegistry } from "../../src/registry/node-type";
+import type { Registries } from "../../src/registry";
+import type { NodeRenderer, NodeType } from "../../src/registry/node-type";
 import { NodeHost } from "../../src/view/node-host";
 import { FakeAccess } from "../links/fake-access";
 import { step, testRegistry } from "../adjust/fixtures";
@@ -99,7 +100,7 @@ function setup() {
     },
   };
   const recording = recordingType();
-  const nodeHost = new NodeHost(view as never, pageLayer as never, { get: () => recording.type } as unknown as NodeTypeRegistry);
+  const nodeHost = new NodeHost(view as never, pageLayer as never, { nodeTypes: { get: () => recording.type } } as unknown as Registries);
   const [a, b, c] = doc.nodes as FileNode[];
   /** Replaces the view's document, as a reload does, with the links of some nodes changed. */
   const relink = (changes: Record<NodeId, string>): Document => {

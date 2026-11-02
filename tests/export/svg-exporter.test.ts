@@ -1,7 +1,7 @@
 import { svgExporter } from "../../src/export/exporters/svg";
 import { createDocument, createPage } from "../../src/model/defaults";
 import type { ExportInput } from "../../src/registry/exporter";
-import { NodeTypeRegistry } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
 
 const input = (over: Partial<ExportInput> = {}): ExportInput => {
   const doc = createDocument("nature-double");
@@ -11,7 +11,7 @@ const input = (over: Partial<ExportInput> = {}): ExportInput => {
     pages: doc.pages,
     svgs: new Map(doc.pages.map((p) => [p.id, `<svg>${p.name}</svg>`])),
     assets: new Map(),
-    nodeTypes: new NodeTypeRegistry(),
+    registries: createRegistries(),
     warnings: [],
     baseName: "Untitled figure",
     dpi: 300,

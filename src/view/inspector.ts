@@ -3,7 +3,8 @@ import { mmToPx, pxToMm } from "../model/geometry";
 import type { NodeId, Paint } from "../model/types";
 import { getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
-import type { PaintRegistry } from "../registry/paint";
+import type { InspectorContext } from "../registry/node-type";
+import type { Registries } from "../registry";
 import type { LinkFiguresView } from "./figure-view";
 import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writePageField, writeValue } from "./page-fields";
 import { roundPx } from "./pointer-math";
@@ -51,9 +52,9 @@ function setControlValue(control: Control, field: Field, value: unknown): void {
   else control.value = typeof value === "string" ? value : "";
 }
 
-/** What generated fields need besides their values: the paint types, for a `paint` field. */
+/** What generated fields need besides their values: the registries (the paint types, for a `paint` field). The inspector passes its node types' context. */
 export interface FieldEnv {
-  paints?: PaintRegistry;
+  registries?: Pick<Registries, "paints">;
 }
 
 type Read = (key: string) => unknown;
@@ -94,7 +95,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   };
   const subFields = (): Field[] => {
     const paint = paintOf();
-    const type = paint ? env.paints?.get(paint.type) : undefined;
+    const type = paint ? env.registries?.paints.get(paint.type) : undefined;
     return paint && type ? type.fields(paint).map((f) => ({ ...f, key: `${field.key}.${f.key}` })) : [];
   };
   const composite: Composite = {
@@ -105,12 +106,12 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
       holder.empty();
       const current = paintOf()?.type;
       const select = holder.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type` } });
-      const types = env.paints?.all() ?? [];
+      const types = env.registries?.paints.all() ?? [];
       for (const type of types) select.createEl("option", { value: type.id, text: type.name });
       if (current !== undefined && !types.some((t) => t.id === current)) select.createEl("option", { value: current, text: `${current} (not available)` });
       select.value = current ?? "";
       select.addEventListener("change", () => {
-        const type = env.paints?.get(select.value);
+        const type = env.registries?.paints.get(select.value);
         if (type && type.id !== paintOf()?.type) write(field.key, type.defaults());
         syncComposite(holder);
         select.value = paintOf()?.type ?? "";
@@ -207,13 +208,16 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
       composite.draw();
       continue;
     }
-    const row = container.createEl("label", { cls: "lf-field" });
+    // A label row hands a click anywhere in it to its first control. A nullable colour's first control is its
+    // checkbox, which a stray click must not flip (it writes the document), so that row is a plain div.
+    const nullable = field.kind === "color" && field.nullable === true;
+    const row = container.createEl(nullable ? "div" : "label", { cls: "lf-field" });
     row.createSpan({ cls: "lf-field-label", text: field.label });
     const holder = row.createDiv({ cls: "lf-field-control" });
     const attr = { "data-key": field.key };
 
     // A nullable colour's checkbox comes before its colour input, and is not the field's control (`data-key`).
-    const nullToggle = field.kind === "color" && field.nullable ? holder.createEl("input", { type: "checkbox", cls: "lf-null-toggle" }) : null;
+    const nullToggle = nullable ? holder.createEl("input", { type: "checkbox", cls: "lf-null-toggle", attr: { "aria-label": `${field.label}: on or off` } }) : null;
     let control: Control;
     if (field.kind === "select") {
       control = holder.createEl("select", { cls: "dropdown", attr });
@@ -335,18 +339,19 @@ export class Inspector {
     this.pending = false;
     // The same controls as before (a store change that is none of their business, or the user's own edit): only their values change, so a field being typed in keeps its text and focus.
     if (section.signature === this.signature) {
-      syncFields(this.el, section.fields, section.read, this.fieldEnv());
+      syncFields(this.el, section.fields, section.read, this.context());
       return;
     }
     this.signature = section.signature;
     this.el.empty();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
-    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv());
+    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.context());
   }
 
-  private fieldEnv(): FieldEnv {
-    return { paints: this.view.plugin.registries.paints };
+  /** One context for the node types' fields and for drawing them: the plugin's registries. */
+  private context(): InspectorContext {
+    return { registries: this.view.plugin.registries };
   }
 
   /** A control in this inspector has the focus and holds text that has not been committed. */
@@ -399,7 +404,7 @@ export class Inspector {
     const type = this.view.plugin.registries.nodeTypes.get(first.type);
     const base = nodeBaseFields();
     const baseKeys = new Set(base.map((f) => f.key));
-    const fields = [...base, ...(type?.inspector(first) ?? [])];
+    const fields = [...base, ...(type?.inspector(first, this.context()) ?? [])];
     // Pixels in the file, millimetres on screen.
     const mm = new Set(fields.filter((f) => f.unit === "mm").map((f) => f.key));
     const paintKeys = fields.filter((f) => f.kind === "paint").map((f) => f.key);

@@ -1,5 +1,6 @@
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
+import { createRegistries } from "../../src/registry";
 
 // `obsidian` ships only typings, so this module cannot be loaded for real; the parts under test never touch it.
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
@@ -7,6 +8,7 @@ const { fileNodeType, fileNodeSvg } = await import("../../src/nodes/file-node");
 const { fileNodeSvg: pureFileNodeSvg } = await import("../../src/nodes/file-node-svg");
 
 const page = createPage("a4-portrait", []);
+const noCtx = { registries: createRegistries() };
 const node = (over: Partial<FileNode> = {}): FileNode => ({
   ...fileNodeDefaults(page, { file: "a.png", subpath: "", show: "image" }, []),
   x: 10,
@@ -24,18 +26,18 @@ test("bounds are the node's rectangle", () => expect(fileNodeType.bounds(node())
 
 test("the inspector offers a Page field for pdf and tiff targets only", () => {
   const page = [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }];
-  expect(fileNodeType.inspector(node({ file: "plot.pdf" }))).toEqual(page);
-  expect(fileNodeType.inspector(node({ file: "figs/cells.TIF" }))).toEqual(page);
-  expect(fileNodeType.inspector(node({ file: "cells.tiff" }))).toEqual(page);
-  expect(fileNodeType.inspector(node({ file: "plot.png" }))).toEqual([]);
-  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2" }))).toEqual([]);
-  expect(fileNodeType.inspector(node({ file: "v1.2/analysis" }))).toEqual([]);
+  expect(fileNodeType.inspector(node({ file: "plot.pdf" }), noCtx)).toEqual(page);
+  expect(fileNodeType.inspector(node({ file: "figs/cells.TIF" }), noCtx)).toEqual(page);
+  expect(fileNodeType.inspector(node({ file: "cells.tiff" }), noCtx)).toEqual(page);
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), noCtx)).toEqual([]);
+  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2" }), noCtx)).toEqual([]);
+  expect(fileNodeType.inspector(node({ file: "v1.2/analysis" }), noCtx)).toEqual([]);
 });
 
 test("file-node re-exports the pure SVG function", () => expect(fileNodeSvg).toBe(pureFileNodeSvg));
 
 describe("toSvg", () => {
-  const ctx = (assets: Map<string, any>) => ({ doc: { ...createDocument("a4-portrait"), pages: [page] }, page, assets, defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
+  const ctx = (assets: Map<string, any>) => ({ registries: createRegistries(), doc: { ...createDocument("a4-portrait"), pages: [page] }, page, assets, defs: [] as string[], warnings: [] as string[], uid: (p: string) => p + "-1" });
 
   test("reads the node's file asset from the asset map", () => {
     const n = node();

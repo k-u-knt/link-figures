@@ -6,7 +6,7 @@ import { nodeLabel } from "../../src/model/labels";
 import { createDocument, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
 import { fileNodeType } from "../../src/nodes/file-node";
-import { NodeTypeRegistry } from "../../src/registry/node-type";
+import { createRegistries } from "../../src/registry";
 
 // The file node type imports the real Obsidian API for its DOM; this suite only builds strings.
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
@@ -264,8 +264,8 @@ test.each([
   ["pdf", (): FileAsset => ({ ...pdfAsset(), widthPt: 239.28, heightPt: 147.12, rasterWidth: 997, rasterHeight: 613 })],
 ])("cover with a crop at the right edge: the cut %s lands where its part of the uncut one did", async (_, make) => {
   const { doc, page, node } = figure({ file: "plots/a.png", fit: "cover", crop: { x: 0.6, y: 0.1, w: 0.4, h: 0.5 }, x: 13.7, y: 21.3, width: 100, height: 50 });
-  const types = new NodeTypeRegistry();
-  types.register(fileNodeType);
+  const types = createRegistries();
+  types.nodeTypes.register(fileNodeType);
   const asset = make();
   const before = placed(buildPageSvg(doc, page, types, new Map([[node.id, asset]])).svg);
   const { deps, cuts } = fakeDeps();

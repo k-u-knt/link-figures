@@ -5,6 +5,7 @@ import type { TextNode } from "../../src/model/types";
 import { CURATED_FONT_OPTIONS, textNodeSvg, textNodeType } from "../../src/nodes/text-node";
 import { textNodeSvg as pureTextNodeSvg } from "../../src/nodes/text-node-svg";
 import { readValue } from "../../src/view/page-fields";
+import { createRegistries } from "../../src/registry";
 
 // There is no DOM in this suite. This is just enough of an element, a document and a selection to drive the renderer:
 // focus moves blur to the element that had it, as in a browser, and `innerText` is whatever the test "typed".
@@ -124,7 +125,7 @@ describe("the type", () => {
 
   test("re-exports the pure SVG function and uses it for export", () => {
     expect(textNodeSvg).toBe(pureTextNodeSvg);
-    const ctx = { doc: createDocument("a4-portrait"), page: createDocument("a4-portrait").pages[0], assets: new Map(), defs: [], warnings: [], uid: (p: string) => p };
+    const ctx = { registries: createRegistries(), doc: createDocument("a4-portrait"), page: createDocument("a4-portrait").pages[0], assets: new Map(), defs: [], warnings: [], uid: (p: string) => p };
     expect(textNodeType.toSvg(base(), ctx)).toBe(pureTextNodeSvg(base(), ctx));
   });
 
@@ -140,7 +141,7 @@ describe("the type", () => {
   });
 
   test("the inspector offers the seven font fields, in order, and each key reads a value off a text node", () => {
-    const fields = textNodeType.inspector(base());
+    const fields = textNodeType.inspector(base(), { registries: createRegistries() });
     expect(fields.map((f) => `${f.kind}:${f.key}`)).toEqual([
       "select:font.family",
       "number:font.size",

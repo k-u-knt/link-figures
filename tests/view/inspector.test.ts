@@ -2,7 +2,7 @@ import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeD
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
 import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
-import { createShapeNodeType } from "../../src/nodes/shape-node";
+import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries } from "../../src/registry";
@@ -32,7 +32,7 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   registries.nodeTypes.register(fileType);
   for (const paint of builtinPaintTypes) registries.paints.register(paint);
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
-  registries.nodeTypes.register(createShapeNodeType(registries));
+  registries.nodeTypes.register(shapeNodeType);
   const selection = new SelectionState();
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
@@ -656,6 +656,25 @@ describe("shape fields", () => {
     const [a, b] = store.doc.nodes as ShapeNode[];
     expect(a.border).toEqual(defaultBorder());
     expect(a.border).not.toBe(b.border);
+  });
+
+  test("a click on a nullable colour's row or label changes nothing: the row is not a label that would pass it to the checkbox", () => {
+    const { el, store, labels } = shaped();
+    const fill = el.control("fill.type");
+    fill.value = "pattern";
+    fill.fire("change");
+    const seen = labels();
+    const bg = el.control("fill.bg");
+    /** The row of one field (not the paint's group row around it). */
+    const rowOf = (control: FakeEl) => el.find((e) => e.hasClass("lf-field") && !e.hasClass("lf-field-group") && e.contains(control))!;
+    const row = rowOf(bg);
+    expect(row.tag).toBe("div");
+    row.fire("click");
+    row.find((e) => e.hasClass("lf-field-label"))!.fire("click");
+    expect(seen).toEqual([]);
+    expect(shapeOf(store).fill.bg).toBeNull();
+    // Other rows are still labels.
+    expect(rowOf(el.control("fill.fg")).tag).toBe("label");
   });
 
   test("a pattern's background is a colour that may be none: a checkbox beside it turns it on and off", () => {

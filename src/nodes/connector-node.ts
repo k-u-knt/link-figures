@@ -4,8 +4,9 @@ import { nodeLabel } from "../model/labels";
 import { toSvgPath } from "../model/path";
 import type { ConnectorNode, Document, NodeId } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext, UpdateContext } from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
+import { fieldError, isCap, isEnd, type ParamSpec } from "../registry/params";
 
 /**
  * What drawing a connector needs: the registries (its route, caps and paint) and the SVG it goes into. Warnings are said
@@ -122,6 +123,11 @@ const SNAP_OPTIONS = [
  * route's own fields (under `routeParams.`), the line's stroke, each cap's kind and size, and each attached end's snap.
  * A connector cannot be attached to.
  */
+/** What `node.update` checks of a connector's own fields, besides its ends and caps (two of each). */
+const CONNECTOR_FIELDS: ParamSpec = { route: { type: "string" }, routeParams: { type: "object" }, stroke: { type: "stroke" } };
+
+const pairOf = (value: unknown, test: (v: unknown) => boolean): boolean => Array.isArray(value) && value.length === 2 && value.every(test);
+
 export const connectorNodeType: NodeType<ConnectorNode> = {
   type: "connector",
   name: "Connector",
@@ -156,6 +162,22 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
       ...capFields,
       ...snapFields,
     ];
+  },
+
+  /**
+   * A new route brings its own `routeParams`: the route's defaults (none for a route that is not registered) with the
+   * ones the patch gives over them, in place of the old route's.
+   */
+  completeUpdate(before: ConnectorNode, after: ConnectorNode, patch: Record<string, unknown>, ctx: UpdateContext): ConnectorNode {
+    if (after.route === before.route) return after;
+    const given = typeof patch.routeParams === "object" && patch.routeParams !== null ? structuredClone(patch.routeParams) : {};
+    return { ...after, routeParams: { ...ctx.registries.routes.get(after.route)?.defaults(), ...given } };
+  },
+
+  checkField(key: string, value: unknown): string | null {
+    if (key === "ends") return pairOf(value, isEnd) ? null : '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
+    if (key === "caps") return pairOf(value, isCap) ? null : '"caps" must be two caps ({kind, size})';
+    return fieldError(CONNECTOR_FIELDS, key, value);
   },
 
   toSvg(node: ConnectorNode, ctx: SvgContext): string {

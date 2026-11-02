@@ -6,6 +6,7 @@ import { NodeTypeRegistry } from "./node-type";
 import { PaintRegistry } from "./paint";
 import { RouteRegistry } from "./route";
 import { ShapeKindRegistry } from "./shape-kind";
+import { ShapeOperationRegistry } from "./shape-operation";
 
 export interface Registries {
   commands: CommandRegistry;
@@ -16,6 +17,7 @@ export interface Registries {
   shapes: ShapeKindRegistry;
   routes: RouteRegistry;
   caps: CapKindRegistry;
+  shapeOperations: ShapeOperationRegistry;
 }
 
 export function createRegistries(): Registries {
@@ -28,5 +30,6 @@ export function createRegistries(): Registries {
     shapes: new ShapeKindRegistry(),
     routes: new RouteRegistry(),
     caps: new CapKindRegistry(),
+    shapeOperations: new ShapeOperationRegistry(),
   };
 }

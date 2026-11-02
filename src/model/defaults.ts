@@ -1,7 +1,8 @@
 import { DEFAULT_FONT, MM_TO_PX } from "../constants";
 import { mmToPx } from "./geometry";
 import { getPreset } from "./presets";
-import type { Document, FileNode, Page, ShapeNode, Stroke, TextNode } from "./types";
+import { DEFAULT_CAP_SIZE } from "../registry/cap";
+import type { Cap, ConnectorNode, Document, FileNode, Page, ShapeNode, Stroke, TextNode } from "./types";
 
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const ID_LENGTH = 4;
@@ -110,6 +111,43 @@ export function shapeNodeDefaults(page: Page, partial: Partial<ShapeNode>, exist
     params: { cornerRadius: 0 },
     fill: { type: "solid", color: "#ffffff" },
     border: defaultBorder(),
+    ...partial,
+  };
+}
+
+/** The caps a connector starts with: none at the start, an arrowhead at the end. */
+export function defaultCaps(): [Cap, Cap] {
+  return [
+    { kind: "none", size: DEFAULT_CAP_SIZE },
+    { kind: "arrow", size: DEFAULT_CAP_SIZE },
+  ];
+}
+
+/**
+ * A straight 1 pt solid black arrow from (0, 0) to (0, 0), unless `partial` says otherwise. Its box is a placeholder:
+ * the store's connector normaliser sets it to the area the connector draws in the commit that adds it.
+ */
+export function connectorNodeDefaults(page: Page, partial: Partial<ConnectorNode>, existingIds: Iterable<string>): ConnectorNode {
+  return {
+    id: newId("p", existingIds),
+    type: "connector",
+    page: page.id,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    z: 0,
+    rotation: 0,
+    opacity: 1,
+    locked: false,
+    ends: [
+      { kind: "free", x: 0, y: 0 },
+      { kind: "free", x: 0, y: 0 },
+    ],
+    route: "straight",
+    routeParams: {},
+    stroke: defaultBorder(),
+    caps: defaultCaps(),
     ...partial,
   };
 }

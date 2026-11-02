@@ -5,6 +5,7 @@ import type { DocumentStore } from "../model/store";
 import type { TextNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import { fieldError, type ParamSpec } from "../registry/params";
 import { textNodeSvg } from "./text-node-svg";
 
 export { textNodeSvg };
@@ -177,6 +178,9 @@ class TextNodeRenderer implements NodeRenderer {
 }
 
 /** A label: text set in one font, for the letters and captions of a figure. */
+/** What `node.update` checks of a text node's own fields. */
+const TEXT_FIELDS: ParamSpec = { text: { type: "string" }, font: { type: "object" } };
+
 export const textNodeType: NodeType<TextNode> = {
   type: "text",
   name: "Text",
@@ -204,6 +208,8 @@ export const textNodeType: NodeType<TextNode> = {
 
   /** Its box, rotated: anchors `n e s w`. */
   attachable: boxAttachable,
+
+  checkField: (key, value) => fieldError(TEXT_FIELDS, key, value),
 
   toSvg(node: TextNode, ctx: SvgContext): string {
     return textNodeSvg(node, ctx);

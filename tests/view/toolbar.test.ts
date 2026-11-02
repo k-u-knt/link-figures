@@ -43,6 +43,11 @@ test("one button per command, in group order, with a separator between groups", 
   expect(icons.map(([, name]) => name)).toEqual(["icon-undo", "icon-redo", "icon-fit", "icon-export"]);
 });
 
+test("a hidden command gets no button", () => {
+  const { el } = setup([cmd("undo", "edit"), { ...cmd("node.update", "edit"), hidden: true }]);
+  expect(el.children.map((c) => c.attrs["aria-label"])).toEqual(["Name undo"]);
+});
+
 test("a command without an icon still gets a button", () => {
   const { el } = setup([cmd("plain", "edit", () => true, undefined)]);
   expect(el.children).toHaveLength(1);

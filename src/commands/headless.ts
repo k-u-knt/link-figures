@@ -133,16 +133,28 @@ class DraftStore implements CommandStore {
  * JSON results in order. `ctx` is the context each call gets, with `store` swapped for the draft.
  */
 export function runBatch(store: DocumentStore, ctx: CommandContext, calls: readonly PreparedCall[]): unknown[] {
-  let results: unknown[] = [];
-  const pending: (() => void)[] = [];
   // A batch is one undo step: it neither merges into the edit before it nor takes in the one after.
   store.endMerge();
-  store.commit("batch", (draft) => {
+  try {
+    return runInOneCommit(store, ctx, calls, "batch");
+  } finally {
+    store.endMerge();
+  }
+}
+
+/**
+ * Runs `calls` as `runBatch` does, all or nothing, as one commit labelled `label` that, unlike a batch, merges with the
+ * commits of the same label just before it as any commit does. For the UI's own runs of edits (the inspector's
+ * `inspect:<key>` writes, which may change several nodes at once and merge while a colour is dragged).
+ */
+export function runInOneCommit(store: DocumentStore, ctx: CommandContext, calls: readonly PreparedCall[], label: string): unknown[] {
+  let results: unknown[] = [];
+  const pending: (() => void)[] = [];
+  store.commit(label, (draft) => {
     pending.length = 0;
     const scoped: CommandContext = { ...ctx, store: new DraftStore(draft, store), afterCommit: (fn) => pending.push(fn) };
     results = calls.map((call) => runNow(scoped, call, "in a batch"));
   });
-  store.endMerge();
   for (const fn of pending) fn();
   return results;
 }

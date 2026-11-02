@@ -2,6 +2,7 @@ import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf 
 import { createApi, type LinkFiguresApi } from "./api";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
+import { drawingCommands } from "./commands/drawing";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE, normalisePageLimit } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
@@ -61,6 +62,8 @@ export default class LinkFiguresPlugin extends Plugin {
     for (const route of builtinRoutes) this.registries.routes.register(route);
     for (const cap of builtinCapKinds) this.registries.caps.register(cap);
     registerBuiltinCommands(this);
+    // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
+    for (const command of drawingCommands()) this.registries.commands.register(command);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     this.registerEvent(

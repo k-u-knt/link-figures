@@ -7,6 +7,7 @@ import { cropPlacement, type Rect } from "../model/geometry";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import { fieldError, type ParamSpec } from "../registry/params";
 import { fileNodeSvg, skippedReason } from "./file-node-svg";
 
 export { fileNodeSvg, skippedReason };
@@ -239,6 +240,15 @@ class FileNodeRenderer implements NodeRenderer {
   }
 }
 
+/** What `node.update` checks of a file node's own fields. Its link (`file`, `subpath`) lives in the Links section. */
+const FILE_FIELDS: ParamSpec = {
+  file: { type: "string" },
+  subpath: { type: "string" },
+  show: { type: "string", enum: ["image", "content"] },
+  frame: { type: "stroke", nullable: true },
+  adjustments: { type: "array" },
+};
+
 /** A note section or image linked from the vault, drawn live from its source. */
 export const fileNodeType: NodeType<FileNode> = {
   type: "file",
@@ -260,6 +270,8 @@ export const fileNodeType: NodeType<FileNode> = {
 
   /** Its box, rotated: anchors `n e s w`. */
   attachable: boxAttachable,
+
+  checkField: (key, value) => fieldError(FILE_FIELDS, key, value),
 
   toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
     const asset = ctx.assets.get(node.id);

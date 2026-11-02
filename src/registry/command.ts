@@ -72,6 +72,11 @@ export interface Command<A = unknown, R = unknown> {
   hotkeys?: Hotkey[];
   /** The arguments the command takes; calls are checked against it before `run`. None means it takes none. */
   params?: ParamSpec;
+  /**
+   * True for a command that means nothing without arguments (`shape.create`, `node.update`): the toolbar shows no button
+   * for it. The UI's own code (the tools, the inspector) and scripts run it.
+   */
+  hidden?: boolean;
   /** True for a command that acts on what only an open view has (the selection, the zoom, a tool, a dialog); the API refuses it headless. */
   needsView?: boolean;
   applies(ctx: CommandContext): boolean;

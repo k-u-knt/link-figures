@@ -7,6 +7,7 @@ import type { ShapeNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { AttachContext, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
+import { fieldError, type ParamSpec } from "../registry/params";
 
 /**
  * What drawing a shape needs: the registries (its kind's outline, its paints) and the SVG it goes into. Warnings are
@@ -115,6 +116,9 @@ class ShapeNodeRenderer implements NodeRenderer {
  * context's registries). Its inspector is the kind's own fields (under `params.`), the fill, a Border toggle (off is
  * `border: null`, on is the default border) and, while there is a border, the border's paint, width and dashes.
  */
+/** What `node.update` checks of a shape's own fields. */
+const SHAPE_FIELDS: ParamSpec = { kind: { type: "string" }, params: { type: "object" }, fill: { type: "paint" }, border: { type: "stroke", nullable: true } };
+
 export const shapeNodeType: NodeType<ShapeNode> = {
   type: "shape",
   name: "Shape",
@@ -144,6 +148,8 @@ export const shapeNodeType: NodeType<ShapeNode> = {
     const box = boxOf(node);
     return rotateAttachable(node, { outline: kind.outline(box, node.params), anchors: kind.anchors(box, node.params) });
   },
+
+  checkField: (key, value) => fieldError(SHAPE_FIELDS, key, value),
 
   toSvg(node: ShapeNode, ctx: SvgContext): string {
     const warnings: string[] = [];

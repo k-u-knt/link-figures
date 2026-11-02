@@ -45,6 +45,11 @@ export interface InspectorContext {
   registries: Registries;
 }
 
+/** What a node type's part in `node.update` may depend on besides the node. */
+export interface UpdateContext {
+  registries: Registries;
+}
+
 export interface NodeType<N extends Node = Node> {
   type: N["type"];
   name: string;
@@ -69,6 +74,18 @@ export interface NodeType<N extends Node = Node> {
    * box is the area it draws, and it is never rotated).
    */
   derivedFields?: readonly string[];
+  /**
+   * For `node.update`: `after` (the node with the patch merged in) with what else the change brings, as a new node or
+   * `after` changed in place (a connector given a new `route` gets that route's default `routeParams`, under the ones the
+   * patch gives). `patch` is the patch as it was given. Runs before the fields are checked.
+   */
+  completeUpdate?(before: N, after: N, patch: Record<string, unknown>, ctx: UpdateContext): N;
+  /**
+   * For `node.update`: what is wrong with `value`, one of the type's own top-level fields (`"fill"`, `"ends"`) as the
+   * patch leaves it, or null when it is fine. Called for each such field a patch touches; a key the type does not know
+   * is fine, as the file format keeps unknown keys.
+   */
+  checkField?(key: string, value: unknown, ctx: UpdateContext): string | null;
 }
 
 export class NodeTypeRegistry {

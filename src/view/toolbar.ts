@@ -3,7 +3,7 @@ import type { Command, CommandContext } from "../registry/command";
 import type { LinkFiguresView } from "./figure-view";
 
 /**
- * The toolbar from the command registry: one icon button per command, a separator between groups. Buttons are disabled
+ * The toolbar from the command registry: one icon button per command that is not `hidden`, a separator between groups. Buttons are disabled
  * when their command does not apply, and the button of the armed tool is shown pressed (`is-active`).
  */
 export class Toolbar {
@@ -14,7 +14,7 @@ export class Toolbar {
   constructor(private readonly view: LinkFiguresView, private readonly el: HTMLElement) {}
 
   render(): void {
-    const commands = this.view.plugin.registries.commands.all();
+    const commands = this.view.plugin.registries.commands.all().filter((c) => !c.hidden);
     const signature = commands.map((c) => `${c.group}/${c.id}/${c.icon ?? ""}/${c.name}`).join("|");
     // The buttons outlive a change in the document, so a button that has the focus keeps it.
     if (signature !== this.built) this.build(commands, signature);

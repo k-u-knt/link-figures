@@ -64,3 +64,10 @@ test("ends, paints and strokes are checked for the model's shapes", () => {
   expect(isStroke({ paint: { type: "solid" }, width: 1, dash: "wavy" })).toBe(false);
   expect(isStroke({ paint: { type: "solid" }, width: 1, dash: "solid", join: "sharp" })).toBe(false);
 });
+
+test("a nullable parameter takes null as well as its type", () => {
+  const nullable: ParamSpec = { border: { type: "stroke", nullable: true } };
+  expect(validateArgs(nullable, { border: null })).toEqual({ ok: true, value: { border: null } });
+  expect(validateArgs(nullable, { border: 3 })).toEqual({ ok: false, error: 'parameter "border" must be a stroke ({paint, width, dash, cap?, join?}) or null' });
+  expect(validateArgs(spec, { ids: [], border: null })).toMatchObject({ ok: false });
+});

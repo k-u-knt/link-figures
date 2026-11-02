@@ -1,5 +1,6 @@
 import { DEFAULT_FONT, FORMAT_VERSION } from "../constants";
-import { defaultBorder } from "../model/defaults";
+import { defaultBorder, defaultCaps } from "../model/defaults";
+import { isEnd } from "../registry/params";
 import type { Document } from "../model/types";
 import { FormatError } from "./errors";
 
@@ -9,8 +10,10 @@ const isRecord = (v: unknown): v is Json => typeof v === "object" && v !== null 
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /**
- * Same values as `fileNodeDefaults` / `textNodeDefaults` / `shapeNodeDefaults` in model/defaults.ts (tests keep them in
- * step), except that a shape with no `params` gets none: they belong to its kind, which may not be the default one.
+ * Same values as `fileNodeDefaults` / `textNodeDefaults` / `shapeNodeDefaults` / `connectorNodeDefaults` in
+ * model/defaults.ts (tests keep them in step), except that a shape with no `params` gets none (they belong to its kind,
+ * which may not be the default one), nor does a connector with no `routeParams`, and a connector's `ends` have no
+ * default: a connector without them is malformed.
  */
 const COMMON_DEFAULTS = (): Json => ({ z: 0, rotation: 0, opacity: 1, locked: false });
 const NODE_DEFAULTS: Record<string, () => Json> = {
@@ -30,6 +33,7 @@ const NODE_DEFAULTS: Record<string, () => Json> = {
   }),
   text: () => ({ ...COMMON_DEFAULTS(), text: "", font: { ...DEFAULT_FONT } }),
   shape: () => ({ ...COMMON_DEFAULTS(), kind: "rect", params: {}, fill: { type: "solid", color: "#ffffff" }, border: defaultBorder() }),
+  connector: () => ({ ...COMMON_DEFAULTS(), route: "straight", routeParams: {}, stroke: defaultBorder(), caps: defaultCaps() }),
 };
 
 /** Keeps every key already in `source` (so unknown keys survive) and adds the missing ones from `defaults`. */
@@ -86,6 +90,17 @@ export function migrateStroke(nodeId: string, key: string, raw: unknown): Json {
   return fill(stroke, { width: 1, dash: "solid" });
 }
 
+/** Checks a connector's own fields in place: two ends, a route and its params, a stroke (migrated like any) and two caps. */
+function migrateConnector(id: string, node: Json): void {
+  const { ends, caps } = node;
+  if (!Array.isArray(ends) || ends.length !== 2 || !ends.every(isEnd)) throw new FormatError(`Node ${id}: "ends" must be two ends`);
+  if (typeof node.route !== "string") throw new FormatError(`Node ${id}: "route" must be a string`);
+  if (!isRecord(node.routeParams)) throw new FormatError(`Node ${id}: "routeParams" must be an object`);
+  node.stroke = migrateStroke(id, "stroke", node.stroke);
+  const isCap = (cap: unknown) => isRecord(cap) && typeof cap.kind === "string" && isNumber(cap.size);
+  if (!Array.isArray(caps) || caps.length !== 2 || !caps.every(isCap)) throw new FormatError(`Node ${id}: "caps" must be two caps { kind, size }`);
+}
+
 function migrateNode(raw: unknown, index: number): Json {
   if (!isRecord(raw)) throw new FormatError(`Node ${index + 1} is not an object`);
   const { id, type, page } = raw;
@@ -111,6 +126,7 @@ function migrateNode(raw: unknown, index: number): Json {
     if (!isRecord(node.fill) || typeof node.fill.type !== "string") throw new FormatError(`Node ${id}: "fill" must be a paint { type, … }`);
     if (node.border !== null) node.border = migrateStroke(id, "border", node.border);
   }
+  if (type === "connector") migrateConnector(id, node);
   return node;
 }
 

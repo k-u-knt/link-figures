@@ -1,14 +1,18 @@
-import type { End, Paint, Stroke } from "../model/types";
+import type { Cap, End, Paint, Stroke } from "../model/types";
 
 /** The JSON types a parameter may have; `end`, `paint` and `stroke` are the model's own shapes (see `model/types`). */
 export type ParamType = "string" | "number" | "boolean" | "object" | "array" | "end" | "paint" | "stroke";
 
-/** One parameter: its type, whether a call must give it, the value it takes when not given, and the values it may take. */
+/**
+ * One parameter: its type, whether a call must give it, the value it takes when not given, the values it may take, and
+ * whether null is a value it may take besides its type (a shape's `border`: null for none).
+ */
 export interface Param {
   type: ParamType;
   required?: boolean;
   default?: unknown;
   enum?: unknown[];
+  nullable?: boolean;
 }
 
 /** A command's parameters by name: a small JSON-schema-like description that callers can read and that calls are checked against. */
@@ -33,6 +37,11 @@ export function isEnd(value: unknown): value is End {
 /** Whether `value` is a paint: an object naming its type. Its own params are the paint type's to check. */
 export function isPaint(value: unknown): value is Paint {
   return isRecord(value) && typeof value.type === "string";
+}
+
+/** Whether `value` is a connector cap: a cap kind's id and a size (a multiple of the stroke's width) that is not negative. */
+export function isCap(value: unknown): value is Cap {
+  return isRecord(value) && typeof value.kind === "string" && isFiniteNumber(value.size) && value.size >= 0;
 }
 
 const DASHES: readonly unknown[] = ["solid", "dash", "dot", "dashDot"];
@@ -83,12 +92,26 @@ export function validateArgs(spec: ParamSpec, args: unknown): ValidatedArgs {
       if (param.default !== undefined) value[name] = structuredClone(param.default);
       continue;
     }
-    const check = CHECKS[param.type];
-    if (!check.test(given)) return { ok: false, error: `parameter "${name}" must be ${check.what}` };
-    if (param.enum && !param.enum.includes(given)) {
-      return { ok: false, error: `parameter "${name}" must be one of ${param.enum.map((v) => JSON.stringify(v)).join(", ")}` };
-    }
+    const error = paramError(name, param, given);
+    if (error !== null) return { ok: false, error: `parameter ${error}` };
     value[name] = given;
   }
   return { ok: true, value };
+}
+
+/**
+ * What is wrong with `value` as the parameter (or field) `name` that `param` describes: `"name" must be …`, or null
+ * when it is fine. Whether it is required, and its default, are the caller's.
+ */
+export function paramError(name: string, param: Param, value: unknown): string | null {
+  if (value === null && param.nullable) return null;
+  const check = CHECKS[param.type];
+  if (!check.test(value)) return `"${name}" must be ${check.what}${param.nullable ? " or null" : ""}`;
+  if (param.enum && !param.enum.includes(value)) return `"${name}" must be one of ${param.enum.map((v) => JSON.stringify(v)).join(", ")}`;
+  return null;
+}
+
+/** For a node type's `checkField`: what is wrong with `value` as the field `key` when `fields` describes it, else null. */
+export function fieldError(fields: ParamSpec, key: string, value: unknown): string | null {
+  return Object.hasOwn(fields, key) ? paramError(key, fields[key], value) : null;
 }

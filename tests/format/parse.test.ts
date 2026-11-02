@@ -4,7 +4,7 @@ import { loadDocument } from "../../src/format/load";
 import { serializeFigureFile } from "../../src/format/serialize";
 import { migrate } from "../../src/format/migrate";
 import { FormatError, NotFigureError } from "../../src/format/errors";
-import { fileNodeDefaults, createPage } from "../../src/model/defaults";
+import { connectorNodeDefaults, fileNodeDefaults, createPage } from "../../src/model/defaults";
 import { DEFAULT_FONT } from "../../src/constants";
 import type { FileNode, TextNode } from "../../src/model/types";
 
@@ -85,6 +85,27 @@ test.each([
   ["node with a non-numeric width", docWith([{ id: "p-1", type: "text", ...geom, width: "wide" }])],
   ["page without a width", { version: 1, pages: [{ id: "pg-1", height: 5 }], nodes: [] }],
 ])("migrate rejects malformed input: %s", (_name, json) => expect(() => migrate(json)).toThrow(FormatError));
+
+// --- connectors
+const ends = [{ kind: "free", x: 0, y: 0 }, { kind: "attached", node: "p-2", snap: "center" }];
+test("migrate fills connector defaults, agreeing with connectorNodeDefaults", () => {
+  const [n] = migrate(docWith([{ id: "p-1", type: "connector", ...geom, ends }])).nodes;
+  const { id: _id, type: _type, page: _page, x: _x, y: _y, width: _w, height: _h, ends: _ends, ...defaults } = connectorNodeDefaults(createPage("a4-portrait", []), {}, []);
+  expect(n).toEqual({ id: "p-1", ...geom, type: "connector", ...defaults, ends });
+});
+test("a connector's old-form stroke is migrated", () => {
+  const [n] = migrate(docWith([{ id: "p-1", type: "connector", ...geom, ends, stroke: { color: "#ff0000", width: 2, dash: "dot" } }])).nodes;
+  expect(n).toMatchObject({ stroke: { paint: { type: "solid", color: "#ff0000" }, width: 2, dash: "dot" } });
+});
+test.each([
+  ["no ends", {}],
+  ["one end", { ends: [ends[0]] }],
+  ["a malformed end", { ends: [ends[0], { kind: "attached" }] }],
+  ["a route that is not a string", { ends, route: 3 }],
+  ["routeParams that are not an object", { ends, routeParams: [] }],
+  ["a null stroke", { ends, stroke: null }],
+  ["one cap", { ends, caps: [{ kind: "none", size: 3 }] }],
+])("migrate rejects a malformed connector: %s", (_name, fields) => expect(() => migrate(docWith([{ id: "p-1", type: "connector", ...geom, ...fields }]))).toThrow(FormatError));
 
 // --- adjustments
 const withAdjustments = (value: string) => loadDocument(FILE.replace('"frame":null}', `"frame":null,"adjustments":${value}}`));

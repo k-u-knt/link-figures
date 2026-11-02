@@ -38,7 +38,7 @@ function editor(ctx: CommandContext): EditorView {
 }
 
 /** Does `fn`, a side effect on the view, once the edit is in: at once, or within a batch after the batch commits. */
-function whenCommitted(ctx: CommandContext, fn: () => void): void {
+export function whenCommitted(ctx: CommandContext, fn: () => void): void {
   if (ctx.afterCommit) ctx.afterCommit(fn);
   else fn();
 }
@@ -53,7 +53,7 @@ const NODES_PARAMS: ParamSpec = { ids: { type: "array" } };
  * The nodes a command acts on: `args.ids` when the call names them, else the selection. Headless there is no selection,
  * so the ids must be given. A given id that is not a node of the figure is an error, so a script learns of its slip.
  */
-function targetIds(ctx: CommandContext, command: string, args: NodesArgs | undefined): NodeId[] {
+export function targetIds(ctx: CommandContext, command: string, args: NodesArgs | undefined): NodeId[] {
   const ids = args?.ids;
   if (ids === undefined) {
     if (!ctx.view) throw new CommandError(`${command} needs "ids" when the figure is not open`);
@@ -68,7 +68,7 @@ function targetIds(ctx: CommandContext, command: string, args: NodesArgs | undef
 }
 
 /** The page a page-level command acts on: the one `args.page` names, else the view's focus page; undefined when neither is. */
-function targetPage(ctx: CommandContext, command: string, args: { page?: unknown } | undefined): Page | undefined {
+export function targetPage(ctx: CommandContext, command: string, args: { page?: unknown } | undefined): Page | undefined {
   if (args?.page === undefined) return ctx.page;
   const page = ctx.store.doc.pages.find((p) => p.id === args.page);
   if (!page) throw new CommandError(`${command}: there is no page "${String(args.page)}"`);

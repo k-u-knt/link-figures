@@ -1,5 +1,6 @@
 import type { App, Component } from "obsidian";
 import type { AssetMap } from "../export/asset-types";
+import type { Attachable } from "../model/attach";
 import type { Rect } from "../model/geometry";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Resolved } from "../links/types";
@@ -32,6 +33,11 @@ export interface SvgContext {
   uid(prefix: string): string;
 }
 
+/** What a node type's `attachable` may depend on besides the node. */
+export interface AttachContext {
+  registries: Pick<Registries, "shapes">;
+}
+
 /** What a node type's inspector fields may depend on besides the node. */
 export interface InspectorContext {
   registries: Registries;
@@ -46,6 +52,11 @@ export interface NodeType<N extends Node = Node> {
   inspector(node: N, ctx: InspectorContext): Field[];
   /** An SVG fragment, or `"raster"` to have the node rendered by the DOM and embedded as an image. */
   toSvg(node: N, ctx: SvgContext): string | "raster";
+  /**
+   * Opts the type in to being attached to by connectors: its outline and anchors in page px, with the node's rotation
+   * applied. A type that does not implement it (a connector) cannot be attached to.
+   */
+  attachable?(node: N, ctx: AttachContext): Attachable;
 }
 
 export class NodeTypeRegistry {

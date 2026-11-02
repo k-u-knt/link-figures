@@ -1,4 +1,5 @@
 import { CURATED_FONTS } from "../constants";
+import { boxAttachable } from "../model/attach";
 import type { Rect } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { TextNode } from "../model/types";
@@ -200,6 +201,9 @@ export const textNodeType: NodeType<TextNode> = {
       { kind: "number", key: "font.lineHeight", label: "Line height", min: 0.5, step: 0.1 },
     ];
   },
+
+  /** Its box, rotated: anchors `n e s w`. */
+  attachable: boxAttachable,
 
   toSvg(node: TextNode, ctx: SvgContext): string {
     return textNodeSvg(node, ctx);

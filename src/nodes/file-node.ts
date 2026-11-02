@@ -2,6 +2,7 @@ import { Component, MarkdownRenderer, setIcon } from "obsidian";
 import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
+import { boxAttachable } from "../model/attach";
 import { cropPlacement, type Rect } from "../model/geometry";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
@@ -256,6 +257,9 @@ export const fileNodeType: NodeType<FileNode> = {
   inspector(node: FileNode): Field[] {
     return PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
   },
+
+  /** Its box, rotated: anchors `n e s w`. */
+  attachable: boxAttachable,
 
   toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
     const asset = ctx.assets.get(node.id);

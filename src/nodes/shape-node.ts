@@ -1,10 +1,11 @@
+import { boxAttachable, rotateAttachable } from "../model/attach";
 import { defaultBorder } from "../model/defaults";
 import type { Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import { pathBounds, rectPath, toSvgPath } from "../model/path";
 import type { ShapeNode } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import type { AttachContext, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
 
 /**
@@ -134,6 +135,14 @@ export const shapeNodeType: NodeType<ShapeNode> = {
       { kind: "toggle", key: "border", label: "Border", onValue: defaultBorder() },
       ...(node.border ? strokeFields("border", "Border") : []),
     ];
+  },
+
+  /** The kind's outline and anchors, rotated with the node; a kind that is not registered attaches as its box, as it is drawn. */
+  attachable(node: ShapeNode, ctx: AttachContext) {
+    const kind = ctx.registries.shapes.get(node.kind);
+    if (!kind) return boxAttachable(node);
+    const box = boxOf(node);
+    return rotateAttachable(node, { outline: kind.outline(box, node.params), anchors: kind.anchors(box, node.params) });
   },
 
   toSvg(node: ShapeNode, ctx: SvgContext): string {

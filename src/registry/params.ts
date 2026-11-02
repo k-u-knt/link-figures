@@ -1,11 +1,17 @@
 import type { Cap, End, Paint, Stroke } from "../model/types";
 
-/** The JSON types a parameter may have; `end`, `paint` and `stroke` are the model's own shapes (see `model/types`). */
-export type ParamType = "string" | "number" | "boolean" | "object" | "array" | "end" | "paint" | "stroke";
+/**
+ * The JSON types a parameter may have; an `integer` is a whole number, and `end`, `paint` and `stroke` are the model's
+ * own shapes (see `model/types`).
+ */
+export type ParamType = "string" | "number" | "integer" | "boolean" | "object" | "array" | "end" | "paint" | "stroke";
 
 /**
  * One parameter: its type, whether a call must give it, the value it takes when not given, the values it may take, and
- * whether null is a value it may take besides its type (a shape's `border`: null for none).
+ * whether null is a value it may take besides its type (a shape's `border`: null for none). A number may have bounds
+ * (`minimum` and `maximum` inclusive, `exclusiveMinimum` not), a string a `pattern` (a regular expression it must match
+ * whole), an object `properties` (its keys' own params; a key not listed is fine) and an array `items` (the param each
+ * entry must meet), as in JSON schema.
  */
 export interface Param {
   type: ParamType;
@@ -13,6 +19,12 @@ export interface Param {
   default?: unknown;
   enum?: unknown[];
   nullable?: boolean;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  pattern?: string;
+  properties?: ParamSpec;
+  items?: Param;
 }
 
 /** A command's parameters by name: a small JSON-schema-like description that callers can read and that calls are checked against. */
@@ -64,6 +76,7 @@ export function isStroke(value: unknown): value is Stroke {
 const CHECKS: Record<ParamType, { test: (value: unknown) => boolean; what: string }> = {
   string: { test: (v) => typeof v === "string", what: "a string" },
   number: { test: isFiniteNumber, what: "a finite number" },
+  integer: { test: Number.isInteger, what: "a whole number" },
   boolean: { test: (v) => typeof v === "boolean", what: "true or false" },
   object: { test: isRecord, what: "an object" },
   array: { test: Array.isArray, what: "an array" },
@@ -108,8 +121,36 @@ export function paramError(name: string, param: Param, value: unknown): string |
   const check = CHECKS[param.type];
   if (!check.test(value)) return `"${name}" must be ${check.what}${param.nullable ? " or null" : ""}`;
   if (param.enum && !param.enum.includes(value)) return `"${name}" must be one of ${param.enum.map((v) => JSON.stringify(v)).join(", ")}`;
+  if (typeof value === "number") {
+    if (param.minimum !== undefined && value < param.minimum) return `"${name}" must be at least ${param.minimum}`;
+    if (param.maximum !== undefined && value > param.maximum) return `"${name}" must be at most ${param.maximum}`;
+    if (param.exclusiveMinimum !== undefined && value <= param.exclusiveMinimum) return `"${name}" must be more than ${param.exclusiveMinimum}`;
+  }
+  if (typeof value === "string" && param.pattern !== undefined && !new RegExp(`^(?:${param.pattern})$`).test(value)) {
+    return `"${name}" must match ${param.pattern}`;
+  }
+  if (isRecord(value) && param.properties) {
+    for (const [key, inner] of Object.entries(param.properties)) {
+      const given = Object.hasOwn(value, key) ? value[key] : undefined;
+      if (given === undefined) {
+        if (inner.required) return `"${name}.${key}" is required`;
+        continue;
+      }
+      const error = paramError(`${name}.${key}`, inner, given);
+      if (error !== null) return error;
+    }
+  }
+  if (Array.isArray(value) && param.items) {
+    for (let i = 0; i < value.length; i++) {
+      const error = paramError(`${name}.${i}`, param.items, value[i]);
+      if (error !== null) return error;
+    }
+  }
   return null;
 }
+
+/** A colour as the model keeps it: `#rrggbb`. For a param's `pattern`. */
+export const COLOR_PATTERN = "#[0-9a-fA-F]{6}";
 
 /** For a node type's `checkField`: what is wrong with `value` as the field `key` when `fields` describes it, else null. */
 export function fieldError(fields: ParamSpec, key: string, value: unknown): string | null {

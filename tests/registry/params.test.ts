@@ -1,4 +1,4 @@
-import { isEnd, isPaint, isStroke, validateArgs, type ParamSpec } from "../../src/registry/params";
+import { COLOR_PATTERN, isEnd, isPaint, isStroke, paramError, validateArgs, type ParamSpec } from "../../src/registry/params";
 
 const spec: ParamSpec = {
   ids: { type: "array", required: true },
@@ -70,4 +70,20 @@ test("a nullable parameter takes null as well as its type", () => {
   expect(validateArgs(nullable, { border: null })).toEqual({ ok: true, value: { border: null } });
   expect(validateArgs(nullable, { border: 3 })).toEqual({ ok: false, error: 'parameter "border" must be a stroke ({paint, width, dash, cap?, join?}) or null' });
   expect(validateArgs(spec, { ids: [], border: null })).toMatchObject({ ok: false });
+});
+
+test("bounds, whole numbers, patterns, an object's properties and an array's items are checked, naming the part that is wrong", () => {
+  expect(paramError("n", { type: "number", minimum: 0, maximum: 1 }, 0)).toBeNull();
+  expect(paramError("n", { type: "number", minimum: 0, maximum: 1 }, -0.1)).toBe('"n" must be at least 0');
+  expect(paramError("n", { type: "number", minimum: 0, maximum: 1 }, 1.5)).toBe('"n" must be at most 1');
+  expect(paramError("n", { type: "number", exclusiveMinimum: 0 }, 0)).toBe('"n" must be more than 0');
+  expect(paramError("i", { type: "integer" }, 2)).toBeNull();
+  expect(paramError("i", { type: "integer" }, 2.5)).toBe('"i" must be a whole number');
+  expect(paramError("c", { type: "string", pattern: COLOR_PATTERN }, "#a0B1c2")).toBeNull();
+  expect(paramError("c", { type: "string", pattern: COLOR_PATTERN }, "#a0b1c2ff")).toBe(`"c" must match ${COLOR_PATTERN}`);
+  const box: ParamSpec = { w: { type: "number", required: true }, label: { type: "string" } };
+  expect(paramError("box", { type: "object", properties: box }, { w: 1, extra: true })).toBeNull();
+  expect(paramError("box", { type: "object", properties: box }, { label: "a" })).toBe('"box.w" is required');
+  expect(paramError("box", { type: "object", properties: box }, { w: 1, label: 3 })).toBe('"box.label" must be a string');
+  expect(paramError("list", { type: "array", items: { type: "object", properties: box } }, [{ w: 1 }, { w: "x" }])).toBe('"list.1.w" must be a finite number');
 });

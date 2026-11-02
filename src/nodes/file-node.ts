@@ -10,7 +10,7 @@ import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { strokeFields } from "../registry/paint";
-import { fieldError, type ParamSpec } from "../registry/params";
+import { fieldError, paramError, type ParamSpec } from "../registry/params";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
 
 export { fileFrameSvg, fileNodeSvg, skippedReason };
@@ -297,9 +297,36 @@ const FILE_FIELDS: ParamSpec = {
   file: { type: "string" },
   subpath: { type: "string" },
   show: { type: "string", enum: ["image", "content"] },
+  imageIndex: { type: "integer", minimum: 0 },
+  crop: {
+    type: "object",
+    nullable: true,
+    properties: {
+      x: { type: "number", required: true },
+      y: { type: "number", required: true },
+      w: { type: "number", required: true },
+      h: { type: "number", required: true },
+    },
+  },
+  fit: { type: "string", enum: ["cover", "contain"] },
+  pageIndex: { type: "integer", minimum: 0 },
+  scale: { type: "number", exclusiveMinimum: 0 },
   frame: { type: "stroke", nullable: true },
-  adjustments: { type: "array" },
+  // As the file format reads them: a missing `enabled` is true and missing `params` none.
+  adjustments: {
+    type: "array",
+    items: { type: "object", properties: { type: { type: "string", required: true }, enabled: { type: "boolean" }, params: { type: "object" } } },
+  },
 };
+
+/** `range`: a 16-bit image's display range, `{ min, max }` (finite numbers), or `"auto"`. */
+const RANGE: ParamSpec = { min: { type: "number", required: true }, max: { type: "number", required: true } };
+
+/** What `node.update` checks of a file node's field `key`: `range` by `RANGE`, the rest by `FILE_FIELDS`. */
+function fileFieldError(key: string, value: unknown): string | null {
+  if (key !== "range" || value === "auto") return fieldError(FILE_FIELDS, key, value);
+  return paramError(key, { type: "object", properties: RANGE }, value) === null ? null : '"range" must be "auto" or { min, max } (finite numbers)';
+}
 
 /** A note section or image linked from the vault, drawn live from its source. */
 export const fileNodeType: NodeType<FileNode> = {
@@ -331,7 +358,18 @@ export const fileNodeType: NodeType<FileNode> = {
   /** Its box, rotated: anchors `n e s w`. */
   attachable: boxAttachable,
 
-  checkField: (key, value) => fieldError(FILE_FIELDS, key, value),
+  /** An adjustment without `enabled` is on, and one without `params` has none, as a file's are read. */
+  completeUpdate(_before: FileNode, after: FileNode): FileNode {
+    const adjustments: unknown = after.adjustments;
+    if (!Array.isArray(adjustments)) return after;
+    const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+    const filled = adjustments.map((a) =>
+      isRecord(a) ? { ...a, enabled: a.enabled === undefined ? true : a.enabled, params: a.params === undefined ? {} : a.params } : a,
+    );
+    return { ...after, adjustments: filled as FileNode["adjustments"] };
+  },
+
+  checkField: (key, value) => fileFieldError(key, value),
 
   toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
     const asset = ctx.assets.get(node.id);

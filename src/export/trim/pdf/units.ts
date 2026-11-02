@@ -1,4 +1,5 @@
 import type { Rect } from "../../../model/geometry";
+import { applyMatrix, multiply, type Matrix } from "../../../model/path";
 import { ContentParseError, type Token } from "./tokenize";
 
 /**
@@ -8,9 +9,6 @@ import { ContentParseError, type Token } from "./tokenize";
  * operators and never a state operator whose effect is needed after it, so removing it leaves the state as it was.
  * When a box cannot be known for certain it is `null`, and the unit is never removed.
  */
-
-/** A PDF matrix [a b c d e f], mapping (x, y) to (a·x + c·y + e, b·x + d·y + f). */
-export type Matrix = [number, number, number, number, number, number];
 
 /**
  * A font's horizontal widths (in thousandths of an em, or in glyph space for a Type 3 font); `widths` is null when every
@@ -137,22 +135,6 @@ const MITER_SLACK = 1e-9;
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-/** `a` then `b`: the matrix a PDF writes as a × b. */
-export function multiply(a: Matrix, b: Matrix): Matrix {
-  return [
-    a[0] * b[0] + a[1] * b[2],
-    a[0] * b[1] + a[1] * b[3],
-    a[2] * b[0] + a[3] * b[2],
-    a[2] * b[1] + a[3] * b[3],
-    a[4] * b[0] + a[5] * b[2] + b[4],
-    a[4] * b[1] + a[5] * b[3] + b[5],
-  ];
-}
-
-function apply(m: Matrix, x: number, y: number): [number, number] {
-  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-}
-
 /** The largest factor by which `m` stretches any length (its largest singular value). */
 function maxScale(m: Matrix): number {
   const s = m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3];
@@ -184,7 +166,7 @@ function union(a: Rect | null, b: Rect | null): Rect | null {
 
 /** The box of the rectangle [x0 y0 x1 y1] through `m`. */
 function rectThrough(m: Matrix, x0: number, y0: number, x1: number, y1: number): Rect | null {
-  return boxOf([...apply(m, x0, y0), ...apply(m, x1, y0), ...apply(m, x0, y1), ...apply(m, x1, y1)]);
+  return boxOf([...applyMatrix(m, x0, y0), ...applyMatrix(m, x1, y0), ...applyMatrix(m, x0, y1), ...applyMatrix(m, x1, y1)]);
 }
 
 /** Groups tokens into operators with their operands. Throws on unbalanced brackets or operands with no operator. */
@@ -622,11 +604,11 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
         const points = [minX, gs.rise, maxX, gs.rise];
         for (const origin of [minOrigin, maxOrigin]) {
           const toText = multiply(glyphSpace.matrix, [size * th, 0, 0, size, origin, gs.rise]);
-          for (const [gx, gy] of [[gx0, gy0], [gx1, gy0], [gx0, gy1], [gx1, gy1]]) points.push(...apply(toText, gx, gy));
+          for (const [gx, gy] of [[gx0, gy0], [gx1, gy0], [gx0, gy1], [gx1, gy1]]) points.push(...applyMatrix(toText, gx, gy));
         }
         const toTarget = multiply(tm, gs.ctm);
         const target: number[] = [];
-        for (let i = 0; i < points.length; i += 2) target.push(...apply(toTarget, points[i], points[i + 1]));
+        for (let i = 0; i < points.length; i += 2) target.push(...applyMatrix(toTarget, points[i], points[i + 1]));
         box = boxOf(target);
       } else {
         const y0 = Math.min(TEXT_DESCENT * size, TEXT_ASCENT * size) + gs.rise;
@@ -649,7 +631,7 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
   /** A path construction operator: its points go into the path's box, its joins into the miter tips. */
   function construct(op: Op): void {
     const p = path!;
-    const addPoint = (x: number, y: number) => p.points.push(...apply(gs.ctm, x, y));
+    const addPoint = (x: number, y: number) => p.points.push(...applyMatrix(gs.ctm, x, y));
     const moveTo = (x: number, y: number) => {
       Object.assign(p, { sx: x, sy: y, cx: x, cy: y, first: null, last: null });
       addPoint(x, y);
@@ -736,7 +718,7 @@ export function findUnits(tokens: Token[], bytes: Uint8Array, resources: Resourc
     const bisector = direction(out[0], out[1], into[0], into[1]);
     if (!bisector) return;
     const reach = gs.lineWidth / 2 / sinHalf;
-    path!.tips.push(...apply(gs.ctm, vx + bisector[0] * reach, vy + bisector[1] * reach));
+    path!.tips.push(...applyMatrix(gs.ctm, vx + bisector[0] * reach, vy + bisector[1] * reach));
   }
 
   /** A painting operator (or `n`) ends the path; a painted path that does not clip is a unit. */

@@ -14,7 +14,8 @@ import {
 } from "@cantoo/pdf-lib";
 import type { Rect } from "../../../model/geometry";
 import { ContentParseError, tokenize } from "./tokenize";
-import { findUnits, multiply, type ExtGStateInfo, type FontInfo, type Matrix, type ResourceInfo } from "./units";
+import { multiply, type Matrix } from "../../../model/path";
+import { findUnits, type ExtGStateInfo, type FontInfo, type ResourceInfo } from "./units";
 
 /**
  * Trimming a PDF page for the vector PDF export (spec §3.5): every drawing of the page's content that lies wholly

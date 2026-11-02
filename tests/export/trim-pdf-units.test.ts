@@ -1,5 +1,6 @@
 import { tokenize } from "../../src/export/trim/pdf/tokenize";
-import { findUnits, type Matrix, type ResourceInfo, type Unit } from "../../src/export/trim/pdf/units";
+import { findUnits, type ResourceInfo, type Unit } from "../../src/export/trim/pdf/units";
+import type { Matrix } from "../../src/model/path";
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 

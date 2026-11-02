@@ -2,10 +2,11 @@ import { PT_TO_PX } from "../../src/constants";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
 import { createDocument, createPage, shapeNodeDefaults } from "../../src/model/defaults";
-import { pathBounds, pointAtEnd, toSvgPath, type PathData } from "../../src/model/path";
+import { flattenPath, pathBounds, pointAtEnd, toSvgPath, type PathData } from "../../src/model/path";
 import type { ConnectorNode, Document, End, Node } from "../../src/model/types";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { createRegistries } from "../../src/registry";
+import { RouteRegistry } from "../../src/registry/route";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 
 const registries = createRegistries();
@@ -68,8 +69,8 @@ test("a straight connector between two free points is one line", () => {
     { op: "L", x: 110, y: 70 },
   ]);
   expect(r.ends).toEqual([
-    { pt: { x: 10, y: 20 }, dir: null },
-    { pt: { x: 110, y: 70 }, dir: null },
+    { pt: { x: 10, y: 20 }, dir: null, lead: 0 },
+    { pt: { x: 110, y: 70 }, dir: null, lead: 0 },
   ]);
   expect(r.caps).toEqual([null, null]);
   const half = PT_TO_PX / 2;
@@ -79,7 +80,7 @@ test("a straight connector between two free points is one line", () => {
 });
 
 test("a curved route offsets its control points perpendicular by bend times the length", () => {
-  const p = route("curved").path({ pt: { x: 0, y: 0 }, dir: null }, { pt: { x: 300, y: 0 }, dir: null }, { bend: 0.25 });
+  const p = route("curved").path({ pt: { x: 0, y: 0 }, dir: null, lead: 0 }, { pt: { x: 300, y: 0 }, dir: null, lead: 0 }, { bend: 0.25 });
   expect(p).toEqual([
     { op: "M", x: 0, y: 0 },
     { op: "C", x1: 100, y1: 75, x2: 200, y2: 75, x: 300, y: 0 },
@@ -87,7 +88,7 @@ test("a curved route offsets its control points perpendicular by bend times the 
 });
 
 test("a curved route leaves along an attached end's direction", () => {
-  const p = route("curved").path({ pt: { x: 0, y: 0 }, dir: { x: 0, y: -1 } }, { pt: { x: 300, y: 0 }, dir: null }, { bend: 0 });
+  const p = route("curved").path({ pt: { x: 0, y: 0 }, dir: { x: 0, y: -1 }, lead: 0 }, { pt: { x: 300, y: 0 }, dir: null, lead: 0 }, { bend: 0 });
   const c = p[1] as Extract<PathData[number], { op: "C" }>;
   expect(c.x1).toBeCloseTo(0);
   expect(c.y1).toBeCloseTo(-100);
@@ -103,8 +104,8 @@ test("orthogonal from A's e anchor to B's w anchor leaves horizontally in three 
   });
   const r = resolveConnector(doc, c, registries);
   expect(r.ends).toEqual([
-    { pt: { x: 100, y: 25 }, dir: { x: 1, y: 0 } },
-    { pt: { x: 300, y: 125 }, dir: { x: -1, y: 0 } },
+    { pt: { x: 100, y: 25 }, dir: { x: 1, y: 0 }, lead: 0 },
+    { pt: { x: 300, y: 125 }, dir: { x: -1, y: 0 }, lead: 0 },
   ]);
   expect(r.path).toEqual([
     { op: "M", x: 100, y: 25 },
@@ -217,7 +218,7 @@ test("both ends at one point give finite paths for every route and cap (Review F
 test("an end whose target is missing is flagged detached and resolves at the other end's point", () => {
   const r = resolveConnector(docWith(), connector({ kind: "attached", node: "gone", snap: "center" }, free(30, 40)), registries);
   expect(r.detached).toEqual([true, false]);
-  expect(r.ends[0]).toEqual({ pt: { x: 30, y: 40 }, dir: null });
+  expect(r.ends[0]).toEqual({ pt: { x: 30, y: 40 }, dir: null, lead: 0 });
   expect(finiteResult(r)).toBe(true);
 });
 
@@ -282,7 +283,7 @@ test("a square line cap widens the bounds by its corner's reach", () => {
 });
 
 test("orthogonal from a north anchor to a point below leaves upward before turning", () => {
-  const p = route("orthogonal").path({ pt: { x: 50, y: 0 }, dir: { x: 0, y: -1 } }, { pt: { x: 200, y: 100 }, dir: null }, { offset: 0.5 });
+  const p = route("orthogonal").path({ pt: { x: 50, y: 0 }, dir: { x: 0, y: -1 }, lead: 0 }, { pt: { x: 200, y: 100 }, dir: null, lead: 0 }, { offset: 0.5 });
   expect(p).toEqual([
     { op: "M", x: 50, y: 0 },
     { op: "L", x: 50, y: -12 },
@@ -292,7 +293,7 @@ test("orthogonal from a north anchor to a point below leaves upward before turni
 });
 
 test("orthogonal from e to e goes round the far side and enters the second item from outside", () => {
-  const p = route("orthogonal").path({ pt: { x: 100, y: 25 }, dir: { x: 1, y: 0 } }, { pt: { x: 400, y: 125 }, dir: { x: 1, y: 0 } }, { offset: 0.5 });
+  const p = route("orthogonal").path({ pt: { x: 100, y: 25 }, dir: { x: 1, y: 0 }, lead: 0 }, { pt: { x: 400, y: 125 }, dir: { x: 1, y: 0 }, lead: 0 }, { offset: 0.5 });
   expect(p).toEqual([
     { op: "M", x: 100, y: 25 },
     { op: "L", x: 412, y: 25 },
@@ -304,7 +305,7 @@ test("orthogonal from e to e goes round the far side and enters the second item 
 });
 
 test("orthogonal between facing anchors that have crossed takes an S, never doubling back on a normal", () => {
-  const p = route("orthogonal").path({ pt: { x: 300, y: 0 }, dir: { x: 1, y: 0 } }, { pt: { x: 0, y: 200 }, dir: { x: -1, y: 0 } }, { offset: 0.5 });
+  const p = route("orthogonal").path({ pt: { x: 300, y: 0 }, dir: { x: 1, y: 0 }, lead: 0 }, { pt: { x: 0, y: 200 }, dir: { x: -1, y: 0 }, lead: 0 }, { offset: 0.5 });
   expect(p[1]).toEqual({ op: "L", x: 312, y: 0 });
   expect(p[p.length - 2]).toEqual({ op: "L", x: -12, y: 200 });
 });
@@ -335,11 +336,29 @@ test.each([0.5, 1])("every cap at size %s is a sound shape at least as wide as t
   }
 });
 
-test("an arrow longer than its end piece trims back round the corner and points along where the line stops", () => {
-  // A 3 pt line with an arrow (≈ 12 px inset) into an anchor facing up: the route's last piece is the 12 px stub, so
-  // the trim must cross into the leg before it.
-  const doc = docWith(shape("b", "rect", 200, 100, 100, 50));
-  const c = connector(free(0, 0), { kind: "attached", node: "b", snap: "anchor", anchor: "n" }, {
+/** The cap's outline as polygon points (the built-in caps tested here are straight-sided). */
+const polygon = (p: PathData) => p.filter((s): s is { op: "M" | "L"; x: number; y: number } => s.op === "M" || s.op === "L");
+
+/** Whether `pt` lies inside or on the convex polygon `poly` (either winding), allowing `slack` px. */
+function insideConvex(poly: { x: number; y: number }[], pt: { x: number; y: number }, slack = 1e-6): boolean {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len === 0) continue;
+    const side = ((b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x)) / len;
+    if (Math.abs(side) <= slack) continue;
+    if (sign === 0) sign = Math.sign(side);
+    else if (Math.sign(side) !== sign) return false;
+  }
+  return true;
+}
+
+test("an arrow into an e anchor at the end of a U arrives along the normal, with no line beside the head", () => {
+  // The review's probe: e to e, 3 pt line, size-4 arrow (inset 16 px) — longer than the route's own 12 px stub.
+  const doc = docWith(shape("a", "rect", 0, 0, 100, 50), shape("b", "rect", 300, 100, 100, 50));
+  const c = connector({ kind: "attached", node: "a", snap: "anchor", anchor: "e" }, { kind: "attached", node: "b", snap: "anchor", anchor: "e" }, {
     route: "orthogonal",
     stroke: thick,
     caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 4 }],
@@ -347,21 +366,78 @@ test("an arrow longer than its end piece trims back round the corner and points 
   const r = resolveConnector(doc, c, registries);
   const inset = registries.caps.get("arrow")!.inset(4, w3);
   expect(inset).toBeGreaterThan(12);
-  const stop = pointAtEnd(r.path, 1).pt;
+  expect(r.ends[1].lead).toBeCloseTo(inset + 1);
   const tip = r.ends[1].pt;
-  expect(tip).toEqual({ x: 250, y: 100 });
-  // The line's end lies on the arrow's axis, between its base and its tip.
-  const cap = r.caps[1]!.filter((s) => s.op !== "Z") as { x: number; y: number }[];
-  const base = { x: (cap[1].x + cap[2].x) / 2, y: (cap[1].y + cap[2].y) / 2 };
-  const along = ((stop.x - tip.x) * (base.x - tip.x) + (stop.y - tip.y) * (base.y - tip.y)) / Math.hypot(base.x - tip.x, base.y - tip.y);
-  const across = Math.abs((stop.x - tip.x) * (base.y - tip.y) - (stop.y - tip.y) * (base.x - tip.x)) / Math.hypot(base.x - tip.x, base.y - tip.y);
+  expect(tip).toEqual({ x: 400, y: 125 });
+  // The head points −x into the e anchor: its tip is its rightmost point and its base is upright, inset px to the right.
+  const head = polygon(r.caps[1]!);
+  expect(head[0]).toMatchObject({ x: 400, y: 125 });
+  expect(head[1].x).toBeCloseTo(400 + inset);
+  expect(head[2].x).toBeCloseTo(400 + inset);
+  expect(pointAtEnd(r.path, 1).tangent.x).toBeCloseTo(-1);
+  expect(pointAtEnd(r.path, 1).tangent.y).toBeCloseTo(0);
+  // No part of the 3 pt line lies beside the head: every point of the trimmed line within the head's length of its tip,
+  // widened to both edges of the stroke, is inside the head. (Before leads, the line ran down beside it to y ≈ 117.5.)
+  for (const line of flattenPath(r.path, 0.01))
+    for (let i = 1; i < line.length; i++) {
+      const [a, b] = [line[i - 1], line[i]];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len === 0) continue;
+      const n = { x: -(b.y - a.y) / len, y: (b.x - a.x) / len };
+      for (let k = 0; k <= 50; k++) {
+        const x = a.x + ((b.x - a.x) * k) / 50;
+        const y = a.y + ((b.y - a.y) * k) / 50;
+        if (Math.hypot(x - tip.x, y - tip.y) > inset + 1e-6) continue;
+        for (const off of [-w3 / 2, 0, w3 / 2]) expect(insideConvex(head, { x: x + n.x * off, y: y + n.y * off })).toBe(true);
+      }
+    }
+});
+
+test("a curved route keeps its control point at least the end's lead out along the normal", () => {
+  const p = route("curved").path({ pt: { x: 0, y: 0 }, dir: { x: 0, y: -1 }, lead: 50 }, { pt: { x: 30, y: 0 }, dir: null, lead: 0 }, { bend: 0 });
+  const c = p[1] as Extract<PathData[number], { op: "C" }>;
+  expect(c.x1).toBeCloseTo(0);
+  expect(c.y1).toBeCloseTo(-50);
+});
+
+test("a free end whose arrow reaches round a corner points from where the line stops to the tip", () => {
+  // Orthogonal between free points with the middle at 95 %: the last leg is 5 px, shorter than the 16 px inset.
+  const c = connector(free(0, 0), free(100, 100), { route: "orthogonal", routeParams: { offset: 0.95 }, stroke: thick, caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 4 }] });
+  const r = resolveConnector(docWith(), c, registries);
+  const stop = pointAtEnd(r.path, 1).pt;
+  const head = polygon(r.caps[1]!);
+  const base = { x: (head[1].x + head[2].x) / 2, y: (head[1].y + head[2].y) / 2 };
+  const axis = { x: base.x - head[0].x, y: base.y - head[0].y };
+  const across = Math.abs((stop.x - head[0].x) * axis.y - (stop.y - head[0].y) * axis.x) / Math.hypot(axis.x, axis.y);
   expect(across).toBeCloseTo(0);
-  expect(along).toBeGreaterThan(0);
-  expect(along).toBeLessThanOrEqual(Math.hypot(base.x - tip.x, base.y - tip.y) + 1e-9);
-  // Measured along the path, the line is exactly `inset` shorter.
-  const length = (p: PathData) => p.slice(1).reduce((acc, s, i) => acc + Math.hypot((s as { x: number }).x - (p[i] as { x: number }).x, (s as { y: number }).y - (p[i] as { y: number }).y), 0);
-  const full = route("orthogonal").path(r.ends[0], r.ends[1], c.routeParams);
-  expect(length(full) - length(r.path)).toBeCloseTo(inset);
+  expect(insideConvex(head, stop)).toBe(true);
+});
+
+test("a hairline still has a drawn area and a paint box with no zero dimension", () => {
+  const r = resolveConnector(docWith(), connector(free(0, 10), free(100, 10), { stroke: { ...thick, width: 0 } }), registries);
+  expect(r.bounds.height).toBeCloseTo(1);
+  expect(r.paintBox.height).toBeCloseTo(1);
+});
+
+test("a mitred sharp corner widens the bounds by its miter length; a bevelled one does not", () => {
+  // A route with a 60° corner at (100, 0): its miter reaches 1/sin(30°) = 2 half-widths, within the limit of 4.
+  const kinked = { ...registries, routes: new RouteRegistry() };
+  kinked.routes.register({
+    id: "kink",
+    name: "Kink",
+    icon: "",
+    defaults: () => ({}),
+    fields: () => [],
+    path: () => [
+      { op: "M", x: 0, y: 0 },
+      { op: "L", x: 100, y: 0 },
+      { op: "L", x: 100 - 100 * Math.cos(Math.PI / 3), y: 100 * Math.sin(Math.PI / 3) },
+    ],
+  });
+  const sharp = (join?: "miter" | "bevel") =>
+    resolveConnector(docWith(), connector(free(0, 0), free(0, 0), { route: "kink", stroke: { ...thick, join } }), kinked);
+  expect(sharp().bounds.x + sharp().bounds.width).toBeCloseTo(100 + w3);
+  expect(sharp("bevel").bounds.x + sharp("bevel").bounds.width).toBeCloseTo(100 + w3 / 2);
 });
 
 test("caps longer than the whole line meet at one point and stay finite", () => {

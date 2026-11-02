@@ -15,11 +15,14 @@ export interface ResolvedConnector {
   path: PathData;
   /** Each end's cap as a closed area filled with the stroke's paint, or null when the end has none. */
   caps: [PathData | null, PathData | null];
-  /** The area drawn: the line and the caps, widened by half the stroke's width (more where its line cap is square). */
+  /**
+   * The area drawn: the line and the caps, widened by half the stroke's width (at least 0.5 px), and further where a
+   * square line cap or a mitred join reaches out.
+   */
   bounds: Rect;
   /**
    * The box the stroke's paint (a gradient, a pattern) is laid out in, for the line and its caps alike: the bounds of the
-   * whole route, end to end, each dimension at least the stroke's width so a straight horizontal or vertical line still
+   * whole route, end to end, each dimension at least the stroke's width (and 1 px) so a straight horizontal or vertical line still
    * has a box to lay a paint across.
    */
   paintBox: Rect;
@@ -143,10 +146,12 @@ function pieceLength({ from, seg }: Piece): number {
  * The open path `M …` shortened by `startBy` px along its length from the start and `endBy` px from the end. A trim
  * longer than the end piece carries on into the pieces before it, so a cap always covers the last `inset` px of line
  * however short the pieces are. When the two trims together are longer than the path, they are scaled down to meet at
- * one point. A path that is not a single open subpath is returned as it is.
+ * one point. A path that is not a single open subpath is returned as it is. `crossed` says, for each end, whether its
+ * trim reached past the end piece into the one before it (round a corner of the route).
  */
-function trimPath(p: PathData, startBy: number, endBy: number): PathData {
-  if (p.length < 2 || p[0].op !== "M" || p.slice(1).some((s) => s.op === "Z" || s.op === "M")) return p;
+function trimPath(p: PathData, startBy: number, endBy: number): { path: PathData; crossed: [boolean, boolean] } {
+  if (p.length < 2 || p[0].op !== "M" || p.slice(1).some((s) => s.op === "Z" || s.op === "M")) return { path: p, crossed: [false, false] };
+  const crossed: [boolean, boolean] = [false, false];
   let start: Pt = p[0];
   const pieces: Piece[] = [];
   let at: Pt = start;
@@ -166,6 +171,7 @@ function trimPath(p: PathData, startBy: number, endBy: number): PathData {
   while (pieces.length > 1 && rest > 0 && lengths[lengths.length - 1] <= rest) {
     rest -= lengths.pop()!;
     pieces.pop();
+    crossed[1] = true;
   }
   if (rest > 0) {
     const last = pieces[pieces.length - 1];
@@ -175,6 +181,7 @@ function trimPath(p: PathData, startBy: number, endBy: number): PathData {
   while (pieces.length > 1 && rest > 0 && pieceLength(pieces[0]) <= rest) {
     rest -= pieceLength(pieces[0]);
     pieces.shift();
+    crossed[0] = true;
   }
   start = pieces[0].from;
   if (rest > 0) {
@@ -182,7 +189,7 @@ function trimPath(p: PathData, startBy: number, endBy: number): PathData {
     start = cut.start;
     pieces[0] = { from: cut.start, seg: cut.seg as Piece["seg"] };
   }
-  return [{ op: "M", x: start.x, y: start.y }, ...pieces.map((pc) => pc.seg)];
+  return { path: [{ op: "M", x: start.x, y: start.y }, ...pieces.map((pc) => pc.seg)], crossed };
 }
 
 /** A non-negative finite number, else `fallback`. */
@@ -193,6 +200,36 @@ function size(v: number, fallback: number): number {
 /** `r` grown by `by` on every side. */
 function grow(r: Rect, by: number): Rect {
   return { x: r.x - by, y: r.y - by, width: r.width + 2 * by, height: r.height + 2 * by };
+}
+
+/** How much further than `lead` past its inset an attached end runs straight, so its trimmed line stops clear of the turn. */
+const LEAD_MARGIN_PX = 1;
+
+/** The least half-width the drawn area and paint box are widened by, so neither has a zero dimension even for a hairline. */
+const MIN_HALF_WIDTH_PX = 0.5;
+
+/** SVG's default miter limit: a join longer than this many line widths is drawn bevelled instead. */
+const MITER_LIMIT = 4;
+
+/**
+ * How far, as a multiple of half the line's width, the line's outline reaches out from its centre line at the path's
+ * corners when joins are mitred: 1/sin(θ/2) for the sharpest corner of angle θ whose miter is within the limit (a
+ * sharper one is bevelled and reaches no further than 1).
+ */
+function miterReach(p: PathData): number {
+  let worst = 1;
+  for (let i = 2; i < p.length; i++) {
+    const [from, before, after] = [p[i - 2], p[i - 1], p[i]];
+    // A corner joins two drawn pieces: `before` ends where `after` starts.
+    if (from.op === "Z" || before.op === "Z" || before.op === "M" || after.op === "Z" || after.op === "M") continue;
+    const into = pointAtEnd([{ op: "M", x: from.x, y: from.y }, before], 1).tangent;
+    const back = pointAtEnd([{ op: "M", x: before.x, y: before.y }, after], 0).tangent;
+    // The corner's two rays are −into (back along the first piece) and −back (on along the second): cos θ = into · back.
+    const cos = into.x * back.x + into.y * back.y;
+    const ratio = Math.sqrt(2 / Math.max(1e-12, 1 - cos));
+    if (ratio <= MITER_LIMIT) worst = Math.max(worst, ratio);
+  }
+  return worst;
 }
 
 /** `r` with each dimension at least `min`, grown about its centre. */
@@ -214,21 +251,31 @@ function atLeast(r: Rect, min: number): Rect {
  *   connector's current box when both ends are detached. The store's normaliser turns such an end into a free end at
  *   its last resolved point within the same commit; this fallback only keeps the geometry finite until it does.
  * - A route that is not registered draws a straight line; a cap kind that is not registered draws nothing.
- * - Each cap's tip is on its end, and the line is shortened by the cap's inset along its length. The cap's axis runs from
- *   where the shortened line now stops to the tip, so the line ends inside the cap even where the inset reaches round a
- *   corner of the route; on a straight end piece that axis is the path's tangent.
+ * - Each cap's tip is on its end, and the line is shortened by the cap's inset along its length. An end attached to an
+ *   anchor asks the route for a straight `lead` of the inset plus a pixel, so its trim never turns a corner and its cap
+ *   points along the path's tangent there, square into the anchor. A free or centre end has no lead; when its trim does
+ *   reach round a corner, its cap's axis runs instead from where the shortened line stops to the tip, so the line still
+ *   ends inside the cap.
  *
  * Every number is finite for any ends, including both ends on one item or at one point.
  */
 export function resolveConnector(doc: Document, c: ConnectorNode, registries: Registries): ResolvedConnector {
   const placed: [Placed, Placed] = [place(doc, c, c.ends[0], registries), place(doc, c, c.ends[1], registries)];
+  const widthPx = size(c.stroke.width, 0) * PT_TO_PX;
+  const capped = [0, 1].map((i) => {
+    const kind = registries.caps.get(c.caps[i].kind);
+    if (!kind) return { shape: [] as PathData, inset: 0 };
+    const capSize = size(c.caps[i].size, DEFAULT_CAP_SIZE);
+    return { shape: kind.path(capSize, widthPx), inset: size(kind.inset(capSize, widthPx), 0) };
+  });
   const boxCenter: Pt = { x: c.x + c.width / 2, y: c.y + c.height / 2 };
   const unclipped = (i: 0 | 1): Pt => placed[i]?.pt ?? placed[1 - i]?.pt ?? boxCenter;
   const resolve = (i: 0 | 1): EndPoint => {
     const p = placed[i];
-    if (!p) return { pt: unclipped(i), dir: null };
+    if (!p) return { pt: unclipped(i), dir: null, lead: 0 };
     const pt = p.clipTo ? (clipToOutline(p.pt, unclipped(i === 0 ? 1 : 0), p.clipTo.outline) ?? p.pt) : p.pt;
-    return { pt, dir: p.dir };
+    const inset = capped[i].inset;
+    return { pt, dir: p.dir, lead: p.dir && inset > 0 ? inset + LEAD_MARGIN_PX : 0 };
   };
   const ends: [EndPoint, EndPoint] = [resolve(0), resolve(1)];
 
@@ -240,33 +287,29 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
         { op: "L", x: ends[1].pt.x, y: ends[1].pt.y },
       ];
   const full = withoutEmptyPieces(routed);
-
-  const widthPx = size(c.stroke.width, 0) * PT_TO_PX;
-  const capped = [0, 1].map((i) => {
-    const kind = registries.caps.get(c.caps[i].kind);
-    if (!kind) return { shape: [] as PathData, inset: 0 };
-    const capSize = size(c.caps[i].size, DEFAULT_CAP_SIZE);
-    return { shape: kind.path(capSize, widthPx), inset: size(kind.inset(capSize, widthPx), 0) };
-  });
-  const path = trimPath(full, capped[0].inset, capped[1].inset);
+  const { path, crossed } = trimPath(full, capped[0].inset, capped[1].inset);
 
   const capAt = (i: 0 | 1): PathData | null => {
     const { shape } = capped[i];
     if (shape.length === 0) return null;
     const tip = pointAtEnd(full, i);
-    const stop = pointAtEnd(path, i).pt;
-    const dx = tip.pt.x - stop.x;
-    const dy = tip.pt.y - stop.y;
-    const len = Math.hypot(dx, dy);
-    const t = len > 1e-9 ? { x: dx / len, y: dy / len } : tip.tangent;
+    let t = tip.tangent;
+    if (crossed[i] && !ends[i].dir) {
+      const stop = pointAtEnd(path, i).pt;
+      const len = Math.hypot(tip.pt.x - stop.x, tip.pt.y - stop.y);
+      if (len > 1e-9) t = { x: (tip.pt.x - stop.x) / len, y: (tip.pt.y - stop.y) / len };
+    }
     // The cap points along +x from the origin; turn +x onto its axis and move the origin to the tip.
     return transformPath(shape, [t.x, t.y, -t.y, t.x, tip.pt.x, tip.pt.y]);
   };
   const caps: [PathData | null, PathData | null] = [capAt(0), capAt(1)];
 
-  // The drawn area: the line and caps, widened by half the line's width (a square line cap reaches √2 times that at a corner).
-  const reach = (widthPx / 2) * (c.stroke.cap === "square" ? Math.SQRT2 : 1);
+  // The drawn area: the line and caps, widened by half the line's width, further where a square line cap's corner or a
+  // mitred join reaches out (SVG mitres joins when the stroke does not say otherwise).
+  const half = Math.max(widthPx / 2, MIN_HALF_WIDTH_PX);
+  const mitred = (c.stroke.join ?? "miter") === "miter";
+  const reach = half * Math.max(c.stroke.cap === "square" ? Math.SQRT2 : 1, mitred ? miterReach(path) : 1);
   const bounds = grow(unionRect([pathBounds(path), ...caps.filter((p): p is PathData => p !== null).map(pathBounds)]), reach);
-  const paintBox = atLeast(pathBounds(full), widthPx);
+  const paintBox = atLeast(pathBounds(full), 2 * half);
   return { ends, path, caps, bounds, paintBox, detached: [placed[0] === null, placed[1] === null] };
 }

@@ -25,8 +25,8 @@ export const straightRoute: Route = {
 /**
  * One cubic from end to end. Its control points sit a third and two thirds of the way along the line, pushed sideways
  * by `bend` × the line's length (to the right of the direction of travel as the page shows it; a negative bend goes
- * left). An end attached to an anchor instead puts its control point the same distance out along the anchor's normal,
- * so the curve leaves the item square to its edge.
+ * left). An end attached to an anchor instead puts its control point the same distance (at least its `lead`) out along
+ * the anchor's normal, so the curve leaves the item square to its edge.
  */
 export const curvedRoute: Route = {
   id: "curved",
@@ -43,7 +43,7 @@ export const curvedRoute: Route = {
     const reach = Math.hypot(Math.hypot(dx, dy) / 3, Math.hypot(side.x, side.y));
     const control = (end: EndPoint, along: number): Pt =>
       end.dir
-        ? { x: end.pt.x + end.dir.x * reach, y: end.pt.y + end.dir.y * reach }
+        ? { x: end.pt.x + end.dir.x * Math.max(reach, end.lead), y: end.pt.y + end.dir.y * Math.max(reach, end.lead) }
         : { x: a.pt.x + dx * along + side.x, y: a.pt.y + dy * along + side.y };
     const c1 = control(a, 1 / 3);
     const c2 = control(b, 2 / 3);
@@ -97,7 +97,7 @@ function simplify(pts: Pt[]): Pt[] {
 
 /**
  * A simple elbow, with no obstacle avoidance. An end attached to an anchor first runs a short stub straight out along
- * the anchor's normal (rotated with its item), so the line leaves its item square to the edge and arrives into an anchor
+ * the anchor's normal (rotated with its item), never shorter than the end's `lead`, so the line leaves its item square to the edge and arrives into an anchor
  * from outside; a free or centre end has no stub. Between the stub ends the route is axis-aligned: of a few candidate
  * elbows (a Z whose middle segment crosses at `offset`, 0–1, of the way from start to end; an L with one corner; a U
  * round the far side when both ends face the same way) it takes the first that never doubles back along an end's
@@ -113,7 +113,11 @@ export const orthogonalRoute: Route = {
   path(a, b, params) {
     const offset = Math.max(0, Math.min(1, numberParam(params, "offset", 0.5)));
     const stub = Math.min(STUB_PX, Math.hypot(b.pt.x - a.pt.x, b.pt.y - a.pt.y) / 3);
-    const out = (e: EndPoint): Pt => (e.dir ? { x: e.pt.x + e.dir.x * stub, y: e.pt.y + e.dir.y * stub } : e.pt);
+    const out = (e: EndPoint): Pt => {
+      if (!e.dir) return e.pt;
+      const run = Math.max(stub, e.lead);
+      return { x: e.pt.x + e.dir.x * run, y: e.pt.y + e.dir.y * run };
+    };
     const p = out(a);
     const q = out(b);
     const da = a.dir ? nearestAxis(a.dir) : null;

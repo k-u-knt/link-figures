@@ -425,7 +425,9 @@ export class PointerController {
       }
       case "Delete":
       case "Backspace":
-        handled = this.deleteSelected();
+        // The Delete command, as the toolbar and the palette run it: one way to delete.
+        handled = this.editableSelection(this.store.doc).size > 0;
+        if (handled) this.view.runCommandById("delete");
         break;
       case "Escape":
         // An armed tool is put down first; the selection is cleared by the next Escape.
@@ -451,18 +453,6 @@ export class PointerController {
         node.y = roundPx(node.y + dy);
       }
     });
-    return true;
-  }
-
-  /** Deletes the selected nodes that are not locked (the Delete key, and the Delete command). Whether there were any. */
-  deleteSelected(): boolean {
-    const ids = this.editableSelection(this.store.doc);
-    if (ids.size === 0) return false;
-    this.store.commit("delete", (draft) => {
-      draft.nodes = draft.nodes.filter((node) => !ids.has(node.id));
-    });
-    // The node host lets go of removed nodes too, but what a deleted node depended on is nobody's business once it is gone.
-    for (const id of ids) this.view.index.untrack(id);
     return true;
   }
 

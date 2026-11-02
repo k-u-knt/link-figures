@@ -38,8 +38,9 @@ export default class LinkFiguresPlugin extends Plugin {
     registries: this.registries,
     files: {
       read: (path) => this.app.vault.read(this.vaultFile(path)),
-      write: (path, text) => this.app.vault.modify(this.vaultFile(path), text),
+      process: async (path, edit) => void (await this.app.vault.process(this.vaultFile(path), edit)),
     },
+    normalizePath,
     openFigure: (path) => this.openFigureView(path),
   });
   /** When each figure view was last made active, by a counter: the API acts on the most recent view of a figure. */

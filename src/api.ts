@@ -1,9 +1,20 @@
 import type { App } from "obsidian";
-import { prepareCall, runBatch, runCall, withHeadlessFigure, type Call, type FigureFiles } from "./commands/headless";
+import {
+  prepareBatch,
+  prepareCall,
+  readHeadlessFigure,
+  requireView,
+  runBatch,
+  runCall,
+  runHeadless,
+  withHeadlessFigure,
+  type Call,
+  type FigureFiles,
+} from "./commands/headless";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
 import type { Registries } from "./registry";
-import { CommandError, type CommandContext } from "./registry/command";
+import type { CommandContext } from "./registry/command";
 import type { ParamSpec } from "./registry/params";
 
 /** A command as `commands()` describes it to a caller. */
@@ -46,16 +57,24 @@ export interface ApiHost {
   app: App;
   registries: Registries;
   files: FigureFiles;
-  /** The most recently active view that has the figure at `path` loaded, or null when none has. */
+  /** A vault path in the one form Obsidian keeps it in (Obsidian's `normalizePath`). */
+  normalizePath(path: string): string;
+  /** The most recently active view that has the figure at `path` (normalised) loaded, or null when none has. */
   openFigure(path: string): OpenFigure | null;
 }
 
 export function createApi(host: ApiHost): LinkFiguresApi {
   const { app, registries, files } = host;
-  // Headless calls on one file run one after another, so a script that does not await each call loses no edit.
+  /**
+   * The work on each figure runs one call after another, so a script that does not await each call loses no edit. A
+   * call decides between the open view and the file when its turn comes, so one queued while the figure was closed
+   * acts on the view that has opened it since.
+   */
   const queues = new Map<string, Promise<unknown>>();
-  const queued = <T>(path: string, work: () => Promise<T>): Promise<T> => {
-    const next = (queues.get(path) ?? Promise.resolve()).then(work, work);
+  const queued = <T>(figurePath: string, work: (path: string, view: OpenFigure | null) => T | Promise<T>): Promise<T> => {
+    const path = host.normalizePath(figurePath);
+    const start = () => work(path, host.openFigure(path));
+    const next = (queues.get(path) ?? Promise.resolve()).then(start, start);
     const settled = next.then(
       () => undefined,
       () => undefined,
@@ -65,11 +84,6 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       if (queues.get(path) === settled) queues.delete(path);
     });
     return next;
-  };
-
-  const callsOf = (calls: unknown): Call[] => {
-    if (!Array.isArray(calls)) throw new CommandError('a batch is an array of calls ({ id, args? })');
-    return calls as Call[];
   };
 
   return {
@@ -85,27 +99,26 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       })),
 
     async run(figurePath, id, args) {
-      const view = host.openFigure(figurePath);
-      const call = prepareCall(registries, { id, args }, view === null);
-      if (view) return runCall(view.store, view.commandContext(), call);
-      return queued(figurePath, () => withHeadlessFigure(app, registries, files, figurePath, (ctx, store) => runCall(store, ctx, call)));
+      const call = prepareCall(registries, { id, args });
+      return queued(figurePath, (path, view) => {
+        requireView(call, view !== null);
+        if (view) return runCall(view.store, view.commandContext(), call);
+        return runHeadless(app, registries, files, path, call);
+      });
     },
 
     async batch(figurePath, calls) {
-      const view = host.openFigure(figurePath);
       // Every call is checked before any runs, so a bad one changes nothing.
-      const prepared = callsOf(calls).map((call) => prepareCall(registries, call, view === null));
-      if (view) return runBatch(view.store, view.commandContext(), prepared);
-      return queued(figurePath, () =>
-        withHeadlessFigure(app, registries, files, figurePath, (ctx, store) => runBatch(store, ctx, prepared)),
-      );
+      const prepared = prepareBatch(registries, calls);
+      return queued(figurePath, (path, view) => {
+        if (view) return runBatch(view.store, view.commandContext(), prepared);
+        return withHeadlessFigure(app, registries, files, path, (ctx, store) => runBatch(store, ctx, prepared));
+      });
     },
 
     async read(figurePath) {
-      const view = host.openFigure(figurePath);
       // A copy: the store's document is frozen, and what the caller does with it is not an edit.
-      if (view) return structuredClone(view.store.doc);
-      return queued(figurePath, () => withHeadlessFigure(app, registries, files, figurePath, (ctx) => structuredClone(ctx.store.doc)));
+      return queued(figurePath, async (path, view) => structuredClone(view ? view.store.doc : await readHeadlessFigure(registries, files, path)));
     },
   };
 }

@@ -1,4 +1,4 @@
-import { current, isDraft, original } from "immer";
+import { current, isDraft } from "immer";
 import { resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
 import { attachTarget } from "./attach";
@@ -10,9 +10,11 @@ import type { ConnectorNode, Document, End } from "./types";
  * A rule that keeps derived parts of a document consistent with the rest. The store runs every normaliser on the draft
  * of each commit, after the commit's own recipe and inside the same `produce`, so what a normaliser changes is part of
  * the commit's patches and undo restores it exactly. A normaliser must change nothing when the document is already
- * consistent, so a commit it has nothing to say about stays as small as the recipe made it.
+ * consistent, so a commit it has nothing to say about stays as small as the recipe made it. `before` is the document
+ * as it was before the edit being normalised: the committed document for a commit, the draft as the previous call left
+ * it for one call of a batch, and the document itself for a load.
  */
-export type Normaliser = (draft: Document) => void;
+export type Normaliser = (draft: Document, before: Document) => void;
 
 /**
  * A store for a figure with every normaliser a figure has: the one way a store for a figure is made, by the view and by
@@ -40,10 +42,9 @@ const squaredDistance = (a: Pt, b: Pt): number => (a.x - b.x) ** 2 + (a.y - b.y)
  * Connectors never attach to connectors, so the order they are visited in does not matter.
  */
 export function connectorNormaliser(registries: Registries): Normaliser {
-  return (draft) => {
+  return (draft, before) => {
     if (!draft.nodes.some(isConnector)) return;
     // Resolving reads the whole document, so it reads plain snapshots rather than the draft's proxies.
-    const before = isDraft(draft) ? original(draft) : undefined;
     let now: Document = isDraft(draft) ? current(draft) : draft;
     for (const node of draft.nodes) {
       if (!isConnector(node)) continue;
@@ -87,12 +88,12 @@ function withEnd(ends: [End, End], i: 0 | 1, end: End): [End, End] {
 }
 
 /**
- * Where end `i` of `c` was drawn in `before` (the document as it was before this commit), when the connector was there
+ * Where end `i` of `c` was drawn in `before` (the document as it was before this edit), when the connector was there
  * with that end attached to the same item and the item was there to resolve it; otherwise null.
  */
-function lastPoint(before: Document | undefined, c: ConnectorNode, i: 0 | 1, registries: Registries): Pt | null {
-  const was = before?.nodes.find((n) => n.id === c.id);
-  if (!before || !was || !isConnector(was)) return null;
+function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Registries): Pt | null {
+  const was = before.nodes.find((n) => n.id === c.id);
+  if (!was || !isConnector(was)) return null;
   const end = was.ends[i];
   const now = c.ends[i];
   if (end.kind !== "attached" || now.kind !== "attached" || end.node !== now.node) return null;

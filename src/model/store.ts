@@ -52,7 +52,8 @@ export class DocumentStore {
    */
   addNormaliser(fn: Normaliser): void {
     this.normalisers.push(fn);
-    this.current = produce(this.current, draft => { fn(draft); });
+    const loaded = this.current;
+    this.current = produce(loaded, draft => { fn(draft, loaded); });
   }
 
   /**
@@ -64,7 +65,7 @@ export class DocumentStore {
     // The wrapper discards the recipe's return value: immer rejects a producer that both mutates and returns.
     const [after, patches, inversePatches] = produceWithPatches(before, draft => {
       recipe(draft);
-      this.normalise(draft);
+      this.normalise(draft, before);
     });
     if (patches.length === 0) return;
     this.current = after;
@@ -125,7 +126,7 @@ export class DocumentStore {
    */
   replace(doc: Document, label = "replace", options: { keepHistory?: boolean } = {}): void {
     const before = this.current;
-    doc = this.normalisers.length === 0 ? doc : produce(doc, draft => { this.normalise(draft); });
+    doc = this.normalisers.length === 0 ? doc : produce(doc, draft => { this.normalise(draft, doc); });
     this.current = doc;
     if (options.keepHistory) {
       const links = changedLinks(before.nodes, doc.nodes);
@@ -159,11 +160,12 @@ export class DocumentStore {
   }
 
   /**
-   * Runs every normaliser on `draft`, as each commit does after its recipe. For a recipe that edits in several steps
-   * (a batch of commands in one commit), so that each step sees a consistent document.
+   * Runs every normaliser on `draft`, as each commit does after its recipe; `before` is the document as it was before
+   * the edit (see `Normaliser`). For a recipe that edits in several steps (a batch of commands in one commit), so that
+   * each step sees a consistent document and is normalised against the step before it.
    */
-  normalise(draft: Document): void {
-    for (const fn of this.normalisers) fn(draft);
+  normalise(draft: Document, before: Document): void {
+    for (const fn of this.normalisers) fn(draft, before);
   }
 
   subscribe(fn: (ev: ChangeEvent) => void): () => void {

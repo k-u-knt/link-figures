@@ -37,6 +37,12 @@ function editor(ctx: CommandContext): EditorView {
   return ctx.view as EditorView;
 }
 
+/** Does `fn`, a side effect on the view, once the edit is in: at once, or within a batch after the batch commits. */
+function whenCommitted(ctx: CommandContext, fn: () => void): void {
+  if (ctx.afterCommit) ctx.afterCommit(fn);
+  else fn();
+}
+
 /** The arguments of a command that acts on nodes: `ids` names them, in place of the selection. */
 type NodesArgs = { ids?: unknown[] };
 
@@ -200,7 +206,8 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
     draft.nodes.push(...copies);
   });
   const ids = copies.map((c) => c.id);
-  if (ctx.view && args?.ids === undefined) ctx.view.setSelection(ids);
+  const view = ctx.view;
+  if (view && args?.ids === undefined) whenCommitted(ctx, () => view.setSelection(ids));
   return { ids };
 }
 
@@ -231,7 +238,7 @@ function addPage(ctx: CommandContext, args?: { page?: unknown }): { id: PageId }
   ctx.store.commit("add-page", (draft) => {
     draft.pages.splice(at === -1 ? draft.pages.length : at + 1, 0, page);
   });
-  if (clamped) editor(ctx).notePageLimit(limit);
+  if (clamped) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
   return { id: page.id };
 }
 

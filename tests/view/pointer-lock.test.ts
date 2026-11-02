@@ -58,6 +58,7 @@ function setup(build: (doc: Document) => void = () => {}) {
     nodeHost: { elementFor: () => undefined },
     index: { untrack: vi.fn() },
     pageLayer: { overlayHost: () => overlay },
+    runCommandById: vi.fn(),
   };
   const stage = new FakeStage();
   const controller = new PointerController(view as never);
@@ -211,7 +212,17 @@ test("Delete leaves a locked node in the document; the selection box of a locked
   expect(nodeOf("p-lock")).toBeDefined();
   expect(view.store.doc.nodes).toHaveLength(1);
   expect(view.index.untrack).not.toHaveBeenCalled();
+  expect(view.runCommandById).not.toHaveBeenCalled();
   expect(view.selection.ids).toEqual(["p-lock"]);
+});
+
+test("Delete and Backspace run the delete command when an unlocked node is selected, as the toolbar does", () => {
+  const { view, pointer, key } = setup((d) => { file(d, { id: "p-free" }); });
+  pointer("pointerdown", 50, 30);
+  pointer("pointerup", 50, 30);
+  expect(key("Delete").preventDefault).toHaveBeenCalled();
+  expect(key("Backspace").preventDefault).toHaveBeenCalled();
+  expect(view.runCommandById.mock.calls).toEqual([["delete"], ["delete"]]);
 });
 
 test("the selection box of an unlocked node has the eight handles and no is-locked class", () => {

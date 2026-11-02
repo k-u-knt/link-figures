@@ -2,12 +2,17 @@ import { createApi, type OpenFigure } from "../src/api";
 import { registerBuiltinCommands } from "../src/commands/builtin";
 import { loadDocument } from "../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../src/format/serialize";
-import { createDocument, textNodeDefaults } from "../src/model/defaults";
+import { builtinCapKinds, builtinRoutes } from "../src/connectors/builtin";
+import { createDocument, shapeNodeDefaults, textNodeDefaults } from "../src/model/defaults";
 import { createFigureStore } from "../src/model/normalise";
 import type { DocumentStore } from "../src/model/store";
-import type { Document } from "../src/model/types";
+import type { ConnectorNode, Document } from "../src/model/types";
+import { connectorNodeType } from "../src/nodes/connector-node";
+import { shapeNodeType } from "../src/nodes/shape-node";
 import { createRegistries } from "../src/registry";
 import { CommandError, type CommandContext } from "../src/registry/command";
+import { builtinShapeKinds } from "../src/shapes/builtin";
+import { normalizePath } from "./export/fake-vault";
 
 const PATH = "figs/fig.lnkfig.md";
 
@@ -47,25 +52,41 @@ function setup(options: { open?: boolean; now?: () => number } = {}) {
   registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
   const text = new Map([[PATH, serializeFigureFile(figure(), emptyParsed())]]);
   const log: string[] = [];
+  const file = (path: string) => {
+    const t = text.get(path);
+    if (t === undefined) throw new CommandError(`there is no file "${path}"`);
+    return t;
+  };
   const files = {
+    /** While set, `process` waits for it before it starts. */
+    gate: null as Promise<void> | null,
     async read(path: string) {
       log.push(`read ${path}`);
-      const t = text.get(path);
-      if (t === undefined) throw new CommandError(`there is no file "${path}"`);
-      return t;
+      return file(path);
     },
-    async write(path: string, t: string) {
-      log.push(`write ${path}`);
-      text.set(path, t);
+    /** What `vault.process` does, with a turn of the event loop between the read and the write; a write only of a change. */
+    async process(path: string, edit: (text: string) => string) {
+      if (files.gate) await files.gate;
+      log.push(`read ${path}`);
+      const before = file(path);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const after = edit(before);
+      if (after !== before) {
+        log.push(`write ${path}`);
+        text.set(path, after);
+      }
     },
   };
   let t = 0;
   // By default commits far apart in time, so none merges into the one before.
-  const view = options.open ? openView(figure(), registries, options.now ?? (() => (t += 10_000))) : null;
-  const api = createApi({ app: {} as never, registries, files, openFigure: (path) => (path === PATH ? view : null) });
+  const makeView = () => openView(figure(), registries, options.now ?? (() => (t += 10_000)));
+  let view = options.open ? makeView() : null;
+  const api = createApi({ app: {} as never, registries, files, normalizePath, openFigure: (path) => (path === PATH ? view : null) });
   const saved = () => loadDocument(text.get(PATH)!).doc;
   const ids = (doc: Document) => doc.nodes.map((n) => n.id);
-  return { api, registries, view, log, text, saved, ids };
+  /** Opens a view of the figure (as it is in `figure()`, not the file). */
+  const open = () => (view = makeView());
+  return { api, registries, get view() { return view; }, open, files, log, text, saved, ids };
 }
 
 test("commands() lists every command with its params and whether it needs a view", () => {
@@ -152,6 +173,32 @@ describe("headless (the figure is not open)", () => {
   test("calls that are not awaited one by one still all land", async () => {
     const { api, saved, ids } = setup();
     await Promise.all([api.run(PATH, "delete", { ids: ["a"] }), api.run(PATH, "delete", { ids: ["b"] })]);
+    expect(ids(saved())).toEqual(["c"]);
+  });
+
+  test("a call queued while the figure was closed acts on the view that opened it meanwhile, and the API writes nothing", async () => {
+    const { api, files, log, open, ids } = setup();
+    let release!: () => void;
+    files.gate = new Promise((resolve) => { release = resolve; });
+    const first = api.run(PATH, "delete", { ids: ["a"] });
+    // The first has started, on the file, and waits there; the second is queued behind it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = api.run(PATH, "delete", { ids: ["b"] });
+    const view = open();
+    release();
+    await first;
+    await second;
+    // The first started while closed, so it went to the file; the second found the view when its turn came.
+    expect(log).toEqual([`read ${PATH}`, `write ${PATH}`]);
+    expect(ids(view.store.doc)).toEqual(["a", "c"]);
+    expect(view.store.undo()).toBe(true);
+    expect(view.store.canUndo()).toBe(false);
+  });
+
+  test("paths that differ only in their slashes are one figure, and share one queue", async () => {
+    const { api, log, saved, ids } = setup();
+    await Promise.all([api.run("figs//fig.lnkfig.md", "delete", { ids: ["a"] }), api.run(`/${PATH}`, "delete", { ids: ["b"] })]);
+    expect(log).toEqual([`read ${PATH}`, `write ${PATH}`, `read ${PATH}`, `write ${PATH}`]);
     expect(ids(saved())).toEqual(["c"]);
   });
 
@@ -258,6 +305,24 @@ describe("on an open view", () => {
     expect(view!.store.doc).toBe(before);
   });
 
+  test("a command that needs the view is refused in a batch, before any call runs", async () => {
+    const { api, view } = setup({ open: true });
+    const before = view!.store.doc;
+    await expect(api.batch(PATH, [{ id: "delete", args: { ids: ["a"] } }, { id: "fit-page" }])).rejects.toThrow(new CommandError("fit-page cannot run in a batch"));
+    expect(view!.store.doc).toBe(before);
+  });
+
+  test("duplicate from the selection in a batch selects the copies once the batch is in, and not when it fails", async () => {
+    const { api, view } = setup({ open: true });
+    view!.selection = ["b"];
+    await expect(api.batch(PATH, [{ id: "duplicate" }, { id: "delete", args: { ids: ["missing"] } }])).rejects.toThrow(CommandError);
+    expect(view!.selection).toEqual(["b"]);
+    const [result] = (await api.batch(PATH, [{ id: "duplicate" }])) as { ids: string[] }[];
+    expect(result.ids).toHaveLength(1);
+    expect(view!.selection).toEqual(result.ids);
+    expect(view!.store.doc.nodes.map((n) => n.id)).toContain(result.ids[0]);
+  });
+
   test("a batch must be an array of calls", async () => {
     const { api } = setup({ open: true });
     await expect(api.batch(PATH, { id: "delete" } as never)).rejects.toThrow(CommandError);
@@ -273,5 +338,57 @@ describe("on an open view", () => {
     doc.nodes.pop();
     expect(view!.store.doc.nodes).toHaveLength(2);
     expect(log).toEqual([]);
+  });
+});
+
+describe("a batch is normalised call by call", () => {
+  /** Registries with shapes and connectors, the built-in commands, and a test command that moves a node. */
+  function connectorSetup() {
+    const registries = createRegistries();
+    registries.nodeTypes.register(shapeNodeType);
+    registries.nodeTypes.register(connectorNodeType);
+    for (const kind of builtinShapeKinds) registries.shapes.register(kind);
+    for (const route of builtinRoutes) registries.routes.register(route);
+    for (const cap of builtinCapKinds) registries.caps.register(cap);
+    registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
+    registries.commands.register({
+      id: "test.move",
+      name: "Move",
+      group: "arrange",
+      params: { id: { type: "string", required: true }, x: { type: "number", required: true } },
+      applies: () => true,
+      run(ctx, args) {
+        const { id, x } = args as { id: string; x: number };
+        ctx.store.commit("test.move", (d) => { d.nodes.find((n) => n.id === id)!.x = x; });
+      },
+    });
+    const doc = createDocument("a4-portrait");
+    const page = doc.pages[0];
+    // One page id for both setups, so their documents can be compared whole.
+    page.id = "pg-1";
+    doc.nodes.push({ ...shapeNodeDefaults(page, { kind: "rect", params: {} }, []), id: "a", x: 0, y: 0, width: 100, height: 50, z: 0 });
+    doc.nodes.push({ ...shapeNodeDefaults(page, { kind: "rect", params: {} }, []), id: "b", x: 300, y: 200, width: 100, height: 50, z: 1 });
+    const line: ConnectorNode = {
+      id: "line", type: "connector", page: page.id, x: 0, y: 0, width: 0, height: 0, z: 2, rotation: 0, opacity: 1, locked: false,
+      ends: [{ kind: "attached", node: "a", snap: "anchor", anchor: "e" }, { kind: "attached", node: "b", snap: "anchor", anchor: "w" }],
+      route: "straight", routeParams: {}, stroke: { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" },
+      caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 3 }],
+    };
+    doc.nodes.push(line);
+    const view = openView(doc, registries, () => 0);
+    const api = createApi({ app: {} as never, registries, files: {} as never, normalizePath, openFigure: () => view });
+    return { api, view };
+  }
+
+  test("moving a target and then deleting it frees the end where the move left it, as the two calls do on their own", async () => {
+    const calls = [{ id: "test.move", args: { id: "a", x: 120 } }, { id: "delete", args: { ids: ["a"] } }];
+    const together = connectorSetup();
+    await together.api.batch(PATH, calls);
+    const apart = connectorSetup();
+    for (const call of calls) await apart.api.run(PATH, call.id, call.args);
+    expect(together.view.store.doc).toEqual(apart.view.store.doc);
+    const line = together.view.store.doc.nodes.find((n) => n.id === "line") as ConnectorNode;
+    // The right edge of `a` after the move: x 120 + width 100, at mid-height.
+    expect(line.ends[0]).toEqual({ kind: "free", x: 220, y: 25 });
   });
 });

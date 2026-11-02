@@ -358,6 +358,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.attempt(command, () => command.run(ctx));
   }
 
+  /** Runs the registered command `id` as `runCommand` does; nothing when there is none. */
+  runCommandById(id: string): void {
+    const command = this.plugin.registries.commands.get(id);
+    if (command) this.runCommand(command);
+  }
+
   /** Arms `command`, a tool, in place of any other; arming the armed tool again disarms it. Nothing is armed in a read-only view. */
   armTool(command: Command): void {
     if (this.readOnly || !command.place) return;
@@ -405,10 +411,6 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.renderChrome();
   }
 
-  /** The Delete key's own action: the selected nodes that are not locked are removed, and their links forgotten. */
-  deleteSelection(): boolean {
-    return this.pointer.deleteSelected();
-  }
 
   /** The natural size of the image a node shows (waiting for it to load); rejects for a node that shows no image. */
   imageSize(id: NodeId): Promise<{ width: number; height: number }> {

@@ -48,6 +48,11 @@ export interface CommandContext {
   selection: NodeId[];
   /** The page that page-level commands act on: the view's focus page, or undefined when headless. */
   page: Page | undefined;
+  /**
+   * Given within a batch: runs `fn` (a side effect on the view, such as a selection) once the batch has committed, and
+   * never when it fails. Without it a command does such things at once.
+   */
+  afterCommit?(fn: () => void): void;
 }
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";

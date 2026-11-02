@@ -188,7 +188,7 @@ describe("a source renamed: Obsidian rewrites the Links section and hands the te
     const t = setup();
     const store = t.view.store;
     const [, legend] = store.doc.nodes;
-    // What the Delete key does (`deleteSelected`): the nodes filtered out in one commit.
+    // What the Delete key does (the `delete` command): the nodes filtered out in one commit.
     store.commit("delete", (d) => void (d.nodes = d.nodes.filter((n) => n.id !== legend.id)));
     t.obsidianLoads(serializeFigureFile(store.doc, t.view.parsed).replace("![[plot.png]]", "![[plot2.png]]"));
     expect(link(t.view, 0)).toBe("plot2.png");

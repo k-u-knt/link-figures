@@ -46,6 +46,7 @@ class FakeView implements EditorView {
   registries: Registries = createRegistries();
   commandContext(): CommandContext { return { app: {} as never, registries: this.registries, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() }; }
   runCommand(command: Command): void { command.run(this.commandContext()); }
+  runCommandById(id: string, args?: Record<string, unknown>): void { this.calls.push(`run:${id}${args ? `:${JSON.stringify(args)}` : ""}`); }
 }
 
 /** Registries with the shape and connector node types, shape kinds, routes and caps, which connectors are resolved through. */

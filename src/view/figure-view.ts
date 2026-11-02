@@ -1,5 +1,6 @@
 import { Notice, TextFileView, TFile, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
+import { prepareCall, runCall } from "../commands/headless";
 import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FormatError, NotFigureError } from "../format/errors";
@@ -358,15 +359,25 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.attempt(command, () => command.run(ctx));
   }
 
-  /** Runs the registered command `id` as `runCommand` does; nothing when there is none. */
-  runCommandById(id: string): void {
+  /**
+   * Runs the registered command `id`. Without `args` as `runCommand` does (nothing when there is none); with them, as the
+   * API runs a call on an open figure (checked against the command's params, an undo step of its own), so that what a
+   * tool does through it is what a script does. A failure is shown to the user rather than lost.
+   */
+  runCommandById(id: string, args?: Record<string, unknown>): void {
     const command = this.plugin.registries.commands.get(id);
-    if (command) this.runCommand(command);
+    if (!command) return;
+    if (args === undefined) {
+      this.runCommand(command);
+      return;
+    }
+    if (this.readOnly) return;
+    this.attempt(command, () => runCall(this.store, this.commandContext(), prepareCall(this.plugin.registries, { id, args })));
   }
 
   /** Arms `command`, a tool, in place of any other; arming the armed tool again disarms it. Nothing is armed in a read-only view. */
   armTool(command: Command): void {
-    if (this.readOnly || !command.place) return;
+    if (this.readOnly || !(command.place || command.placeDrag)) return;
     this.setArmedTool(this.armedTool?.id === command.id ? null : command);
   }
 
@@ -381,6 +392,18 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.disarmTool();
     const ctx = this.commandContext();
     this.attempt(tool, () => tool.place?.(ctx, at));
+  }
+
+  /**
+   * The release of a drag of an armed tool (`placeDrag`): the tool is disarmed, then given the press and release points
+   * on the press page (once), a failure shown as `runCommand` shows one.
+   */
+  placeToolDrag(from: PlacePoint, to: PlacePoint, mods: { shift: boolean }): void {
+    const tool = this.armedTool;
+    if (!tool?.placeDrag) return;
+    this.disarmTool();
+    const ctx = this.commandContext();
+    this.attempt(tool, () => tool.placeDrag?.(ctx, from, to, mods));
   }
 
   /** What a double-click tells a node, from a command: an `lf-activate` event on its element (a text node starts editing). */

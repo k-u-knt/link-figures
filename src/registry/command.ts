@@ -27,9 +27,15 @@ export interface FigureViewLike {
   requestExport(): void;
   /** The tool that the next press on a page places, or null. */
   armedTool: Command | null;
-  /** Arms `command` (a command with `place`), in place of any other; arming the armed tool again disarms it. */
+  /** Arms `command` (a command with `place` or `placeDrag`), in place of any other; arming the armed tool again disarms it. */
   armTool(command: Command): void;
   disarmTool(): void;
+  /**
+   * Runs the registered command `id` with the JSON `args`, as the API runs it on an open figure: checked against its
+   * params and an undo step of its own. A failure is shown to the user rather than lost. Tools run their edits this way,
+   * so a tool and a script make the same document.
+   */
+  runCommandById(id: string, args?: Record<string, unknown>): void;
 }
 
 /**
@@ -87,6 +93,13 @@ export interface Command<A = unknown, R = unknown> {
    * the point pressed, once, and disarms it. Escape, or a press off every page, disarms it without placing anything.
    */
   place?(ctx: CommandContext, at: PlacePoint): void;
+  /**
+   * Makes the command a tool that is dragged out, as `place` makes one that is pressed: the press and the release on a
+   * page call this once, with the two points on the press page (a release beyond it, over another page or none, is
+   * clamped to it) and whether Shift was held at the release, and disarm it. A click that does not travel (3 screen px
+   * or less) gives `to` equal to `from`.
+   */
+  placeDrag?(ctx: CommandContext, from: PlacePoint, to: PlacePoint, mods: { shift: boolean }): void;
   /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */
   cursor?: string;
 }

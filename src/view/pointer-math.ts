@@ -71,6 +71,18 @@ export function rectFromPoints(a: Pt, b: Pt): Rect {
   return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) };
 }
 
+/**
+ * The box dragged out from `from` to `to`, whichever way the drag went; with `square`, a square whose side is the
+ * longer of the two travels, still on the side of `from` that the pointer went to.
+ */
+export function dragRect(from: Pt, to: Pt, square: boolean): Rect {
+  if (!square) return rectFromPoints(from, to);
+  const side = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y));
+  const sx = to.x < from.x ? -1 : 1;
+  const sy = to.y < from.y ? -1 : 1;
+  return rectFromPoints(from, { x: from.x + sx * side, y: from.y + sy * side });
+}
+
 /** The ids of the unlocked items that overlap `marquee` (touching does not count), in the order given. */
 export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean }[], marquee: Rect): NodeId[] {
   return items.filter((item) => !item.locked && rectIntersects(item.rect, marquee)).map((item) => item.id);

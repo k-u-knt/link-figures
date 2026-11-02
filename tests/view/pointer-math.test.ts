@@ -1,4 +1,4 @@
-import { HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
+import { dragRect, HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
 
 const r = { x: 10, y: 10, width: 100, height: 50 };
 test("se handle grows width and height", () => expect(resizeRect(r, "se", 20, 10, { keepAspect: false, min: 1 })).toEqual({ x: 10, y: 10, width: 120, height: 60 }));
@@ -203,4 +203,10 @@ test("hitTest finds a locked node of a later page over the unlocked one below it
     { id: "late-locked", rect: r, z: 0, locked: true, layer: 1 },
   ];
   expect(hitTest(items, { x: 20, y: 20 })).toBe("late-locked");
+});
+
+test("dragRect is the dragged box either way, and with square a square on the side the pointer went", () => {
+  expect(dragRect({ x: 50, y: 50 }, { x: 10, y: 80 }, false)).toEqual({ x: 10, y: 50, width: 40, height: 30 });
+  expect(dragRect({ x: 50, y: 50 }, { x: 10, y: 80 }, true)).toEqual({ x: 10, y: 50, width: 40, height: 40 });
+  expect(dragRect({ x: 50, y: 50 }, { x: 60, y: 0 }, true)).toEqual({ x: 50, y: 0, width: 50, height: 50 });
 });

@@ -1,14 +1,17 @@
 import { attachTarget } from "../model/attach";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
+import { mmToPx, type PlacePoint } from "../model/geometry";
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, Paint, ShapeNode, Stroke } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import { isCap, paramError, type ParamSpec } from "../registry/params";
+import { dragRect, roundPx } from "../view/pointer-math";
 import { targetIds, targetPage, whenCommitted } from "./builtin";
 
 /**
  * The commands that draw: create shapes and connectors, change any node's attributes, move a connector's end, and run a
  * shape operation. They take JSON arguments and are what the drawing tools, the inspector and scripts all run, so the
- * three make the same documents. None is a toolbar button (`hidden`): each needs arguments to mean anything.
+ * three make the same documents. None is a toolbar button (`hidden`): each needs arguments to mean anything. The shape
+ * tools (Rectangle, Ellipse) are the toolbar's way to them: each runs `shape.create`.
  */
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -286,10 +289,49 @@ function operateOnShapes(ctx: CommandContext, args: { operation: string; ids: un
   return { added: added.map((n) => n.id), removed: [...removed] };
 }
 
+/** The size of the shape a click of a shape tool places, in millimetres. */
+const CLICK_SHAPE_MM = { width: 30, height: 20 };
+
+/**
+ * The box a shape tool's drag from `from` to `to` gives, on their page: the dragged box (a square with `square`), or for
+ * a click, where `to` is `from`, a 30 × 20 mm box centred on the point.
+ */
+function toolBox(from: PlacePoint, to: PlacePoint, square: boolean): { x: number; y: number; width: number; height: number } {
+  const box =
+    from.x === to.x && from.y === to.y
+      ? { x: from.x - mmToPx(CLICK_SHAPE_MM.width) / 2, y: from.y - mmToPx(CLICK_SHAPE_MM.height) / 2, width: mmToPx(CLICK_SHAPE_MM.width), height: mmToPx(CLICK_SHAPE_MM.height) }
+      : dragRect(from, to, square);
+  return { x: roundPx(box.x), y: roundPx(box.y), width: roundPx(box.width), height: roundPx(box.height) };
+}
+
+/**
+ * The toolbar tool that draws a shape of `kind` (a registered shape kind): its button arms it, and a drag on a page then
+ * runs `shape.create` with the dragged box, as a script would run it, so the tool and the API make the same shape.
+ * `shape.create` selects it. A new kind gets a tool by one more call of this.
+ */
+export function shapeTool(id: string, name: string, icon: string, kind: string): Command {
+  const tool: Command = {
+    id,
+    name,
+    icon,
+    group: "insert",
+    needsView: true,
+    applies: (ctx) => !!ctx.page,
+    run: (ctx) => ctx.view?.armTool(tool),
+    placeDrag(ctx, from, to, mods) {
+      if (!ctx.view) throw new CommandError(`${id} needs the figure to be open`);
+      ctx.view.runCommandById("shape.create", { kind, page: from.page.id, ...toolBox(from, to, mods.shift) });
+    },
+  };
+  return tool;
+}
+
 /** The drawing commands, for the command registry (see the top of this file). */
 export function drawingCommands(): Command[] {
   const always = () => true;
   return [
+    shapeTool("tool.rect", "Rectangle", "square", "rect"),
+    shapeTool("tool.ellipse", "Ellipse", "circle", "ellipse"),
     {
       id: "shape.create",
       name: "Create shape",

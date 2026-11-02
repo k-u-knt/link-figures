@@ -433,3 +433,11 @@
   background-color: rgba(var(--interactive-accent-rgb), 0.1);
   pointer-events: none;
 }
+
+/* The box a shape tool is being dragged out to, in its page's overlay. */
+.lf-draw-preview {
+  position: absolute;
+  box-sizing: border-box;
+  border: calc(1px / var(--lf-zoom, 1)) dashed var(--interactive-accent);
+  pointer-events: none;
+}

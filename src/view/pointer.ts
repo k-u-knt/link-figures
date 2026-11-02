@@ -1,9 +1,9 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
-import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type Pt, type Rect } from "../model/geometry";
+import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { LinkFiguresView } from "./figure-view";
-import { HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle } from "./pointer-math";
+import { dragRect, HANDLES, handleAt, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle } from "./pointer-math";
 import { pagePointAt, pageWorldRect } from "./viewport";
 
 /** Screen pixels a press has to travel before it is a drag; a click that wobbles is still a click. */
@@ -24,20 +24,24 @@ type Intent =
   | { kind: "marquee"; pageId: PageId; base: NodeId[] };
 
 /**
- * `idle -> pressed -> moving | resizing | marquee -> idle`. (Panning the canvas is the view's own gesture, which
- * this one stays out of: see `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels.
+ * `idle -> pressed -> moving | resizing | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool that is
+ * dragged out. (Panning the canvas is the view's own gesture, which this one stays out of: see
+ * `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels; `from` is the same point on the
+ * press page, and `el` the dragged box drawn in that page's overlay, once the press has become a drag.
  */
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
   | { kind: "moving"; pointerId: number; world: Pt; origins: Map<NodeId, Pt> }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect }
-  | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; el: HTMLElement };
+  | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; el: HTMLElement }
+  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; el: HTMLElement | null };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
 type Resizing = Extract<Gesture, { kind: "resizing" }>;
 type Marquee = Extract<Gesture, { kind: "marquee" }>;
+type Drawing = Extract<Gesture, { kind: "drawing" }>;
 
 /** What is drawn for one selected node in its page's overlay: an outlined box holding the handles. */
 interface SelectionParts {
@@ -144,12 +148,16 @@ export class PointerController {
 
     // An armed tool takes the press: it is placed where the press is, on any page and over any node, and selects nothing
     // itself. The stage does not take the focus, and the mousedown that follows must not move it either (hence
-    // `preventDefault`): it belongs to what the tool has just made, such as a label that has started editing.
-    if (this.view.armedTool) {
+    // `preventDefault`): it belongs to what the tool has just made, such as a label that has started editing. A tool that
+    // is dragged out (`placeDrag`) is placed at the release instead: see `finishDrawing`.
+    const tool = this.view.armedTool;
+    if (tool) {
       ev.preventDefault();
-      const at = pagePointAt(this.store.doc, this.view.viewport.toWorld(this.view.stagePoint(ev)));
-      if (at) this.view.placeTool(at);
-      else this.view.disarmTool();
+      const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+      const at = pagePointAt(this.store.doc, world);
+      if (!at) this.view.disarmTool();
+      else if (tool.placeDrag) this.startDrawing(ev, world, at);
+      else this.view.placeTool(at);
       return;
     }
 
@@ -205,6 +213,10 @@ export class PointerController {
   private onPointerMove(ev: PointerEvent): void {
     let g = this.gesture;
     if (g.kind === "idle" || ev.pointerId !== g.pointerId) return;
+    if (g.kind === "drawing") {
+      this.drawPreview(g, ev);
+      return;
+    }
     if (g.kind === "pressed") {
       if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) < DRAG_THRESHOLD_PX) return;
       const begun = this.begin(g);
@@ -343,9 +355,74 @@ export class PointerController {
     this.view.selection.set([...g.base, ...marqueeSelect(this.itemsOn(doc, page), rect)]);
   }
 
+  // Drawing with a tool that is dragged out
+
+  private startDrawing(ev: PointerEvent, world: Pt, from: PlacePoint): void {
+    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, el: null };
+    try {
+      this.stage?.setPointerCapture(ev.pointerId);
+    } catch {
+      // Without capture the drag still follows the pointer while it is over the stage.
+    }
+  }
+
+  /**
+   * Where the pointer of `ev` puts the far corner of the drawing: `from` itself while the pointer has not gone further
+   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper. Null when
+   * the press page has gone.
+   */
+  private drawingEnd(g: Drawing, ev: PointerEvent): PlacePoint | null {
+    const doc = this.store.doc;
+    const page = doc.pages.find((p) => p.id === g.from.page.id);
+    if (!page) return null;
+    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return g.from;
+    const paper = pageWorldRect(doc, page);
+    const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max);
+    return { page, x: clamp(world.x - paper.x, paper.width), y: clamp(world.y - paper.y, paper.height) };
+  }
+
+  /** Draws the box being dragged out in the press page's overlay (Shift: a square), as the tool will be given it. */
+  private drawPreview(g: Drawing, ev: PointerEvent): void {
+    const to = this.drawingEnd(g, ev);
+    if (!to) {
+      this.endGesture();
+      return;
+    }
+    if (to === g.from) {
+      g.el?.remove();
+      g.el = null;
+      return;
+    }
+    if (!g.el) {
+      const host = this.overlayOf(g.from.page.id);
+      if (!host) return;
+      g.el = host.ownerDocument.createElement("div");
+      g.el.className = "lf-draw-preview";
+      host.appendChild(g.el);
+    }
+    const rect = dragRect(g.from, to, ev.shiftKey);
+    const style = g.el.style;
+    style.left = `${rect.x}px`;
+    style.top = `${rect.y}px`;
+    style.width = `${rect.width}px`;
+    style.height = `${rect.height}px`;
+  }
+
+  /** The release of a drawing: the tool is given the press and release points (see `drawingEnd`) and Shift. */
+  private finishDrawing(g: Drawing, ev: PointerEvent): void {
+    const to = this.drawingEnd(g, ev);
+    this.endGesture();
+    if (to) this.view.placeToolDrag(g.from, to, { shift: ev.shiftKey });
+  }
+
   private onPointerUp(ev: PointerEvent): void {
     const g = this.gesture;
     if (g.kind === "idle" || ev.pointerId !== g.pointerId) return;
+    if (g.kind === "drawing") {
+      this.finishDrawing(g, ev);
+      return;
+    }
     const selection = this.view.selection;
     if (g.kind === "pressed" && g.collapseTo !== null && selection.ids.length > 1) selection.set([g.collapseTo]);
     if (g.kind === "moving") this.movePagesToCentres(g);
@@ -365,7 +442,7 @@ export class PointerController {
     this.gesture = { kind: "idle" };
     this.dragStartedAt = null;
     if (g.kind === "idle") return;
-    if (g.kind === "marquee") g.el.remove();
+    if (g.kind === "marquee" || g.kind === "drawing") g.el?.remove();
     try {
       if (this.stage?.hasPointerCapture(g.pointerId)) this.stage.releasePointerCapture(g.pointerId);
     } catch {

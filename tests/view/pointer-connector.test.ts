@@ -1,20 +1,22 @@
 import { createApi } from "../../src/api";
 import { drawingCommands } from "../../src/commands/drawing";
 import { prepareCall, runCall } from "../../src/commands/headless";
-import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
+import { builtinCapKinds, builtinRoutes, orthogonalRoute } from "../../src/connectors/builtin";
+import { NUDGE_MM } from "../../src/constants";
 import { SNAP_MODE_OPTION } from "../../src/model/attach";
-import { createDocument, shapeNodeDefaults } from "../../src/model/defaults";
-import type { PlacePoint } from "../../src/model/geometry";
+import { createDocument, createPage, shapeNodeDefaults } from "../../src/model/defaults";
+import { mmToPx, pageOriginsPx, type PlacePoint } from "../../src/model/geometry";
 import { createFigureStore } from "../../src/model/normalise";
 import type { ConnectorNode, Document, End, Node } from "../../src/model/types";
 import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries, type Registries } from "../../src/registry";
-import type { CommandContext, DragTargets } from "../../src/registry/command";
+import type { CommandContext, DragTargets, UndoStep } from "../../src/registry/command";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { PointerController } from "../../src/view/pointer";
 import { SelectionState } from "../../src/view/selection";
+import { roundPx } from "../../src/view/pointer-math";
 import { Viewport } from "../../src/view/viewport";
 
 // The Connector tool and a selected connector's handles, with the real commands and node types, through a view that
@@ -48,10 +50,15 @@ function connectorRegistries(): Registries {
   return registries;
 }
 
-/** Shape A at (50, 50) and shape B at (300, 50), each 100 × 80 px: A's `e` anchor is (150, 90), B's `w` anchor (300, 90). */
+/**
+ * Shape A at (50, 50) and shape B at (300, 50), each 100 × 80 px: A's `e` anchor is (150, 90), B's `w` anchor (300, 90).
+ * A second page, "pg-2", below the first.
+ */
 function figure(): Document {
   const doc = createDocument("a4-portrait");
+  doc.pages.push(createPage("a4-portrait", doc.pages.map((p) => p.id)));
   doc.pages[0].id = "pg-1";
+  doc.pages[1].id = "pg-2";
   const page = doc.pages[0];
   for (const [id, x] of [["A", 50], ["B", 300]] as const) {
     doc.nodes.push(shapeNodeDefaults(page, { id, kind: "rect", x, y: 50, width: 100, height: 80, z: doc.nodes.length }, doc.nodes.map((n) => n.id)));
@@ -97,8 +104,8 @@ function setup(armed: string | null = "tool.connector") {
       tool.placeDrag(view.commandContext(), from, to, mods, targets);
     },
     toolPreview: (from: PlacePoint | null, to: PlacePoint, targets: DragTargets) => view.armedTool?.preview?.(view.commandContext(), from, to, targets) ?? null,
-    runCommandById: (id: string, args?: Record<string, unknown>) => {
-      pending.push(runCall(store, view.commandContext(), prepareCall(registries, { id, args })));
+    runCommandById: (id: string, args?: Record<string, unknown>, step?: UndoStep) => {
+      pending.push(runCall(store, view.commandContext(), prepareCall(registries, { id, args }), step));
     },
   };
   const stage = new FakeStage();
@@ -124,7 +131,12 @@ function setup(armed: string | null = "tool.connector") {
     labels.length = 0;
     return connectors()[0];
   };
-  return { registries, store, view, stage, labels, options, pointer, drag, connectors, addConnector };
+  const key = (name: string) => {
+    const ev = { key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false, target: {}, preventDefault: vi.fn() };
+    stage.fire("keydown", ev);
+    return ev;
+  };
+  return { registries, store, view, stage, labels, options, pointer, drag, key, connectors, addConnector, settled: () => Promise.all(pending) };
 }
 
 /** A node as the document has it, less its id (which is new each time). */
@@ -304,7 +316,7 @@ test("a body drag of a connector with one free end moves only that end, as one u
   pointer("pointermove", [270, 205]);
   pointer("pointerup", [270, 205]);
   expect(connectors()[0].ends).toEqual([attached("A", "e"), { kind: "free", x: 370, y: 310 }]);
-  expect(labels).toEqual(["move", "move"]);
+  expect(labels).toEqual(["node.move", "node.move"]);
   store.undo();
   expect(store.canUndo()).toBe(true);
   expect(connectors()[0].ends[1]).toEqual({ kind: "free", x: 350, y: 300 });
@@ -337,4 +349,95 @@ test("a connector over a shape is hit only near its line; elsewhere the shape un
   pointer("pointerdown", [100, 110]);
   pointer("pointerup", [100, 110]);
   expect(view.selection.ids).toEqual(["A"]);
+});
+
+test("a body drag that takes a connector's centre over another page keeps it on its page while an end is attached to an item left behind", async () => {
+  const { addConnector, drag, connectors, store } = setup(null);
+  await addConnector(attached("A", "e"), { kind: "free", x: 350, y: 300 });
+  const gap = pageOriginsPx(store.doc).get("pg-2")!.y;
+  // Down by twice the second page's offset: the line then runs from A down into the second page, its centre there.
+  await drag([250, 195], [250, 195 + 2 * gap]);
+  const [c] = connectors();
+  const centre = c.y + c.height / 2;
+  expect(centre).toBeGreaterThan(gap);
+  expect(centre).toBeLessThan(gap + mmToPx(store.doc.pages[1].height));
+  expect(c.page).toBe("pg-1");
+  expect(c.ends).toEqual([attached("A", "e"), { kind: "free", x: 350, y: roundPx(300 + 2 * gap) }]);
+});
+
+test("a body drag of a shape with its connector to the other page takes both, the end still attached", async () => {
+  const { addConnector, pointer, connectors, store, view, settled } = setup(null);
+  const c = await addConnector(attached("A", "e"), { kind: "free", x: 250, y: 200 });
+  const gap = pageOriginsPx(store.doc).get("pg-2")!.y;
+  view.selection.set(["A", c.id]);
+  pointer("pointerdown", [100, 90]);
+  pointer("pointermove", [100, 140]);
+  pointer("pointermove", [100, 90 + gap]);
+  pointer("pointerup", [100, 90 + gap]);
+  await settled();
+  const a = store.doc.nodes.find((n) => n.id === "A")!;
+  expect(a).toMatchObject({ page: "pg-2", x: 50, y: 50 });
+  expect(connectors()[0]).toMatchObject({ page: "pg-2", ends: [attached("A", "e"), { kind: "free", x: 250, y: 200 }] });
+  // One undo step takes the whole drag back.
+  store.undo();
+  expect(store.doc.nodes.find((n) => n.id === "A")).toMatchObject({ page: "pg-1", x: 50, y: 50 });
+  expect(connectors()[0]).toMatchObject({ page: "pg-1", ends: [attached("A", "e"), { kind: "free", x: 250, y: 200 }] });
+});
+
+test("UI = API: a body drag gives the document that node.move gives with the same ids and delta", async () => {
+  const ui = setup(null);
+  const c = await ui.addConnector(attached("A", "e"), { kind: "free", x: 350, y: 300 }, { id: "C" });
+  ui.view.selection.set(["A", c.id]);
+  ui.pointer("pointerdown", [100, 90]);
+  ui.pointer("pointermove", [117.3, 101]);
+  ui.pointer("pointermove", [130.25, 110.5]);
+  ui.pointer("pointerup", [130.25, 110.5]);
+  await ui.settled();
+  expect(ui.labels.every((l) => l === "node.move")).toBe(true);
+
+  const apiSide = setup(null);
+  await apiSide.addConnector(attached("A", "e"), { kind: "free", x: 350, y: 300 }, { id: "C" });
+  const view = { store: apiSide.store, commandContext: () => apiSide.view.commandContext() };
+  const api = createApi({ app: {} as never, registries: apiSide.registries, files: {} as never, normalizePath: (p) => p, openFigure: () => view });
+  await api.run("fig.lnkfig.md", "node.move", { ids: ["A", c.id], dx: 30.25, dy: 20.5 });
+  expect(ui.store.doc.nodes).toEqual(apiSide.store.doc.nodes);
+});
+
+test("arrow keys nudge through node.move, consecutive nudges being one undo step; a connector moves only its free end", async () => {
+  const { addConnector, key, connectors, store, view, labels, settled } = setup(null);
+  const c = await addConnector(attached("A", "e"), { kind: "free", x: 350, y: 300 });
+  view.selection.set(["A", c.id]);
+  key("ArrowRight");
+  key("ArrowRight");
+  await settled();
+  const step = mmToPx(NUDGE_MM);
+  expect(labels).toEqual(["node.move", "node.move"]);
+  expect(store.doc.nodes.find((n) => n.id === "A")!.x).toBeCloseTo(50 + 2 * step, 1);
+  expect(connectors()[0].ends[1]).toMatchObject({ kind: "free", y: 300 });
+  expect((connectors()[0].ends[1] as { x: number }).x).toBeCloseTo(350 + 2 * step, 1);
+  store.undo();
+  expect(store.doc.nodes.find((n) => n.id === "A")!.x).toBe(50);
+  expect(connectors()[0].ends[1]).toEqual({ kind: "free", x: 350, y: 300 });
+});
+
+test("the orthogonal offset handle shows only where offset moves the route: not for an L, nor for a U", () => {
+  const dir = (x: number, y: number) => ({ x, y });
+  // A Z between two free ends: offset moves its upright middle segment.
+  expect(orthogonalRoute.handles!({ pt: { x: 0, y: 0 }, dir: null, lead: 0 }, { pt: { x: 200, y: 100 }, dir: null, lead: 0 }, { offset: 0.5 })).toEqual([{ id: "offset", pt: { x: 100, y: 50 } }]);
+  // An L: leaving east, arriving into a north anchor below and to the right.
+  expect(orthogonalRoute.handles!({ pt: { x: 0, y: 0 }, dir: dir(1, 0), lead: 0 }, { pt: { x: 200, y: 200 }, dir: dir(0, -1), lead: 0 }, { offset: 0.5 })).toEqual([]);
+  // A U: both ends facing east, one above the other; it goes round the far side whatever the offset.
+  expect(orthogonalRoute.handles!({ pt: { x: 0, y: 0 }, dir: dir(1, 0), lead: 0 }, { pt: { x: 0, y: 200 }, dir: dir(1, 0), lead: 0 }, { offset: 0.5 })).toEqual([]);
+});
+
+test("an end handle dragged beyond the paper looks for an item at the clamped point it is given", async () => {
+  const { addConnector, view, drag, connectors } = setup(null);
+  // A shape at the paper's right edge, and the end dragged out past the edge level with it.
+  const page = view.store.doc.pages[0];
+  const right = mmToPx(page.width);
+  await runCall(view.store, view.commandContext(), prepareCall(view.plugin.registries, { id: "shape.create", args: { id: "E", page: "pg-1", kind: "rect", x: right - 60, y: 400, width: 60, height: 40 } }));
+  const c = await addConnector(attached("A", "e"), { kind: "free", x: 300, y: 300 });
+  view.selection.set([c.id]);
+  await drag([300, 300], [right + 80, 420]);
+  expect(connectors()[0].ends[1]).toEqual(attached("E", "e"));
 });

@@ -2,7 +2,7 @@ import { current, isDraft } from "immer";
 import { resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
 import { attachTarget } from "./attach";
-import type { Pt } from "./geometry";
+import { pageOriginsPx, type Pt } from "./geometry";
 import { DocumentStore } from "./store";
 import type { ConnectorNode, Document, End } from "./types";
 
@@ -89,7 +89,8 @@ function withEnd(ends: [End, End], i: 0 | 1, end: End): [End, End] {
 
 /**
  * Where end `i` of `c` was drawn in `before` (the document as it was before this edit), when the connector was there
- * with that end attached to the same item and the item was there to resolve it; otherwise null.
+ * with that end attached to the same item and the item was there to resolve it; otherwise null. A connector that has
+ * changed page since gets the point in its new page's pixels, at the same place on the canvas.
  */
 function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Registries): Pt | null {
   const was = before.nodes.find((n) => n.id === c.id);
@@ -98,5 +99,12 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
   const now = c.ends[i];
   if (end.kind !== "attached" || now.kind !== "attached" || end.node !== now.node) return null;
   const resolved = resolveConnector(before, was, registries);
-  return resolved.detached[i] ? null : resolved.ends[i].pt;
+  if (resolved.detached[i]) return null;
+  const pt = resolved.ends[i].pt;
+  if (was.page === c.page) return pt;
+  // The connector has changed page in this edit: the point keeps its place on the canvas, in its new page's pixels.
+  const origins = pageOriginsPx(before);
+  const from = origins.get(was.page);
+  const to = origins.get(c.page);
+  return from && to ? { x: pt.x + from.x - to.x, y: pt.y + from.y - to.y } : pt;
 }

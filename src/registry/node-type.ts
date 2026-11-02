@@ -135,6 +135,12 @@ export interface NodeType<N extends Node = Node> {
    * moves only its free ends (its attached ends stay with their items). Returns `node` itself when nothing changes.
    */
   translate?(node: N, dx: number, dy: number): N;
+  /**
+   * True when the node is to stay on its page although a move (`node.move`) has taken the centre of its box over
+   * another page; `moving` is every node of that move. A connector stays while an end is attached to an item that is
+   * not moving, which a page change would leave behind. Without it, the node goes to the page under its centre.
+   */
+  keepsPage?(node: N, moving: ReadonlySet<NodeId>): boolean;
 }
 
 export class NodeTypeRegistry {

@@ -1,4 +1,5 @@
-import { createRegistries } from "../../src/registry";
+import type { UndoStep } from "../../src/registry/command";
+import { registriesWithDrawing, runCommandWith } from "./command-runner";
 import { createDocument, fileNodeDefaults } from "../../src/model/defaults";
 import { DocumentStore } from "../../src/model/store";
 import type { Document, Node } from "../../src/model/types";
@@ -49,20 +50,22 @@ function setup(build: (doc: Document) => void = () => {}) {
   const doc = createDocument("a4-portrait");
   build(doc);
   const overlay = new FakeBox();
+  const registries = registriesWithDrawing();
   const view = {
     store: new DocumentStore(doc),
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
-    plugin: { registries: createRegistries() },
+    plugin: { registries },
     viewOption: () => undefined,
     isPanGesture: () => false,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: () => undefined },
     index: { untrack: vi.fn() },
     pageLayer: { overlayHost: () => overlay },
-    runCommandById: vi.fn(),
+    runCommandById: vi.fn((id: string, args?: Record<string, unknown>, step?: UndoStep) => run(id, args, step)),
   };
+  const run = runCommandWith(registries, view);
   const stage = new FakeStage();
   const controller = new PointerController(view as never);
   controller.attach(stage as never);

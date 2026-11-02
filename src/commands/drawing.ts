@@ -1,8 +1,9 @@
 import { resolveConnector } from "../connectors/geometry";
 import { attachTarget, endAt, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
-import { mmToPx, type PlacePoint } from "../model/geometry";
-import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, Paint, ShapeNode, Stroke } from "../model/types";
+import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } from "../model/geometry";
+import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
+import type { Registries } from "../registry";
 import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { isCap, paramError, type ParamSpec } from "../registry/params";
 import { dragRect, roundPx } from "../view/pointer-math";
@@ -290,6 +291,85 @@ function operateOnShapes(ctx: CommandContext, args: { operation: string; ids: un
   return { added: added.map((n) => n.id), removed: [...removed] };
 }
 
+/**
+ * Writes into `target` (a draft node) `origin` moved by (`dx`, `dy`) page px: its box, or, for a type with `translate`,
+ * the fields that hook changes (a connector's free ends), and only those, so a node that does not move is not written.
+ */
+export function translateInto(registries: Registries, target: Node, origin: Node, dx: number, dy: number): void {
+  const type = registries.nodeTypes.get(origin.type);
+  if (!type?.translate) {
+    target.x = roundPx(origin.x + dx);
+    target.y = roundPx(origin.y + dy);
+    return;
+  }
+  const next = type.translate(origin, dx, dy) as unknown as Record<string, unknown>;
+  const before = origin as unknown as Record<string, unknown>;
+  const draft = target as unknown as Record<string, unknown>;
+  for (const key of Object.keys(next)) if (next[key] !== before[key]) draft[key] = next[key];
+}
+
+type MoveArgs = { ids?: unknown[]; dx: number; dy: number; pages: boolean };
+
+/**
+ * Moves the nodes `ids` (else the selection) that are not locked by (`dx`, `dy`) page px, each as its type moves (see
+ * `translateInto`). With `pages` (the default), each moved node then goes to the page under the centre of its box,
+ * keeping its place on the canvas, unless its type keeps it where it is (`NodeType.keepsPage`: a connector whose end is
+ * attached to an item that is not moving); a node whose centre is over no page stays on its own. One undo step; its
+ * result names the nodes moved.
+ */
+function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
+  const command = "node.move";
+  if (!Number.isFinite(args.dx) || !Number.isFinite(args.dy)) throw new CommandError(`${command}: "dx" and "dy" must be finite numbers`);
+  const named = new Set(targetIds(ctx, command, args));
+  const before = ctx.store.doc;
+  const ids = new Set(before.nodes.filter((n) => named.has(n.id) && !n.locked).map((n) => n.id));
+  if (ids.size === 0) return { ids: [] };
+  if (args.dx !== 0 || args.dy !== 0) {
+    const byId = new Map(before.nodes.map((n) => [n.id, n] as const));
+    ctx.store.commit(command, (draft) => {
+      for (const node of draft.nodes) {
+        const origin = byId.get(node.id);
+        if (origin && ids.has(node.id)) translateInto(ctx.registries, node, origin, args.dx, args.dy);
+      }
+    });
+  }
+  // A second commit with the same label, which the store merges into the first: the boxes it reads are the ones the
+  // move gave, normalised (a connector's is the area its moved ends draw).
+  if (args.pages) moveToPagesUnderCentres(ctx, command, ids);
+  return { ids: [...ids] };
+}
+
+/** Each of `ids` to the page under the centre of its box, as `moveNodes` says. */
+function moveToPagesUnderCentres(ctx: CommandContext, command: string, ids: ReadonlySet<NodeId>): void {
+  const doc = ctx.store.doc;
+  const origins = pageOriginsPx(doc);
+  const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
+  for (const node of doc.nodes) {
+    const from = origins.get(node.page);
+    if (!ids.has(node.id) || !from) continue;
+    const centre = { x: from.x + node.x + node.width / 2, y: from.y + node.y + node.height / 2 };
+    const target = doc.pages.find((p) => {
+      const at = origins.get(p.id);
+      return !!at && rectContainsPt({ ...at, ...pageSizePx(p) }, centre);
+    });
+    const to = target && origins.get(target.id);
+    if (!target || !to || target.id === node.page) continue;
+    if (ctx.registries.nodeTypes.get(node.type)?.keepsPage?.(node, ids)) continue;
+    moves.set(node.id, { page: target.id, dx: from.x - to.x, dy: from.y - to.y });
+  }
+  if (moves.size === 0) return;
+  const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+  ctx.store.commit(command, (draft) => {
+    for (const node of draft.nodes) {
+      const to = moves.get(node.id);
+      const origin = byId.get(node.id);
+      if (!to || !origin) continue;
+      node.page = to.page;
+      translateInto(ctx.registries, node, origin, to.dx, to.dy);
+    }
+  });
+}
+
 /** The size of the shape a click of a shape tool places, in millimetres. */
 const CLICK_SHAPE_MM = { width: 30, height: 20 };
 
@@ -434,6 +514,21 @@ export function drawingCommands(): Command[] {
       },
       applies: always,
       run: (ctx, args) => createConnector(ctx, args as ConnectorCreateArgs),
+    },
+    {
+      id: "node.move",
+      name: "Move nodes",
+      icon: "move",
+      group: "edit",
+      hidden: true,
+      params: {
+        ids: { type: "array" },
+        dx: { type: "number", required: true },
+        dy: { type: "number", required: true },
+        pages: { type: "boolean", default: true },
+      },
+      applies: always,
+      run: (ctx, args) => moveNodes(ctx, args as MoveArgs),
     },
     {
       id: "node.update",

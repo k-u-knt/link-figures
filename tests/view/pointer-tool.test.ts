@@ -11,7 +11,7 @@ import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries, type Registries } from "../../src/registry";
-import type { CommandContext, DragTargets } from "../../src/registry/command";
+import type { CommandContext, DragTargets, UndoStep } from "../../src/registry/command";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { PointerController } from "../../src/view/pointer";
 import { SelectionState } from "../../src/view/selection";
@@ -210,8 +210,8 @@ function drawSetup(toolId: string) {
       tool.placeDrag(view.commandContext(), from, to, mods, targets);
     },
     toolPreview: (from: PlacePoint | null, to: PlacePoint, targets: DragTargets) => view.armedTool?.preview?.(view.commandContext(), from, to, targets) ?? null,
-    runCommandById: (id: string, args?: Record<string, unknown>) => {
-      pending.push(runCall(store, view.commandContext(), prepareCall(registries, { id, args })));
+    runCommandById: (id: string, args?: Record<string, unknown>, step?: UndoStep) => {
+      pending.push(runCall(store, view.commandContext(), prepareCall(registries, { id, args }), step));
     },
   };
   const stage = new FakeStage();

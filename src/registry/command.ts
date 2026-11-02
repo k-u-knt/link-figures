@@ -36,12 +36,19 @@ export interface FigureViewLike {
    * params and an undo step of its own. A failure is shown to the user rather than lost. Tools run their edits this way,
    * so a tool and a script make the same document.
    */
-  runCommandById(id: string, args?: Record<string, unknown>): void;
+  runCommandById(id: string, args?: Record<string, unknown>, step?: UndoStep): void;
   /** A setting of this view that is not part of the figure (a tool's mode), or undefined when it has not been set. */
   viewOption(key: string): unknown;
   /** Sets a view setting (see `viewOption`); the toolbar is drawn again, so a button showing it shows the new value. */
   setViewOption(key: string, value: unknown): void;
 }
+
+/**
+ * How a call's edit is kept in the undo history: "own", a step of its own (the default); "start", a step that the calls
+ * after it may merge into; "continue", merged into the step before when that is the same command's, made moments ago
+ * (a drag's moves, consecutive nudges), as the store merges commits.
+ */
+export type UndoStep = "own" | "start" | "continue";
 
 /**
  * The items under the two points of a tool's drag, each list topmost first: under the press (`from`) and under the

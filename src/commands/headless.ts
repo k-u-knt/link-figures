@@ -7,7 +7,7 @@ import { createFigureStore } from "../model/normalise";
 import type { DocumentStore } from "../model/store";
 import type { Document } from "../model/types";
 import type { Registries } from "../registry";
-import { CommandError, type Command, type CommandContext, type CommandStore } from "../registry/command";
+import { CommandError, type Command, type CommandContext, type CommandStore, type UndoStep } from "../registry/command";
 import { validateArgs } from "../registry/params";
 
 /** One call of a command by id, with its JSON arguments. */
@@ -74,14 +74,16 @@ function runNow(ctx: CommandContext, { command, args }: PreparedCall, why: strin
 
 /**
  * Runs one prepared call on an open view's `store` (the store of `ctx`); its JSON result, null when it returns nothing.
- * Its edit is an undo step of its own: it neither merges into the edit before it nor takes in the one after.
+ * By default (`step` "own") its edit is an undo step of its own: it neither merges into the edit before it nor takes in
+ * the one after. A gesture made of many calls (a drag) starts its step with "start", which may take in the calls that
+ * follow, and goes on with "continue", which may merge into the step before (see `UndoStep`).
  */
-export async function runCall(store: DocumentStore, ctx: CommandContext, call: PreparedCall): Promise<unknown> {
-  store.endMerge();
+export async function runCall(store: DocumentStore, ctx: CommandContext, call: PreparedCall, step: UndoStep = "own"): Promise<unknown> {
+  if (step !== "continue") store.endMerge();
   try {
     return (await call.command.run(ctx, call.args)) ?? null;
   } finally {
-    store.endMerge();
+    if (step === "own") store.endMerge();
   }
 }
 

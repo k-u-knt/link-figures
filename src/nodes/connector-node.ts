@@ -265,6 +265,11 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     return { ...node, ends: [moveEnd(node.ends[0], dx, dy), moveEnd(node.ends[1], dx, dy)] };
   },
 
+  /** Kept on its page while an end is attached to an item that is not moving with it. */
+  keepsPage(node: ConnectorNode, moving: ReadonlySet<NodeId>): boolean {
+    return node.ends.some((e) => e.kind === "attached" && !moving.has(e.node));
+  },
+
   toSvg(node: ConnectorNode, ctx: SvgContext): string {
     const warnings: string[] = [];
     const { svg } = connectorNodeSvg(ctx.doc, node, { registries: ctx.registries, defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix) });

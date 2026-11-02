@@ -19,7 +19,7 @@ import type { PlacePoint, Pt, Rect } from "../model/geometry";
 import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
-import type { Command, CommandContext, DragTargets, ToolPreview } from "../registry/command";
+import type { Command, CommandContext, DragTargets, ToolPreview, UndoStep } from "../registry/command";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
@@ -364,10 +364,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /**
    * Runs the registered command `id`. Without `args` as `runCommand` does (nothing when there is none); with them, as the
-   * API runs a call on an open figure (checked against the command's params, an undo step of its own), so that what a
-   * tool does through it is what a script does. A failure is shown to the user rather than lost.
+   * API runs a call on an open figure (checked against the command's params, an undo step of its own unless `step` says
+   * otherwise: a drag's moves make one step), so that what a tool does through it is what a script does. A failure is
+   * shown to the user rather than lost.
    */
-  runCommandById(id: string, args?: Record<string, unknown>): void {
+  runCommandById(id: string, args?: Record<string, unknown>, step: UndoStep = "own"): void {
     const command = this.plugin.registries.commands.get(id);
     if (!command) return;
     if (args === undefined) {
@@ -375,7 +376,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       return;
     }
     if (this.readOnly) return;
-    this.attempt(command, () => runCall(this.store, this.commandContext(), prepareCall(this.plugin.registries, { id, args })));
+    this.attempt(command, () => runCall(this.store, this.commandContext(), prepareCall(this.plugin.registries, { id, args }), step));
   }
 
   /** Arms `command`, a tool, in place of any other; arming the armed tool again disarms it. Nothing is armed in a read-only view. */

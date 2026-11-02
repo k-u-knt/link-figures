@@ -210,10 +210,15 @@ export const orthogonalRoute: Route = {
     if (pts.length === 1) pts.push(pts[0]);
     return [{ op: "M", x: pts[0].x, y: pts[0].y }, ...pts.slice(1).map((pt) => ({ op: "L" as const, x: pt.x, y: pt.y }))];
   },
-  /** One handle, `offset`, half way along the elbow's middle segment; none for a route with no middle segment (a straight run, an L). */
+  /**
+   * One handle, `offset`, half way along the elbow's middle segment, when `offset` moves anything (the route at offset 0
+   * and at 1 differ); none otherwise (a straight run, an L, a U round the far side), nor when there is no middle segment.
+   */
   handles(a, b, params) {
     const middle = middleSegment(orthogonalRoute.path(a, b, params));
-    return middle ? [{ id: "offset", pt: { x: (middle.from.x + middle.to.x) / 2, y: (middle.from.y + middle.to.y) / 2 } }] : [];
+    const at = (offset: number): string => JSON.stringify(orthogonalRoute.path(a, b, { ...params, offset }));
+    if (!middle || at(0) === at(1)) return [];
+    return [{ id: "offset", pt: { x: (middle.from.x + middle.to.x) / 2, y: (middle.from.y + middle.to.y) / 2 } }];
   },
   /**
    * The offset that puts the middle segment through `to`: how far `to` is from the start toward the end, across the

@@ -43,7 +43,7 @@ type Intent =
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
-  | { kind: "moving"; pointerId: number; world: Pt; origins: Map<NodeId, Node> }
+  | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; el: HTMLElement }
@@ -275,9 +275,8 @@ export class PointerController {
     const { intent } = g;
     if (intent.kind === "move") {
       const editable = this.editableSelection(doc);
-      const origins = new Map<NodeId, Node>();
-      for (const node of doc.nodes) if (editable.has(node.id)) origins.set(node.id, node);
-      if (origins.size > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, origins };
+      const ids = doc.nodes.filter((n) => editable.has(n.id)).map((n) => n.id);
+      if (ids.length > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false };
       const page = this.selectionPage(doc);
       return page === null ? null : this.beginMarquee(g, page, []);
     }
@@ -304,69 +303,34 @@ export class PointerController {
     return { kind: "marquee", pointerId: g.pointerId, world: g.world, pageId, base, el };
   }
 
+  /**
+   * Moves the dragged nodes to where the drag has taken them, by `node.move` (without the page change, which is for
+   * the release): each call moves them on by what is left to go, and the calls of one drag make one undo step.
+   */
   private moveBy(g: Moving, dx: number, dy: number): void {
     const present = new Set(this.store.doc.nodes.map((n) => n.id));
-    for (const id of [...g.origins.keys()]) if (!present.has(id)) g.origins.delete(id);
+    g.ids = g.ids.filter((id) => present.has(id));
     // What was being dragged has been deleted from under the pointer.
-    if (g.origins.size === 0) {
+    if (g.ids.length === 0) {
       this.endGesture();
       return;
     }
-    this.store.commit("move", (draft) => {
-      for (const node of draft.nodes) {
-        const origin = g.origins.get(node.id);
-        if (origin) this.translate(node, origin, dx, dy);
-      }
-    });
+    const to = { x: roundPx(dx), y: roundPx(dy) };
+    const step = { x: roundPx(to.x - g.moved.x), y: roundPx(to.y - g.moved.y) };
+    if (step.x === 0 && step.y === 0) return;
+    this.view.runCommandById("node.move", { ids: g.ids, dx: step.x, dy: step.y, pages: false }, g.started ? "continue" : "start");
+    g.started = true;
+    g.moved = to;
   }
 
   /**
-   * Moves `target` (a draft node) to `origin` moved by (`dx`, `dy`): its box, or what its type's `translate` changes (a
-   * connector's free ends). Only what the type changes is written, so a node whose type moves nothing stays as it is.
+   * The end of a move drag: `node.move` once more, by nothing, takes each node moved to the page under its centre
+   * (see `node.move`). Run while the drag still counts as under way, so that it is one undo step with the drag, and the
+   * selection then keeps only what is on its first node's page.
    */
-  private translate(target: Node, origin: Node, dx: number, dy: number): void {
-    const type = this.nodeType(origin);
-    if (!type?.translate) {
-      target.x = roundPx(origin.x + dx);
-      target.y = roundPx(origin.y + dy);
-      return;
-    }
-    const next = type.translate(origin, dx, dy) as unknown as Record<string, unknown>;
-    const before = origin as unknown as Record<string, unknown>;
-    const draft = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(next)) if (next[key] !== before[key]) draft[key] = next[key];
-  }
-
-  /**
-   * The end of a move drag: each node moved goes to the page under its centre, keeping its place on the canvas. A node
-   * whose centre is over no page stays where it is. Committed while the drag still counts as under way, so that it is
-   * one undo step with the drag, and the selection then keeps only what is on its first node's page.
-   */
-  private movePagesToCentres(g: Moving): void {
-    const doc = this.store.doc;
-    const origins = pageOriginsPx(doc);
-    const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
-    for (const node of doc.nodes) {
-      if (!g.origins.has(node.id)) continue;
-      const from = origins.get(node.page);
-      if (!from) continue;
-      const centre = { x: from.x + node.x + node.width / 2, y: from.y + node.y + node.height / 2 };
-      const target = pageAt(doc, centre);
-      const to = target && origins.get(target.id);
-      if (!target || !to || target.id === node.page) continue;
-      moves.set(node.id, { page: target.id, dx: from.x - to.x, dy: from.y - to.y });
-    }
-    if (moves.size === 0) return;
-    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
-    this.store.commit("move", (draft) => {
-      for (const node of draft.nodes) {
-        const to = moves.get(node.id);
-        const origin = byId.get(node.id);
-        if (!to || !origin) continue;
-        node.page = to.page;
-        this.translate(node, origin, to.dx, to.dy);
-      }
-    });
+  private finishMove(g: Moving): void {
+    if (g.ids.length === 0) return;
+    this.view.runCommandById("node.move", { ids: g.ids, dx: 0, dy: 0 }, g.started ? "continue" : "start");
     this.select([...this.view.selection.ids]);
   }
 
@@ -421,7 +385,9 @@ export class PointerController {
       return;
     }
     const to = clampToPaper(doc, page, world);
-    const under = this.itemsUnder(doc, page.id, world).filter((id) => id !== node.id);
+    // What is under the point the node's type is given, not under the pointer beyond the paper.
+    const paper = pageWorldRect(doc, page);
+    const under = this.itemsUnder(doc, page.id, { x: paper.x + to.x, y: paper.y + to.y }).filter((id) => id !== node.id);
     try {
       g.drag = type.dragHandle(node, g.handle, to, under, this.interaction(doc));
     } catch (error) {
@@ -584,7 +550,7 @@ export class PointerController {
     }
     const selection = this.view.selection;
     if (g.kind === "pressed" && g.collapseTo !== null && selection.ids.length > 1) selection.set([g.collapseTo]);
-    if (g.kind === "moving") this.movePagesToCentres(g);
+    if (g.kind === "moving") this.finishMove(g);
     this.endGesture();
   }
 
@@ -683,13 +649,8 @@ export class PointerController {
   private nudge(dx: number, dy: number): boolean {
     const ids = this.editableSelection(this.store.doc);
     if (ids.size === 0) return false;
-    const byId = new Map(this.store.doc.nodes.map((n) => [n.id, n] as const));
-    this.store.commit("nudge", (draft) => {
-      for (const node of draft.nodes) {
-        const origin = byId.get(node.id);
-        if (origin && ids.has(node.id)) this.translate(node, origin, dx, dy);
-      }
-    });
+    // Consecutive nudges make one undo step, as the store merges commits made moments apart. A nudge keeps each node on its page.
+    this.view.runCommandById("node.move", { ids: [...ids], dx: roundPx(dx), dy: roundPx(dy), pages: false }, "continue");
     return true;
   }
 

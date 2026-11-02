@@ -1,6 +1,7 @@
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
 import { createDocument, createPage, shapeNodeDefaults } from "../../src/model/defaults";
+import { pageOriginsPx } from "../../src/model/geometry";
 import { connectorNormaliser } from "../../src/model/normalise";
 import { DocumentStore, type ChangeEvent } from "../../src/model/store";
 import type { ConnectorNode, Document, End, Node } from "../../src/model/types";
@@ -183,4 +184,19 @@ test("a commit that touches nothing a connector depends on leaves it alone", () 
   });
   expect(conn(store.doc)).toBe(before);
   expect([...events[0].changedNodeIds]).toEqual(["a"]);
+});
+
+test("a connector moved to another page in the same commit as its target goes keeps the freed end's place on the canvas", () => {
+  const { store } = setup();
+  const origins = pageOriginsPx(store.doc);
+  const dy = origins.get(other.id)!.y - origins.get(page.id)!.y;
+  // b's west anchor at (300, 225) on the first page; the connector goes to the second page, moved back up by the pages' gap, and b goes.
+  store.commit("move", (d) => {
+    const c = d.nodes[index(d, "c")] as ConnectorNode;
+    c.page = other.id;
+    d.nodes.splice(index(d, "b"), 1);
+  });
+  // a is left on the first page too, so that end is freed at its point, likewise in the second page's pixels.
+  expect(conn(store.doc).ends).toEqual([free(110, 45 - dy), free(300, 225 - dy)]);
+  expect(conn(store.doc).page).toBe(other.id);
 });

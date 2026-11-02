@@ -62,6 +62,23 @@ function migrateAdjustments(nodeId: string, raw: unknown): Json[] {
   });
 }
 
+/**
+ * A stroke in the current form: an old `{ color, opacity?, … }` becomes `{ paint: { type: "solid", color, opacity? }, … }`
+ * (its other keys, cap and join among them, kept), a missing width or dash reads as 1 pt solid. The paint needs a
+ * string `type`; one this plugin does not know is kept as it is.
+ */
+export function migrateStroke(nodeId: string, key: string, raw: unknown): Json {
+  const bad = () => new FormatError(`Node ${nodeId}: "${key}" must be null or a stroke { paint: { type, … }, width, dash }`);
+  if (!isRecord(raw)) throw bad();
+  let stroke: Json = raw;
+  if (stroke.paint === undefined && typeof stroke.color === "string") {
+    const { color, opacity, ...rest } = stroke;
+    stroke = { paint: { type: "solid", color, ...(opacity !== undefined ? { opacity } : {}) }, ...rest };
+  }
+  if (!isRecord(stroke.paint) || typeof stroke.paint.type !== "string") throw bad();
+  return fill(stroke, { width: 1, dash: "solid" });
+}
+
 function migrateNode(raw: unknown, index: number): Json {
   if (!isRecord(raw)) throw new FormatError(`Node ${index + 1} is not an object`);
   const { id, type, page } = raw;
@@ -73,7 +90,10 @@ function migrateNode(raw: unknown, index: number): Json {
   }
   if (!Object.hasOwn(NODE_DEFAULTS, type)) throw new FormatError(`Node ${id} has unsupported type "${type}"`);
   const node = fill(raw, NODE_DEFAULTS[type]());
-  if (type === "file") node.adjustments = migrateAdjustments(id, node.adjustments);
+  if (type === "file") {
+    node.adjustments = migrateAdjustments(id, node.adjustments);
+    if (node.frame !== null) node.frame = migrateStroke(id, "frame", node.frame);
+  }
   if (type === "text") {
     if (!isRecord(node.font)) throw new FormatError(`Node ${id}: "font" must be an object`);
     node.font = { ...DEFAULT_FONT, ...node.font };

@@ -28,13 +28,19 @@ export interface Crop {
   h: number;
 }
 
+/** A registered paint type's id plus its params (see `PaintType`); one this plugin does not know is kept as it is. */
+export type Paint = { type: string } & Record<string, unknown>;
+
+/** One colour of a gradient, at `offset` (0-1) along it. */
+export type Stop = { offset: number; color: string; opacity?: number };
+
+/** A line, painted like a fill: a frame, a shape's border, a connector. `width` is in pt. */
 export interface Stroke {
-  color: string;
+  paint: Paint;
   width: number;
   dash: "solid" | "dash" | "dot" | "dashDot";
-  opacity?: number;
   cap?: "butt" | "round" | "square";
-  join?: "miter" | "round";
+  join?: "miter" | "round" | "bevel";
 }
 
 export interface NodeBase {

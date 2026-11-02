@@ -1,8 +1,9 @@
 import { DEFAULT_PAGE_LIMIT_MM } from "../constants";
 import { mmToPx, pxToMm } from "../model/geometry";
-import type { NodeId } from "../model/types";
+import type { NodeId, Paint } from "../model/types";
 import { getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
+import type { PaintRegistry } from "../registry/paint";
 import type { LinkFiguresView } from "./figure-view";
 import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writePageField, writeValue } from "./page-fields";
 import { roundPx } from "./pointer-math";
@@ -40,14 +41,161 @@ function setControlValue(control: Control, field: Field, value: unknown): void {
   else control.value = typeof value === "string" ? value : "";
 }
 
+/** What generated fields need besides their values: the paint types, for a `paint` field. */
+export interface FieldEnv {
+  paints?: PaintRegistry;
+}
+
+type Read = (key: string) => unknown;
+type Write = (key: string, value: unknown) => void;
+
+/**
+ * A field made of other fields (`paint`, `stops`), drawn into its holder. Which controls it has depends on its value
+ * (the paint's type, the number of stops): `shape` names them, and when it changes the holder is drawn again.
+ */
+interface Composite {
+  shape(): string;
+  drawn: string;
+  draw(): void;
+  sync(): void;
+}
+
+const composites = new WeakMap<HTMLElement, Composite>();
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A composite field's holder brought in line with its value: drawn again when its controls should be others, otherwise its controls synced. */
+function syncComposite(holder: HTMLElement): void {
+  const composite = composites.get(holder);
+  if (!composite) return;
+  if (composite.shape() !== composite.drawn) composite.draw();
+  else composite.sync();
+}
+
+/**
+ * A `paint` field: a select of the registered paint types, then the chosen type's own fields, their keys under the
+ * field's (`stroke.paint.color`). Choosing a type writes that type's `defaults()` as the whole paint. A paint whose type
+ * is not registered is listed as it is, with no fields, and stays as it is until another type is chosen.
+ */
+function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv): Composite {
+  const paintOf = (): Paint | undefined => {
+    const value = read(field.key);
+    return isRecord(value) && typeof value.type === "string" ? (value as Paint) : undefined;
+  };
+  const subFields = (): Field[] => {
+    const paint = paintOf();
+    const type = paint ? env.paints?.get(paint.type) : undefined;
+    return paint && type ? type.fields(paint).map((f) => ({ ...f, key: `${field.key}.${f.key}` })) : [];
+  };
+  const composite: Composite = {
+    shape: () => `${paintOf()?.type ?? ""}|${subFields().map((f) => `${f.kind}:${f.key}`).join(",")}`,
+    drawn: "",
+    draw() {
+      composite.drawn = composite.shape();
+      holder.empty();
+      const current = paintOf()?.type;
+      const select = holder.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type` } });
+      const types = env.paints?.all() ?? [];
+      for (const type of types) select.createEl("option", { value: type.id, text: type.name });
+      if (current !== undefined && !types.some((t) => t.id === current)) select.createEl("option", { value: current, text: `${current} (not available)` });
+      select.value = current ?? "";
+      select.addEventListener("change", () => {
+        const type = env.paints?.get(select.value);
+        if (type && type.id !== paintOf()?.type) write(field.key, type.defaults());
+        syncComposite(holder);
+        select.value = paintOf()?.type ?? "";
+      });
+      renderFields(holder, subFields(), read, write, env);
+    },
+    sync() {
+      const select = holder.querySelector<HTMLSelectElement>(`[data-key="${field.key}.type"]`);
+      if (select) select.value = paintOf()?.type ?? "";
+      syncFields(holder, subFields(), read, env);
+    },
+  };
+  return composite;
+}
+
+/**
+ * A `stops` field: one row per gradient stop (offset, colour, opacity, under keys `stops.0.offset`…), each with a remove
+ * button, and an add button. A gradient keeps at least two stops; a stop is added between the last two, in the last one's colour.
+ */
+function stopsComposite(holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv): Composite {
+  const stops = (): unknown[] => {
+    const value = read(field.key);
+    return Array.isArray(value) ? value : [];
+  };
+  const rowFields = (i: number): Field[] => [
+    { kind: "number", key: `${field.key}.${i}.offset`, label: "Offset", min: 0, max: 1, step: 0.05 },
+    { kind: "color", key: `${field.key}.${i}.color`, label: "Color" },
+    { kind: "number", key: `${field.key}.${i}.opacity`, label: "Opacity", min: 0, max: 1, step: 0.05 },
+  ];
+  const allFields = (): Field[] => stops().flatMap((_, i) => rowFields(i));
+  const composite: Composite = {
+    shape: () => String(stops().length),
+    drawn: "",
+    draw() {
+      composite.drawn = composite.shape();
+      holder.empty();
+      const count = stops().length;
+      for (let i = 0; i < count; i++) {
+        const row = holder.createDiv({ cls: "lf-stop" });
+        renderFields(row, rowFields(i), read, write, env);
+        const remove = row.createEl("button", { cls: "lf-stop-remove", text: "Remove", attr: { type: "button" } });
+        remove.disabled = count <= 2;
+        remove.addEventListener("click", () => {
+          const current = stops();
+          if (current.length <= 2) return;
+          write(field.key, current.filter((_, j) => j !== i));
+          syncComposite(holder);
+        });
+      }
+      const add = holder.createEl("button", { cls: "lf-stop-add", text: "Add stop", attr: { type: "button" } });
+      add.addEventListener("click", () => {
+        const current = stops();
+        const n = current.length;
+        const at = (i: number): Record<string, unknown> => (isRecord(current[i]) ? current[i] : {});
+        const offset = (i: number, fallback: number): number => (typeof at(i).offset === "number" ? (at(i).offset as number) : fallback);
+        const color = typeof at(n - 1).color === "string" ? (at(n - 1).color as string) : "#000000";
+        // Between the last two stops; with fewer, at the end that is free.
+        const stop = { offset: n >= 2 ? (offset(n - 2, 0) + offset(n - 1, 1)) / 2 : n === 0 ? 0 : 1, color };
+        write(field.key, n >= 2 ? [...current.slice(0, n - 1), stop, current[n - 1]] : [...current, stop]);
+        syncComposite(holder);
+      });
+    },
+    sync() {
+      syncFields(holder, allFields(), read, env);
+    },
+  };
+  return composite;
+}
+
+/** The `<input>` type of each field kind that is one input. */
+const INPUT_TYPES: Partial<Record<Field["kind"], string>> = { number: "number", text: "text", color: "color", toggle: "checkbox" };
+
+const COMPOSITES: Partial<Record<Field["kind"], (holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv) => Composite>> = {
+  paint: paintComposite,
+  stops: stopsComposite,
+};
+
 /**
  * One `.lf-field` row per field: a label and the control its `kind` calls for. `read` gives the value to show and
  * `write` is told what the user sets; numbers are passed on as the user reads them (in the field's `unit`), kept
  * within `min` and `max`. Text, numbers and selects write when they are committed (Enter, leaving the field), colours
- * as they are picked.
+ * as they are picked. A `paint` or `stops` field is a group of such rows (see `paintComposite`, `stopsComposite`).
  */
-export function renderFields(container: HTMLElement, fields: Field[], read: (key: string) => unknown, write: (key: string, value: unknown) => void): void {
+export function renderFields(container: HTMLElement, fields: Field[], read: Read, write: Write, env: FieldEnv = {}): void {
   for (const field of fields) {
+    const makeComposite = COMPOSITES[field.kind];
+    if (makeComposite) {
+      const row = container.createDiv({ cls: ["lf-field", "lf-field-group"] });
+      row.createSpan({ cls: "lf-field-label", text: field.label });
+      const holder = row.createDiv({ cls: "lf-field-control", attr: { "data-key": field.key } });
+      const composite = makeComposite(holder, field, read, write, env);
+      composites.set(holder, composite);
+      composite.draw();
+      continue;
+    }
     const row = container.createEl("label", { cls: "lf-field" });
     row.createSpan({ cls: "lf-field-label", text: field.label });
     const holder = row.createDiv({ cls: "lf-field-control" });
@@ -58,7 +206,7 @@ export function renderFields(container: HTMLElement, fields: Field[], read: (key
       control = holder.createEl("select", { cls: "dropdown", attr });
       for (const option of field.options ?? []) control.createEl("option", { value: option.value, text: option.label });
     } else {
-      const type = { number: "number", text: "text", color: "color", toggle: "checkbox" }[field.kind];
+      const type = INPUT_TYPES[field.kind];
       const numeric = field.kind === "number";
       control = holder.createEl("input", {
         type,
@@ -101,11 +249,16 @@ export function renderFields(container: HTMLElement, fields: Field[], read: (key
   }
 }
 
-/** Sets the controls `renderFields` made from the current values, leaving alone one that is being typed into. */
-export function syncFields(container: HTMLElement, fields: Field[], read: (key: string) => unknown): void {
+/**
+ * Sets the controls `renderFields` made from the current values, leaving alone one that is being typed into. A `paint`
+ * or `stops` field whose controls should now be others (another paint type, another number of stops) is drawn again.
+ */
+export function syncFields(container: HTMLElement, fields: Field[], read: Read, env: FieldEnv = {}): void {
   for (const field of fields) {
     const control = container.querySelector<Control>(`[data-key="${field.key}"]`);
-    if (control && !typedInto.has(control)) setControlValue(control, field, read(field.key));
+    if (!control) continue;
+    if (COMPOSITES[field.kind]) syncComposite(control as unknown as HTMLElement);
+    else if (!typedInto.has(control)) setControlValue(control, field, read(field.key));
   }
 }
 
@@ -159,14 +312,18 @@ export class Inspector {
     this.pending = false;
     // The same controls as before (a store change that is none of their business, or the user's own edit): only their values change, so a field being typed in keeps its text and focus.
     if (section.signature === this.signature) {
-      syncFields(this.el, section.fields, section.read);
+      syncFields(this.el, section.fields, section.read, this.fieldEnv());
       return;
     }
     this.signature = section.signature;
     this.el.empty();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
-    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write);
+    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv());
+  }
+
+  private fieldEnv(): FieldEnv {
+    return { paints: this.view.plugin.registries.paints };
   }
 
   /** A control in this inspector has the focus and holds text that has not been committed. */
@@ -222,6 +379,7 @@ export class Inspector {
     const fields = [...base, ...(type?.inspector(first) ?? [])];
     // Pixels in the file, millimetres on screen.
     const mm = new Set(fields.filter((f) => f.unit === "mm").map((f) => f.key));
+    const paintKeys = fields.filter((f) => f.kind === "paint").map((f) => f.key);
     const targets = new Set(ids);
     const live = () => this.view.store.doc.nodes.find((n) => n.id === first.id);
     return {
@@ -237,13 +395,22 @@ export class Inspector {
       write: (key, value) => {
         const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
         // A locked node is written too: asking for it in the inspector is explicit.
+        const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;
+        // A paint's own field (`frame.paint.color`) belongs to the first node's paint type, and is not written onto a paint of another.
+        const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`));
         this.view.store.commit(`inspect:${key}`, (draft) => {
+          const firstNow = draft.nodes.find((n) => n.id === first.id);
+          const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;
           for (const node of draft.nodes) {
             if (!targets.has(node.id)) continue;
             // What belongs to one node type is not written onto nodes of another.
             if (!baseKeys.has(key) && node.type !== first.type) continue;
+            // Nor is a nested value written onto a node that has nothing there (a frame that is off).
+            if (parent !== null && !isRecord(readValue(node, parent)) && !Array.isArray(readValue(node, parent))) continue;
+            if (paintKey && readValue(node, `${paintKey}.type`) !== paintType) continue;
             if (key === "name" && stored === "") delete node.name;
-            else writeValue(node, key, stored);
+            // Each node gets its own copy of an object (a paint's defaults, a list of stops).
+            else writeValue(node, key, typeof stored === "object" && stored !== null ? structuredClone(stored) : stored);
           }
         });
       },

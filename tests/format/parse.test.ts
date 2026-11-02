@@ -1,6 +1,7 @@
 import { isFigureText, parseFigureFile } from "../../src/format/parse";
 import { emitLinksSection, joinLinktext, parseLinksSection, splitLinktext } from "../../src/format/links-section";
 import { loadDocument } from "../../src/format/load";
+import { serializeFigureFile } from "../../src/format/serialize";
 import { migrate } from "../../src/format/migrate";
 import { FormatError, NotFigureError } from "../../src/format/errors";
 import { fileNodeDefaults, createPage } from "../../src/model/defaults";
@@ -93,3 +94,29 @@ test("adjustments that are not a list of entries with a string type are a Format
   for (const bad of ['"nope"', '[{"enabled":true}]', '[{"type":3}]', '[null]', '[{"type":"a","enabled":"yes"}]', '[{"type":"a","params":[]}]']) expect(() => withAdjustments(bad)).toThrow(new FormatError(message));
 });
 test("an adjustment with no enabled or params reads as enabled with empty params", () => expect((withAdjustments('[{"type":"x.future"}]').doc.nodes[0] as FileNode).adjustments).toEqual([{ type: "x.future", enabled: true, params: {} }]));
+
+// --- strokes and paint
+const withFrame = (value: string) => loadDocument(FILE.replace('"frame":null}', `"frame":${value}}`));
+const frameOf = (loaded: ReturnType<typeof loadDocument>) => (loaded.doc.nodes[0] as FileNode).frame;
+test("an old frame { color, opacity } loads as a solid paint, and is saved in the new form", () => {
+  const loaded = withFrame('{"color":"#ff0000","width":1,"dash":"solid","opacity":0.5}');
+  expect(frameOf(loaded)).toEqual({ paint: { type: "solid", color: "#ff0000", opacity: 0.5 }, width: 1, dash: "solid" });
+  const out = serializeFigureFile(loaded.doc, loaded.parsed);
+  const saved = JSON.parse(parseFigureFile(out).bodyJson!).nodes[0].frame;
+  expect(saved).toEqual({ paint: { type: "solid", color: "#ff0000", opacity: 0.5 }, width: 1, dash: "solid" });
+  expect(frameOf(loadDocument(out))).toEqual(frameOf(loaded));
+});
+test("an old frame keeps its cap and join, and one with no opacity gets none", () => {
+  expect(frameOf(withFrame('{"color":"#000000","width":2,"dash":"dash","cap":"round","join":"round"}'))).toEqual({ paint: { type: "solid", color: "#000000" }, width: 2, dash: "dash", cap: "round", join: "round" });
+});
+test("a paint type this plugin does not know survives a round trip, extra keys and all", () => {
+  const frame = { paint: { type: "x.future", amount: 3, nested: { a: [1, 2] } }, width: 1, dash: "dot", extra: true };
+  const loaded = withFrame(JSON.stringify(frame));
+  expect(frameOf(loaded)).toEqual(frame);
+  expect(frameOf(loadDocument(serializeFigureFile(loaded.doc, loaded.parsed)))).toEqual(frame);
+});
+test("a stroke missing its width or dash gets 1 pt solid", () => expect(frameOf(withFrame('{"paint":{"type":"none"}}'))).toEqual({ paint: { type: "none" }, width: 1, dash: "solid" }));
+test("a frame that is not a stroke is a FormatError", () => {
+  const message = 'Node p-3f9a: "frame" must be null or a stroke { paint: { type, … }, width, dash }';
+  for (const bad of ['"red"', "[]", '{"width":1}', '{"paint":"red"}', '{"paint":{"color":"#000000"}}']) expect(() => withFrame(bad)).toThrow(new FormatError(message));
+});

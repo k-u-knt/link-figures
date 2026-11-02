@@ -9,6 +9,7 @@ import { ObsidianVaultAccess } from "./links/obsidian-access";
 import type { Decoders } from "./links/types";
 import { fileNodeType } from "./nodes/file-node";
 import { textNodeType } from "./nodes/text-node";
+import { builtinPaintTypes } from "./paint/builtin";
 import { createRegistries, type Registries } from "./registry";
 import { DEFAULT_SETTINGS, LinkFiguresSettingTab, type LinkFiguresSettings } from "./settings/settings";
 import { LinkFiguresView } from "./view/figure-view";
@@ -33,6 +34,7 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.nodeTypes.register(textNodeType);
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
+    for (const paint of builtinPaintTypes) this.registries.paints.register(paint);
     registerBuiltinCommands(this);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));

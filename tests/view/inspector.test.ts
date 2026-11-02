@@ -1,7 +1,8 @@
 import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
-import type { Node } from "../../src/model/types";
+import type { FileNode, Node, Stroke } from "../../src/model/types";
+import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
 import { clampToField, colorInputValue, formatNumber, Inspector } from "../../src/view/inspector";
@@ -14,7 +15,11 @@ const fileType = {
   type: "file",
   name: "Linked file",
   icon: "image",
-  inspector: (node: any) => (String(node.file).endsWith(".pdf") ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : []),
+  inspector: (node: any) => [
+    ...(String(node.file).endsWith(".pdf") ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : []),
+    // A frame's fields, as a node type with a stroke offers them: dotted keys into the node.
+    ...(node.frame ? [{ kind: "paint", key: "frame.paint", label: "Frame" }, { kind: "number", key: "frame.width", label: "Frame width", unit: "pt", min: 0 }] : []),
+  ],
 } as unknown as NodeType;
 
 function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {}) {
@@ -23,6 +28,7 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   const store = new DocumentStore(doc);
   const registries = createRegistries();
   registries.nodeTypes.register(fileType);
+  for (const paint of builtinPaintTypes) registries.paints.register(paint);
   const selection = new SelectionState();
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
@@ -450,3 +456,140 @@ describe("node section", () => {
     expect(titleOf(el)).toBe("Page");
   });
 });
+
+describe("paint fields", () => {
+  const solidFrame = (): Stroke => ({ paint: { type: "solid", color: "#ff0000", opacity: 0.5 }, width: 1, dash: "solid" });
+  const frameOf = (store: DocumentStore, i = 0) => (store.doc.nodes[i] as FileNode).frame!;
+  const optionsOf = (select: FakeEl) => select.children.filter((c) => c.tag === "option").map((c) => c.value);
+  const linearDefaults = () => builtinPaintTypes.find((t) => t.id === "linear")!.defaults();
+
+  function framed() {
+    const s = setup((d) => { addNode(d, { id: "p-img", frame: solidFrame() } as Partial<FileNode>); });
+    s.selection.set(["p-img"]);
+    return s;
+  }
+
+  test("a paint field is a select of the paint types, then the chosen type's own fields, read through dotted keys", () => {
+    const { el } = framed();
+    expect(keysOf(el)).toEqual([
+      "x", "y", "width", "height", "rotation", "opacity", "name", "locked",
+      "frame.paint", "frame.paint.type", "frame.paint.color", "frame.paint.opacity", "frame.width",
+    ]);
+    const select = el.control("frame.paint.type");
+    expect(optionsOf(select)).toEqual(["none", "solid", "linear", "radial", "pattern"]);
+    expect(select.value).toBe("solid");
+    expect(el.control("frame.paint.color").value).toBe("#ff0000");
+    expect(el.control("frame.paint.opacity").value).toBe("0.5");
+    expect(el.control("frame.width").value).toBe("1");
+  });
+
+  test("a dotted field writes into the nested value and leaves the rest of it alone", () => {
+    const { el, store, labels } = framed();
+    const seen = labels();
+    el.typeInto("frame.width", "2.5");
+    el.control("frame.paint.color").value = "#00ff00";
+    el.control("frame.paint.color").fire("input");
+    expect(frameOf(store)).toEqual({ paint: { type: "solid", color: "#00ff00", opacity: 0.5 }, width: 2.5, dash: "solid" });
+    expect(seen).toEqual(["inspect:frame.width", "inspect:frame.paint.color"]);
+  });
+
+  test("switching the type writes that type's defaults as one undo step, and its fields replace the old type's", () => {
+    const { el, store, labels } = framed();
+    const seen = labels();
+    const select = el.control("frame.paint.type");
+    select.value = "linear";
+    select.fire("change");
+    expect(frameOf(store).paint).toEqual(linearDefaults());
+    expect(seen).toEqual(["inspect:frame.paint"]);
+    expect(el.control("frame.paint.type").value).toBe("linear");
+    expect(keysOf(el).filter((k) => k.startsWith("frame.paint."))).toEqual([
+      "frame.paint.type", "frame.paint.angle", "frame.paint.stops",
+      "frame.paint.stops.0.offset", "frame.paint.stops.0.color", "frame.paint.stops.0.opacity",
+      "frame.paint.stops.1.offset", "frame.paint.stops.1.color", "frame.paint.stops.1.opacity",
+    ]);
+    store.undo();
+    expect(frameOf(store).paint).toEqual(solidFrame().paint);
+    expect(el.control("frame.paint.type").value).toBe("solid");
+    expect(el.querySelector('[data-key="frame.paint.angle"]')).toBeNull();
+  });
+
+  test("a gradient's stops are a list: a stop is added, edited and removed, and the last two cannot be removed", () => {
+    const { el, store } = framed();
+    store.commit("paint", (d) => { (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
+    const removeButtons = () => el.findAll((e) => e.hasClass("lf-stop-remove"));
+    expect(removeButtons().map((b) => b.disabled)).toEqual([true, true]);
+
+    el.find((e) => e.hasClass("lf-stop-add"))!.fire("click");
+    expect(frameOf(store).paint.stops).toEqual([
+      { offset: 0, color: "#000000" },
+      { offset: 0.5, color: "#ffffff" },
+      { offset: 1, color: "#ffffff" },
+    ]);
+    expect(removeButtons().map((b) => b.disabled)).toEqual([false, false, false]);
+
+    el.typeInto("frame.paint.stops.1.offset", "0.25");
+    el.control("frame.paint.stops.1.color").value = "#ff0000";
+    el.control("frame.paint.stops.1.color").fire("input");
+    el.typeInto("frame.paint.stops.1.opacity", "0.5");
+    expect((frameOf(store).paint.stops as unknown[])[1]).toEqual({ offset: 0.25, color: "#ff0000", opacity: 0.5 });
+
+    removeButtons()[0].fire("click");
+    expect(frameOf(store).paint.stops).toEqual([
+      { offset: 0.25, color: "#ff0000", opacity: 0.5 },
+      { offset: 1, color: "#ffffff" },
+    ]);
+    expect(el.control("frame.paint.stops.0.offset").value).toBe("0.25");
+    expect(el.querySelector('[data-key="frame.paint.stops.2.offset"]')).toBeNull();
+  });
+
+  test("a stop's offset and opacity are kept within 0 to 1", () => {
+    const { el, store } = framed();
+    store.commit("paint", (d) => { (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
+    el.typeInto("frame.paint.stops.0.offset", "-2");
+    el.typeInto("frame.paint.stops.0.opacity", "3");
+    expect((frameOf(store).paint.stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000", opacity: 1 });
+  });
+
+  test("a paint type that is not registered is shown as it is, with no fields, and nothing is written", () => {
+    const { el, store, selection, labels } = setup((d) => {
+      addNode(d, { id: "p-img", frame: { paint: { type: "x.future", amount: 3 }, width: 1, dash: "solid" } } as Partial<FileNode>);
+    });
+    const seen = labels();
+    selection.set(["p-img"]);
+    const select = el.control("frame.paint.type");
+    expect(optionsOf(select)).toEqual(["none", "solid", "linear", "radial", "pattern", "x.future"]);
+    expect(select.value).toBe("x.future");
+    expect(keysOf(el).filter((k) => k.startsWith("frame.paint."))).toEqual(["frame.paint.type"]);
+    expect(seen).toEqual([]);
+    expect(frameOf(store).paint).toEqual({ type: "x.future", amount: 3 });
+  });
+
+  test("with several nodes selected, a paint's own field is not written onto a paint of another type", () => {
+    const { el, store, selection } = setup((d) => {
+      addNode(d, { id: "p-a", frame: solidFrame() } as Partial<FileNode>);
+      addNode(d, { id: "p-b", frame: { ...solidFrame(), paint: linearDefaults() } } as Partial<FileNode>);
+      addNode(d, { id: "p-c", frame: solidFrame() } as Partial<FileNode>);
+    });
+    selection.set(["p-a", "p-b", "p-c"]);
+    el.typeInto("frame.paint.opacity", "0.25");
+    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint.opacity)).toEqual([0.25, undefined, 0.25]);
+    // Choosing a type is for all of them, each with its own copy.
+    el.control("frame.paint.type").value = "radial";
+    el.control("frame.paint.type").fire("change");
+    const paints = store.doc.nodes.map((n) => (n as FileNode).frame!.paint);
+    expect(paints.map((p) => p.type)).toEqual(["radial", "radial", "radial"]);
+    expect(paints[0]).not.toBe(paints[1]);
+  });
+
+  test("with several nodes selected, a dotted write skips a node that has nothing at the path", () => {
+    const { el, store, selection } = setup((d) => {
+      addNode(d, { id: "p-a", frame: solidFrame() } as Partial<FileNode>);
+      addNode(d, { id: "p-b" });
+    });
+    selection.set(["p-a", "p-b"]);
+    el.typeInto("frame.width", "3");
+    expect(frameOf(store, 0).width).toBe(3);
+    expect((store.doc.nodes[1] as FileNode).frame).toBeNull();
+  });
+});
+

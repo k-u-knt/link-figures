@@ -285,8 +285,9 @@
   overflow: hidden;
 }
 
-/* A shape draws its outline in an SVG over its box; a border wider than the box shows outside it. */
-.lf-shape > svg {
+/* A shape draws its outline in an SVG over its box; a border wider than the box shows outside it. A connector's box is already the area it draws. */
+.lf-shape > svg,
+.lf-connector > svg {
   position: absolute;
   inset: 0;
   width: 100%;

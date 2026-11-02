@@ -402,7 +402,8 @@ export class Inspector {
     const first = nodes.find((n) => n.id === ids[0]);
     if (!first) return null;
     const type = this.view.plugin.registries.nodeTypes.get(first.type);
-    const base = nodeBaseFields();
+    const derived = new Set(type?.derivedFields ?? []);
+    const base = nodeBaseFields().filter((f) => !derived.has(f.key));
     const baseKeys = new Set(base.map((f) => f.key));
     const fields = [...base, ...(type?.inspector(first, this.context()) ?? [])];
     // Pixels in the file, millimetres on screen.

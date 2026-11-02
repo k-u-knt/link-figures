@@ -318,6 +318,39 @@ describe("applyChange", () => {
   });
 });
 
+describe("nodes drawn from other nodes", () => {
+  /** The setup's view and pages, drawn by a node host whose text type says it is drawn from panel a (as a connector is from its items). */
+  function dependentSetup() {
+    const t = setup();
+    const dependent: NodeType = { ...t.recording.type, dependsOn: () => [t.a.id] };
+    const registries = { nodeTypes: { get: (type: string) => (type === "text" ? dependent : t.recording.type) } } as unknown as Registries;
+    const pageLayer = { nodesHost: () => t.host };
+    const nodeHost = new NodeHost(t.view as never, pageLayer as never, registries);
+    nodeHost.renderAll(t.doc);
+    const updatesOf = (id: NodeId) => t.recording.mounted.filter((m) => m.node.id === id && !m.unmounted).flatMap((m) => m.updates);
+    return { ...t, nodeHost, updatesOf };
+  }
+
+  test("a node is drawn again when only a node it depends on changed, from the document as it is now", () => {
+    const t = dependentSetup();
+    const next: Document = { ...t.doc, nodes: t.doc.nodes.map((n) => (n.id === t.a.id ? ({ ...n, x: 9 } as Node) : n)) };
+    t.nodeHost.applyChange(next, new Set([t.a.id]));
+    expect(t.updatesOf(t.label.id)).toEqual([next.nodes.find((n) => n.id === t.label.id)]);
+    expect(t.updatesOf(t.b.id)).toEqual([]);
+  });
+
+  test("and when that node is removed; but not when another node changes, and only once when it changed itself", () => {
+    const t = dependentSetup();
+    const without: Document = { ...t.doc, nodes: t.doc.nodes.filter((n) => n.id !== t.a.id) };
+    t.nodeHost.applyChange(without, new Set([t.a.id]));
+    expect(t.updatesOf(t.label.id)).toHaveLength(1);
+    t.nodeHost.applyChange(without, new Set([t.b.id]));
+    expect(t.updatesOf(t.label.id)).toHaveLength(1);
+    t.nodeHost.applyChange(t.doc, new Set([t.a.id, t.label.id]));
+    expect(t.updatesOf(t.label.id)).toHaveLength(2);
+  });
+});
+
 describe("resolve", () => {
   test("resolves the nodes asked for even when their link has not changed: the file may have", async () => {
     const t = setup();

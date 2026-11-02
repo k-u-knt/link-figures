@@ -55,6 +55,7 @@ export class NodeHost {
       get figurePath() {
         return view.file?.path ?? "";
       },
+      doc: () => view.store.doc,
       resolved: (id) => view.resolvedCache.get(id),
       openLink: (linktext, evt) => view.openLink(linktext, Keymap.isModEvent(evt)),
       component: view,
@@ -91,7 +92,10 @@ export class NodeHost {
     return this.resolve(stale.map((n) => n.id));
   }
 
-  /** Brings the drawn nodes in line with `doc` after `changed` nodes were added, removed or edited. Pages are already rendered. */
+  /**
+   * Brings the drawn nodes in line with `doc` after `changed` nodes were added, removed or edited, and draws again each
+   * node that is drawn from one of them (see `NodeType.dependsOn`). Pages are already rendered.
+   */
   applyChange(doc: Document, changed: Set<NodeId>): void {
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     const stale: NodeId[] = [];
@@ -113,6 +117,12 @@ export class NodeHost {
         this.updateEntry(entry, node);
       }
       if (node.type === "file" && this.resolvedKeys.get(id) !== linkKey(node)) stale.push(id);
+    }
+    for (const node of doc.nodes) {
+      if (changed.has(node.id)) continue;
+      const deps = this.registries.nodeTypes.get(node.type)?.dependsOn?.(node);
+      const entry = deps?.some((dep) => changed.has(dep)) ? this.entries.get(node.id) : undefined;
+      if (entry) this.updateEntry(entry, node);
     }
     if (stale.length > 0) void this.resolve(stale);
   }

@@ -1,5 +1,6 @@
-import { applyPatches, enablePatches, produceWithPatches, type Patch } from "immer";
+import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from "immer";
 import { COALESCE_MS } from "../constants";
+import type { Normaliser } from "./normalise";
 import type { Document, Node, NodeId } from "./types";
 
 enablePatches();
@@ -34,6 +35,7 @@ export class DocumentStore {
   /** The entry the next commit may merge into. Undo, redo and replace clear it, so navigating history always ends a run. */
   private mergeTarget: HistoryEntry | null = null;
   private listeners = new Set<Listener>();
+  private readonly normalisers: Normaliser[] = [];
 
   constructor(doc: Document, private readonly now: () => number = Date.now) {
     this.current = doc;
@@ -43,11 +45,27 @@ export class DocumentStore {
     return this.current;
   }
 
-  /** A recipe that changes nothing leaves no history entry and emits no event. */
+  /**
+   * Adds a rule that keeps derived parts of the document consistent (see `Normaliser`). From now on it runs in every
+   * commit and every `replace`; the current document is brought in line at once, as a load would be, without history and
+   * without an event.
+   */
+  addNormaliser(fn: Normaliser): void {
+    this.normalisers.push(fn);
+    this.current = produce(this.current, draft => { fn(draft); });
+  }
+
+  /**
+   * A recipe that changes nothing leaves no history entry and emits no event. The normalisers run after the recipe, on
+   * the same draft, so what they change is in the commit's patches and undo and redo restore it exactly.
+   */
   commit(label: string, recipe: (draft: Document) => void): void {
     const before = this.current;
     // The wrapper discards the recipe's return value: immer rejects a producer that both mutates and returns.
-    const [after, patches, inversePatches] = produceWithPatches(before, draft => { recipe(draft); });
+    const [after, patches, inversePatches] = produceWithPatches(before, draft => {
+      recipe(draft);
+      this.normalise(draft);
+    });
     if (patches.length === 0) return;
     this.current = after;
     this.redoStack = [];
@@ -99,6 +117,7 @@ export class DocumentStore {
    */
   replace(doc: Document, label = "replace", options: { keepHistory?: boolean } = {}): void {
     const before = this.current;
+    doc = this.normalisers.length === 0 ? doc : produce(doc, draft => { this.normalise(draft); });
     this.current = doc;
     if (options.keepHistory) {
       const links = changedLinks(before.nodes, doc.nodes);
@@ -134,6 +153,10 @@ export class DocumentStore {
   subscribe(fn: (ev: ChangeEvent) => void): () => void {
     this.listeners.add(fn);
     return () => { this.listeners.delete(fn); };
+  }
+
+  private normalise(draft: Document): void {
+    for (const fn of this.normalisers) fn(draft);
   }
 
   private step(kind: "undo" | "redo", entry: HistoryEntry, patches: Patch[]): void {

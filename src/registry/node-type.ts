@@ -12,6 +12,8 @@ export interface RenderContext {
   /** The plugin's registries: what a node type draws with (shape kinds, paints…). */
   registries: Registries;
   figurePath: string;
+  /** The document as it is now: what a node drawn from other nodes (a connector from the items its ends are attached to) reads them from. */
+  doc(): Document;
   resolved(id: NodeId): Resolved | undefined;
   openLink(linktext: string, evt: MouseEvent): void;
   component: Component;
@@ -57,6 +59,16 @@ export interface NodeType<N extends Node = Node> {
    * applied. A type that does not implement it (a connector) cannot be attached to.
    */
   attachable?(node: N, ctx: AttachContext): Attachable;
+  /**
+   * The other nodes this node is drawn from (a connector's attached items). The stage draws the node again when any of
+   * them is added, removed or edited, even when the node itself did not change.
+   */
+  dependsOn?(node: N): NodeId[];
+  /**
+   * Base fields (`"x"`, `"rotation"`…) the type works out for itself, so the inspector does not offer them (a connector's
+   * box is the area it draws, and it is never rotated).
+   */
+  derivedFields?: readonly string[];
 }
 
 export class NodeTypeRegistry {

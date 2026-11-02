@@ -15,6 +15,7 @@ import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
 import { createDocument } from "../model/defaults";
 import type { PlacePoint, Pt, Rect } from "../model/geometry";
+import { connectorNormaliser } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { Command, CommandContext } from "../registry/command";
@@ -578,12 +579,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;
     const store = new DocumentStore(doc, () => this.pointer.commitTime());
+    // Every connector is kept in step with its items in each commit, and the document is brought in line now.
+    store.addNormaliser(connectorNormaliser(this.plugin.registries));
     this.store = store;
     // Nothing selected, in progress or drawn belongs to the document that was just replaced.
     this.selection.clear();
     this.pointer.rebind();
-    this.pageLayer.render(doc);
-    this.nodeHost.renderAll(doc);
+    this.pageLayer.render(store.doc);
+    this.nodeHost.renderAll(store.doc);
     void this.nodeHost.resolveStale();
     this.unsubscribe = store.subscribe((ev) => {
       if (ev.pagesChanged) this.pageLayer.render(store.doc);

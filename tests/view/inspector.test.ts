@@ -2,6 +2,9 @@ import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeD
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
 import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
+import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
+import type { ConnectorNode } from "../../src/model/types";
+import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
@@ -705,5 +708,42 @@ describe("shape fields", () => {
     toggle.checked = true;
     toggle.fire("change");
     expect(shapeOf(store).fill.bg).toBe("#336699");
+  });
+});
+
+describe("connector fields", () => {
+  function connected() {
+    const s = setup((d) => {
+      d.nodes.push({ ...shapeNodeDefaults(d.pages[0], { id: "p-a" }, []), x: 10, y: 20, width: 100, height: 50 });
+      const c: ConnectorNode = {
+        id: "p-c", type: "connector", page: d.pages[0].id, x: 0, y: 0, width: 0, height: 0, z: 1, rotation: 0, opacity: 1, locked: false,
+        ends: [{ kind: "attached", node: "p-a", snap: "anchor", anchor: "e" }, { kind: "free", x: 300, y: 200 }],
+        route: "straight", routeParams: {},
+        stroke: { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" },
+        caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 3 }],
+      };
+      d.nodes.push(c);
+    });
+    s.view.plugin.registries.nodeTypes.register(connectorNodeType);
+    for (const r of builtinRoutes) s.view.plugin.registries.routes.register(r);
+    for (const c of builtinCapKinds) s.view.plugin.registries.caps.register(c);
+    s.selection.set(["p-c"]);
+    return s;
+  }
+  const connectorOf = (store: DocumentStore) => store.doc.nodes[1] as ConnectorNode;
+
+  test("no box or rotation is offered, and a cap and an end's snap are written through their numbered keys", () => {
+    const { el, store } = connected();
+    for (const key of ["x", "y", "width", "height", "rotation"]) expect(keysOf(el)).not.toContain(key);
+    expect(keysOf(el)).toEqual(expect.arrayContaining(["opacity", "route", "caps.1.kind", "ends.0.snap"]));
+
+    el.control("caps.1.kind").value = "circle";
+    el.control("caps.1.kind").fire("change");
+    expect(connectorOf(store).caps).toEqual([{ kind: "none", size: 3 }, { kind: "circle", size: 3 }]);
+
+    el.control("ends.0.snap").value = "center";
+    el.control("ends.0.snap").fire("change");
+    // This store has no normaliser; the view's drops the anchor id (see the connector normaliser's tests).
+    expect(connectorOf(store).ends[0]).toEqual({ kind: "attached", node: "p-a", snap: "center", anchor: "e" });
   });
 });

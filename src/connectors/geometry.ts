@@ -5,7 +5,7 @@ import { clipToOutline, pathBounds, pointAtEnd, transformPath, type PathData, ty
 import type { ConnectorNode, Document, End } from "../model/types";
 import type { Registries } from "../registry";
 import { DEFAULT_CAP_SIZE } from "../registry/cap";
-import type { EndPoint } from "../registry/route";
+import { maxLead, type EndPoint } from "../registry/route";
 
 /** A connector worked out for drawing, all in page px. */
 export interface ResolvedConnector {
@@ -73,123 +73,139 @@ function withoutEmptyPieces(p: PathData): PathData {
 
 const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 
-/** A cubic's length from its start to `t`, at each of `n + 1` even steps of t (a polyline estimate, fine for trimming caps). */
-function cubicLengths(p0: Pt, p1: Pt, p2: Pt, p3: Pt, n: number): number[] {
-  const at = (t: number): Pt => {
-    const u = 1 - t;
-    return {
-      x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
-      y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
-    };
-  };
-  const out = [0];
-  let prev = p0;
-  for (let i = 1; i <= n; i++) {
-    const pt = at(i / n);
-    out.push(out[i - 1] + Math.hypot(pt.x - prev.x, pt.y - prev.y));
-    prev = pt;
-  }
-  return out;
-}
-
-/** The parameter t at which `lengths` (from `cubicLengths`) reaches `d`, by linear interpolation between the steps. */
-function tAtLength(lengths: number[], d: number): number {
-  const n = lengths.length - 1;
-  if (d <= 0) return 0;
-  if (d >= lengths[n]) return 1;
-  let i = 1;
-  while (lengths[i] < d) i++;
-  const span = lengths[i] - lengths[i - 1];
-  return (i - 1 + (span > 0 ? (d - lengths[i - 1]) / span : 0)) / n;
-}
-
-/**
- * The piece from `from` (its `s`) shortened by `d` px at its start (`atStart`) or its end, never by more than its own
- * length, so trimming both ends of one piece can make it a point but never turn it round. Returns the piece's new start
- * and the segment that now ends it.
- */
-function trimPiece(from: Pt, s: Exclude<Seg, { op: "Z" }>, d: number, atStart: boolean): { start: Pt; seg: Seg } {
-  const to: Pt = { x: s.x, y: s.y };
-  if (s.op !== "C") {
-    const len = Math.hypot(to.x - from.x, to.y - from.y);
-    const t = len > 0 ? Math.min(d, len) / len : 0;
-    if (atStart) return { start: lerp(from, to, t), seg: s };
-    const end = lerp(to, from, t);
-    return { start: from, seg: { op: "L", x: end.x, y: end.y } };
-  }
-  const c1: Pt = { x: s.x1, y: s.y1 };
-  const c2: Pt = { x: s.x2, y: s.y2 };
-  const lengths = cubicLengths(from, c1, c2, to, 64);
-  const total = lengths[lengths.length - 1];
-  const t = atStart ? tAtLength(lengths, d) : tAtLength(lengths, total - d);
-  // De Casteljau's split at t: keep the part after t when trimming the start, before it when trimming the end.
-  const p01 = lerp(from, c1, t);
-  const p12 = lerp(c1, c2, t);
-  const p23 = lerp(c2, to, t);
-  const p012 = lerp(p01, p12, t);
-  const p123 = lerp(p12, p23, t);
-  const mid = lerp(p012, p123, t);
-  if (atStart) return { start: mid, seg: { op: "C", x1: p123.x, y1: p123.y, x2: p23.x, y2: p23.y, x: to.x, y: to.y } };
-  return { start: from, seg: { op: "C", x1: p01.x, y1: p01.y, x2: p012.x, y2: p012.y, x: mid.x, y: mid.y } };
-}
-
 /** A drawn piece of an open path: the segment and the point it starts from. */
 type Piece = { from: Pt; seg: Exclude<Seg, { op: "Z" }> };
 
-function pieceLength({ from, seg }: Piece): number {
-  if (seg.op !== "C") return Math.hypot(seg.x - from.x, seg.y - from.y);
-  const lengths = cubicLengths(from, { x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }, seg, 64);
-  return lengths[lengths.length - 1];
-}
-
-/**
- * The open path `M …` shortened by `startBy` px along its length from the start and `endBy` px from the end. A trim
- * longer than the end piece carries on into the pieces before it, so a cap always covers the last `inset` px of line
- * however short the pieces are. When the two trims together are longer than the path, they are scaled down to meet at
- * one point. A path that is not a single open subpath is returned as it is. `crossed` says, for each end, whether its
- * trim reached past the end piece into the one before it (round a corner of the route).
- */
-function trimPath(p: PathData, startBy: number, endBy: number): { path: PathData; crossed: [boolean, boolean] } {
-  if (p.length < 2 || p[0].op !== "M" || p.slice(1).some((s) => s.op === "Z" || s.op === "M")) return { path: p, crossed: [false, false] };
-  const crossed: [boolean, boolean] = [false, false];
-  let start: Pt = p[0];
+/** The pieces of a single open subpath `M …`, or null for any other path (which is drawn untrimmed). */
+function piecesOf(p: PathData): Piece[] | null {
+  if (p.length < 2 || p[0].op !== "M" || p.slice(1).some((s) => s.op === "Z" || s.op === "M")) return null;
   const pieces: Piece[] = [];
-  let at: Pt = start;
+  let at: Pt = p[0];
   for (const seg of p.slice(1) as Piece["seg"][]) {
     pieces.push({ from: at, seg });
     at = seg;
   }
-  const lengths = pieces.map(pieceLength);
-  const total = lengths.reduce((a, b) => a + b, 0);
-  if (startBy + endBy > total) {
-    const k = startBy + endBy > 0 ? total / (startBy + endBy) : 0;
-    startBy *= k;
-    endBy *= k;
+  return pieces;
+}
+
+function pointOn({ from, seg }: Piece, t: number): Pt {
+  if (seg.op !== "C") return lerp(from, seg, t);
+  const u = 1 - t;
+  return {
+    x: u * u * u * from.x + 3 * u * u * t * seg.x1 + 3 * u * t * t * seg.x2 + t * t * t * seg.x,
+    y: u * u * u * from.y + 3 * u * u * t * seg.y1 + 3 * u * t * t * seg.y2 + t * t * t * seg.y,
+  };
+}
+
+/** The piece cut at `t` into the part before and the part after. */
+function splitPiece(pc: Piece, t: number): [Piece, Piece] {
+  const { from, seg } = pc;
+  const mid = pointOn(pc, t);
+  if (seg.op !== "C") return [{ from, seg: { op: "L", x: mid.x, y: mid.y } }, { from: mid, seg: { op: "L", x: seg.x, y: seg.y } }];
+  // De Casteljau's construction.
+  const c1: Pt = { x: seg.x1, y: seg.y1 };
+  const c2: Pt = { x: seg.x2, y: seg.y2 };
+  const p01 = lerp(from, c1, t);
+  const p12 = lerp(c1, c2, t);
+  const p23 = lerp(c2, seg, t);
+  const p012 = lerp(p01, p12, t);
+  const p123 = lerp(p12, p23, t);
+  return [
+    { from, seg: { op: "C", x1: p01.x, y1: p01.y, x2: p012.x, y2: p012.y, x: mid.x, y: mid.y } },
+    { from: mid, seg: { op: "C", x1: p123.x, y1: p123.y, x2: p23.x, y2: p23.y, x: seg.x, y: seg.y } },
+  ];
+}
+
+/** Where along the piece (each t in 0–1) its distance from `c` is exactly `r`: exact for a line, found by sampling and bisection on a cubic. */
+function circleCrossings(pc: Piece, c: Pt, r: number): number[] {
+  const { from, seg } = pc;
+  if (seg.op !== "C") {
+    const d = { x: seg.x - from.x, y: seg.y - from.y };
+    const f = { x: from.x - c.x, y: from.y - c.y };
+    const A = d.x * d.x + d.y * d.y;
+    if (A === 0) return [];
+    const B = 2 * (f.x * d.x + f.y * d.y);
+    const C = f.x * f.x + f.y * f.y - r * r;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return [];
+    const root = Math.sqrt(disc);
+    return [(-B - root) / (2 * A), (-B + root) / (2 * A)].filter((t) => t >= 0 && t <= 1);
   }
-  // Whole pieces the trims swallow go first (keeping at least one piece), then the piece they end in is cut.
-  let rest = endBy;
-  while (pieces.length > 1 && rest > 0 && lengths[lengths.length - 1] <= rest) {
-    rest -= lengths.pop()!;
-    pieces.pop();
-    crossed[1] = true;
+  const gap = (t: number): number => {
+    const p = pointOn(pc, t);
+    return Math.hypot(p.x - c.x, p.y - c.y) - r;
+  };
+  const out: number[] = [];
+  const n = 64;
+  let prev = gap(0);
+  if (prev === 0) out.push(0);
+  for (let i = 1; i <= n; i++) {
+    const cur = gap(i / n);
+    if (cur === 0) out.push(i / n);
+    else if (prev !== 0 && Math.sign(cur) !== Math.sign(prev)) {
+      let lo = (i - 1) / n;
+      let hi = i / n;
+      for (let k = 0; k < 40; k++) {
+        const mid = (lo + hi) / 2;
+        if (Math.sign(gap(mid)) === Math.sign(prev)) lo = mid;
+        else hi = mid;
+      }
+      out.push((lo + hi) / 2);
+    }
+    prev = cur;
   }
-  if (rest > 0) {
-    const last = pieces[pieces.length - 1];
-    pieces[pieces.length - 1] = { from: last.from, seg: trimPiece(last.from, last.seg, rest, false).seg as Piece["seg"] };
+  return out;
+}
+
+/** Every place along the path, as piece index + t, where it is exactly `r` from `c`, in path order. */
+function pathCrossings(pieces: Piece[], c: Pt, r: number): number[] {
+  return pieces.flatMap((pc, i) => circleCrossings(pc, c, r).map((t) => i + t));
+}
+
+/** The pieces between the places `g0` and `g1` (piece index + t, g0 ≤ g1) as a path. */
+function subPath(pieces: Piece[], g0: number, g1: number): PathData {
+  const n = pieces.length;
+  const at = (g: number): [number, number] => {
+    const i = Math.min(Math.max(Math.floor(g), 0), n - 1);
+    return [i, Math.min(Math.max(g - i, 0), 1)];
+  };
+  const [i0, t0] = at(g0);
+  const [i1, t1] = at(g1);
+  let kept: Piece[];
+  if (i0 === i1) {
+    const before = splitPiece(pieces[i0], t1)[0];
+    kept = [splitPiece(before, t1 > 0 ? t0 / t1 : 0)[1]];
+  } else kept = [splitPiece(pieces[i0], t0)[1], ...pieces.slice(i0 + 1, i1), splitPiece(pieces[i1], t1)[0]];
+  return [{ op: "M", x: kept[0].from.x, y: kept[0].from.y }, ...kept.map((pc) => pc.seg)];
+}
+
+/**
+ * The open path cut short for its caps, by straight-line distance: the end is cut at the place nearest the start where
+ * the path is exactly `endBy` px from its end point (walking back from the end, the last such place), and the start
+ * likewise at the place nearest the end that is `startBy` px from its start point. So what is left of the line stays
+ * outside a circle of the inset round each tip, whatever the route's shape, and where it stops is on the line from the
+ * tip that the cap is turned along. A path that never leaves the circle is cut away entirely; when the two cuts cross,
+ * the line shrinks to the point midway between them. A path that is not a single open subpath is left as it is.
+ */
+function trimPath(p: PathData, startBy: number, endBy: number): PathData {
+  const pieces = piecesOf(p);
+  if (!pieces) return p;
+  const n = pieces.length;
+  const first: Pt = pieces[0].from;
+  const last: Pt = pieces[n - 1].seg;
+  const away = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.y - b.y);
+  let g1 = n;
+  if (endBy > 0) {
+    const cs = pathCrossings(pieces, last, endBy);
+    g1 = cs.length > 0 ? Math.min(...cs) : away(first, last) < endBy ? 0 : n;
   }
-  rest = startBy;
-  while (pieces.length > 1 && rest > 0 && pieceLength(pieces[0]) <= rest) {
-    rest -= pieceLength(pieces[0]);
-    pieces.shift();
-    crossed[0] = true;
+  let g0 = 0;
+  if (startBy > 0) {
+    const cs = pathCrossings(pieces, first, startBy);
+    g0 = cs.length > 0 ? Math.max(...cs) : away(last, first) < startBy ? n : 0;
   }
-  start = pieces[0].from;
-  if (rest > 0) {
-    const cut = trimPiece(pieces[0].from, pieces[0].seg, rest, true);
-    start = cut.start;
-    pieces[0] = { from: cut.start, seg: cut.seg as Piece["seg"] };
-  }
-  return { path: [{ op: "M", x: start.x, y: start.y }, ...pieces.map((pc) => pc.seg)], crossed };
+  if (g0 > g1) g0 = g1 = (g0 + g1) / 2;
+  return subPath(pieces, g0, g1);
 }
 
 /** A non-negative finite number, else `fallback`. */
@@ -251,11 +267,11 @@ function atLeast(r: Rect, min: number): Rect {
  *   connector's current box when both ends are detached. The store's normaliser turns such an end into a free end at
  *   its last resolved point within the same commit; this fallback only keeps the geometry finite until it does.
  * - A route that is not registered draws a straight line; a cap kind that is not registered draws nothing.
- * - Each cap's tip is on its end, and the line is shortened by the cap's inset along its length. An end attached to an
- *   anchor asks the route for a straight `lead` of the inset plus a pixel, so its trim never turns a corner and its cap
- *   points along the path's tangent there, square into the anchor. A free or centre end has no lead; when its trim does
- *   reach round a corner, its cap's axis runs instead from where the shortened line stops to the tip, so the line still
- *   ends inside the cap.
+ * - Each cap's tip is on its end. The line is cut where it is the cap's inset away from the tip in a straight line, and
+ *   the cap is turned along the line from that stop to the tip, so the line always ends on the cap's axis and nothing of
+ *   it lies within the inset of the tip, whatever the route. An end attached to an anchor also asks the route for a
+ *   straight `lead` of the inset plus a pixel (never more than half the way to the other end, see `maxLead`), so in
+ *   the usual case the remaining line is straight there and the cap sits square on the anchor.
  *
  * Every number is finite for any ends, including both ends on one item or at one point.
  */
@@ -274,10 +290,13 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
     const p = placed[i];
     if (!p) return { pt: unclipped(i), dir: null, lead: 0 };
     const pt = p.clipTo ? (clipToOutline(p.pt, unclipped(i === 0 ? 1 : 0), p.clipTo.outline) ?? p.pt) : p.pt;
-    const inset = capped[i].inset;
-    return { pt, dir: p.dir, lead: p.dir && inset > 0 ? inset + LEAD_MARGIN_PX : 0 };
+    return { pt, dir: p.dir, lead: 0 };
   };
   const ends: [EndPoint, EndPoint] = [resolve(0), resolve(1)];
+  for (const i of [0, 1] as const) {
+    const inset = capped[i].inset;
+    if (ends[i].dir && inset > 0) ends[i].lead = Math.min(inset + LEAD_MARGIN_PX, maxLead(ends[i], ends[i === 0 ? 1 : 0]));
+  }
 
   const route = registries.routes.get(c.route);
   const routed: PathData = route
@@ -287,18 +306,16 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
         { op: "L", x: ends[1].pt.x, y: ends[1].pt.y },
       ];
   const full = withoutEmptyPieces(routed);
-  const { path, crossed } = trimPath(full, capped[0].inset, capped[1].inset);
+  const path = trimPath(full, capped[0].inset, capped[1].inset);
 
   const capAt = (i: 0 | 1): PathData | null => {
     const { shape } = capped[i];
     if (shape.length === 0) return null;
     const tip = pointAtEnd(full, i);
-    let t = tip.tangent;
-    if (crossed[i] && !ends[i].dir) {
-      const stop = pointAtEnd(path, i).pt;
-      const len = Math.hypot(tip.pt.x - stop.x, tip.pt.y - stop.y);
-      if (len > 1e-9) t = { x: (tip.pt.x - stop.x) / len, y: (tip.pt.y - stop.y) / len };
-    }
+    // Turned along the line from where the trimmed line stops to the tip, so the stop is on the cap's axis.
+    const stop = pointAtEnd(path, i).pt;
+    const len = Math.hypot(tip.pt.x - stop.x, tip.pt.y - stop.y);
+    const t = len > 1e-9 ? { x: (tip.pt.x - stop.x) / len, y: (tip.pt.y - stop.y) / len } : tip.tangent;
     // The cap points along +x from the origin; turn +x onto its axis and move the origin to the tip.
     return transformPath(shape, [t.x, t.y, -t.y, t.x, tip.pt.x, tip.pt.y]);
   };

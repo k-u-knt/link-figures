@@ -449,3 +449,85 @@ test("caps longer than the whole line meet at one point and stay finite", () => 
   expect(a.x).toBeCloseTo(b.x);
   expect(a.x).toBeCloseTo(2.5);
 });
+
+/** Every point of the trimmed line (its centre line and both stroke edges) that lies within a cap's inset of its tip is inside that cap. */
+function linesClearOfHeads(r: ReturnType<typeof resolveConnector>, w: number, insets: [number, number]): boolean {
+  for (const i of [0, 1] as const) {
+    if (!r.caps[i]) continue;
+    const head = polygon(r.caps[i]!);
+    const tip = r.ends[i].pt;
+    for (const line of flattenPath(r.path, 0.01))
+      for (let j = 1; j < line.length; j++) {
+        const [a, b] = [line[j - 1], line[j]];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        if (len === 0) continue;
+        const n = { x: -(b.y - a.y) / len, y: (b.x - a.x) / len };
+        for (let k = 0; k <= 50; k++) {
+          const x = a.x + ((b.x - a.x) * k) / 50;
+          const y = a.y + ((b.y - a.y) * k) / 50;
+          if (Math.hypot(x - tip.x, y - tip.y) > insets[i] - 1e-6) continue;
+          for (const off of [-w / 2, 0, w / 2]) if (!insideConvex(head, { x: x + n.x * off, y: y + n.y * off }, 1e-3)) return false;
+        }
+      }
+  }
+  return true;
+}
+
+const strokes = [
+  { stroke: thick, size: 4 },
+  { stroke: { ...thick, width: 1 }, size: 3 },
+];
+
+describe.each([20, 10, 4])("close facing anchors, gap %s px", (gap) => {
+  test.each(strokes.flatMap((s) => [0, 20].map((dy) => ({ ...s, dy }))))("$stroke.width pt, size $size, offset $dy: no doubling back, nothing beside a head, nothing in an item", ({ stroke, size, dy }) => {
+    const A = shape("a", "rect", 0, 0, 100, 50);
+    const B = shape("b", "rect", 100 + gap, dy, 100, 50);
+    const c = connector({ kind: "attached", node: "a", snap: "anchor", anchor: "e" }, { kind: "attached", node: "b", snap: "anchor", anchor: "w" }, {
+      route: "orthogonal",
+      routeParams: { offset: 0.5 },
+      stroke,
+      caps: [{ kind: "arrow", size }, { kind: "arrow", size }],
+    });
+    const r = resolveConnector(docWith(A, B), c, registries);
+    expect(finiteResult(r)).toBe(true);
+    const w = stroke.width * PT_TO_PX;
+    const inset = registries.caps.get("arrow")!.inset(size, w);
+    // The route itself never doubles back along the x axis, and neither does the trimmed line.
+    const routed = route("orthogonal").path(r.ends[0], r.ends[1], c.routeParams);
+    for (const p of [routed, r.path]) {
+      const xs = p.filter((s): s is { op: "M" | "L"; x: number; y: number } => s.op !== "Z" && s.op !== "C").map((s) => s.x);
+      for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1] - 1e-9);
+    }
+    expect(linesClearOfHeads(r, w, [inset, inset])).toBe(true);
+    // No point of the line is strictly inside either item.
+    for (const line of flattenPath(r.path, 0.01))
+      for (const pt of line)
+        for (const box of [A, B]) {
+          const inside = pt.x > box.x + 1e-9 && pt.x < box.x + box.width - 1e-9 && pt.y > box.y + 1e-9 && pt.y < box.y + box.height - 1e-9;
+          expect(inside).toBe(false);
+        }
+  });
+});
+
+test.each([0, 0.25])("a short curved connector with a large arrow (bend %s) stops on the head's axis with nothing beside it", (bend) => {
+  // The review's probe: A's e anchor (100, 25) to B's n anchor (170, 30), 3 pt, size 4.
+  const doc = docWith(shape("a", "rect", 0, 0, 100, 50), shape("b", "rect", 120, 30, 100, 50));
+  const c = connector({ kind: "attached", node: "a", snap: "anchor", anchor: "e" }, { kind: "attached", node: "b", snap: "anchor", anchor: "n" }, {
+    route: "curved",
+    routeParams: { bend },
+    stroke: thick,
+    caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 4 }],
+  });
+  const r = resolveConnector(doc, c, registries);
+  const inset = registries.caps.get("arrow")!.inset(4, w3);
+  const tip = r.ends[1].pt;
+  expect(tip).toEqual({ x: 170, y: 30 });
+  const head = polygon(r.caps[1]!);
+  const base = { x: (head[1].x + head[2].x) / 2, y: (head[1].y + head[2].y) / 2 };
+  const axis = { x: base.x - tip.x, y: base.y - tip.y };
+  const stop = pointAtEnd(r.path, 1).pt;
+  const across = Math.abs((stop.x - tip.x) * axis.y - (stop.y - tip.y) * axis.x) / Math.hypot(axis.x, axis.y);
+  expect(across).toBeLessThan(0.01);
+  expect(Math.hypot(stop.x - tip.x, stop.y - tip.y)).toBeCloseTo(inset, 6);
+  expect(linesClearOfHeads(r, w3, [0, inset])).toBe(true);
+});

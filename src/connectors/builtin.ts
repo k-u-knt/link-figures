@@ -1,7 +1,7 @@
 import type { Pt } from "../model/geometry";
 import { ellipsePath } from "../model/path";
 import type { CapKind } from "../registry/cap";
-import type { EndPoint, Route } from "../registry/route";
+import { maxLead, type EndPoint, type Route } from "../registry/route";
 
 /** `params[key]` when it is a finite number, else `fallback`: route params come from the file as they are. */
 function numberParam(params: Record<string, unknown>, key: string, fallback: number): number {
@@ -41,12 +41,13 @@ export const curvedRoute: Route = {
     // The perpendicular already scaled by the line's length, so a zero-length line needs no division and stays finite.
     const side = { x: -dy * bend, y: dx * bend };
     const reach = Math.hypot(Math.hypot(dx, dy) / 3, Math.hypot(side.x, side.y));
-    const control = (end: EndPoint, along: number): Pt =>
-      end.dir
-        ? { x: end.pt.x + end.dir.x * Math.max(reach, end.lead), y: end.pt.y + end.dir.y * Math.max(reach, end.lead) }
-        : { x: a.pt.x + dx * along + side.x, y: a.pt.y + dy * along + side.y };
-    const c1 = control(a, 1 / 3);
-    const c2 = control(b, 2 / 3);
+    const control = (end: EndPoint, other: EndPoint, along: number): Pt => {
+      if (!end.dir) return { x: a.pt.x + dx * along + side.x, y: a.pt.y + dy * along + side.y };
+      const out = Math.max(reach, Math.min(end.lead, maxLead(end, other)));
+      return { x: end.pt.x + end.dir.x * out, y: end.pt.y + end.dir.y * out };
+    };
+    const c1 = control(a, b, 1 / 3);
+    const c2 = control(b, a, 2 / 3);
     return [
       { op: "M", x: a.pt.x, y: a.pt.y },
       { op: "C", x1: c1.x, y1: c1.y, x2: c2.x, y2: c2.y, x: b.pt.x, y: b.pt.y },
@@ -56,6 +57,11 @@ export const curvedRoute: Route = {
 
 /** How far, at most, an orthogonal route runs straight out along an anchor's normal before it may turn. */
 const STUB_PX = 12;
+
+/** Whether a unit direction runs (within rounding) along the page's x or y axis. */
+function onAxis(d: Pt): boolean {
+  return Math.abs(d.x) < 1e-9 || Math.abs(d.y) < 1e-9;
+}
 
 /** A unit direction along the page axis nearest `d`. */
 function nearestAxis(d: Pt): Pt {
@@ -97,12 +103,16 @@ function simplify(pts: Pt[]): Pt[] {
 
 /**
  * A simple elbow, with no obstacle avoidance. An end attached to an anchor first runs a short stub straight out along
- * the anchor's normal (rotated with its item), never shorter than the end's `lead`, so the line leaves its item square to the edge and arrives into an anchor
- * from outside; a free or centre end has no stub. Between the stub ends the route is axis-aligned: of a few candidate
+ * the anchor's normal (rotated with its item), never shorter than the end's `lead`, so the line leaves its item square
+ * to the edge and arrives into an anchor from outside; a free or centre end has no stub. Between the stub ends the route is axis-aligned: of a few candidate
  * elbows (a Z whose middle segment crosses at `offset`, 0–1, of the way from start to end; an L with one corner; a U
  * round the far side when both ends face the same way) it takes the first that never doubles back along an end's
  * normal, preferring legs that carry straight on from a stub. Ends with no normal use the axis on which they are
  * further apart.
+ *
+ * Stubs never overshoot: when an end's stub would reach half way or more to an end ahead of it (`maxLead`), as between
+ * close facing items, the route drops the stubs (a slanted normal keeps one within that limit) and takes the plain elbow
+ * its axes give, which on one row is a straight line.
  */
 export const orthogonalRoute: Route = {
   id: "orthogonal",
@@ -113,13 +123,16 @@ export const orthogonalRoute: Route = {
   path(a, b, params) {
     const offset = Math.max(0, Math.min(1, numberParam(params, "offset", 0.5)));
     const stub = Math.min(STUB_PX, Math.hypot(b.pt.x - a.pt.x, b.pt.y - a.pt.y) / 3);
-    const out = (e: EndPoint): Pt => {
+    const limitA = maxLead(a, b);
+    const limitB = maxLead(b, a);
+    const plain = (a.dir !== null && Math.max(stub, a.lead) >= limitA) || (b.dir !== null && Math.max(stub, b.lead) >= limitB);
+    const out = (e: EndPoint, limit: number): Pt => {
       if (!e.dir) return e.pt;
-      const run = Math.max(stub, e.lead);
+      const run = plain ? (onAxis(e.dir) ? 0 : Math.min(stub, limit)) : Math.max(stub, e.lead);
       return { x: e.pt.x + e.dir.x * run, y: e.pt.y + e.dir.y * run };
     };
-    const p = out(a);
-    const q = out(b);
+    const p = out(a, limitA);
+    const q = out(b, limitB);
     const da = a.dir ? nearestAxis(a.dir) : null;
     const db = b.dir ? nearestAxis(b.dir) : null;
     const wide = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
@@ -150,7 +163,7 @@ export const orthogonalRoute: Route = {
             : [lv, lh, zv, zh, uv, uh];
     let best = candidates[0];
     let bestScore = -1;
-    for (const corners of candidates) {
+    for (const corners of plain ? [] : candidates) {
       const pts = [p, ...corners, q];
       const first = firstLeg(pts);
       const last = firstLeg([...pts].reverse());

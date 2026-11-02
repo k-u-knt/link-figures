@@ -20,6 +20,17 @@ export interface EndPoint {
  * `routeParams`, as they are in the file, so a route reads them defensively. `path` must give finite numbers for any
  * ends, including two ends at the same point.
  */
+/**
+ * The most `lead` (or straight stub) an end may run out along its `dir` without overshooting the other end: half the
+ * distance to the other end measured along `dir`, when the other end lies ahead. When it lies beside or behind there is
+ * nothing to overshoot and there is no limit (Infinity). An end without a `dir` has none.
+ */
+export function maxLead(end: EndPoint, other: EndPoint): number {
+  if (!end.dir) return 0;
+  const ahead = (other.pt.x - end.pt.x) * end.dir.x + (other.pt.y - end.pt.y) * end.dir.y;
+  return ahead > 1e-9 ? ahead / 2 : Infinity;
+}
+
 export interface Route {
   id: string;
   name: string;

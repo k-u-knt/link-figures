@@ -1,4 +1,4 @@
-import { ellipsePath, multiply, pathBounds, rectPath, toSvgPath, type Matrix, type PathData } from "../model/path";
+import { ellipsePath, flattenPath, multiply, pathBounds, rectPath, toSvgPath, type Matrix, type PathData } from "../model/path";
 import { OUTLINE_TOLERANCE_PX, strokeOutline, svgPathData, type LineCap, type LineJoin } from "./stroke-outline";
 
 /**
@@ -10,9 +10,9 @@ import { OUTLINE_TOLERANCE_PX, strokeOutline, svgPathData, type LineCap, type Li
  *
  * Properties are read as SVG cascades them through the document: the `style` attribute before the presentation
  * attribute, from the nearest ancestor that sets them. `<style>` rules are not read: a style sheet that strokes with a
- * gradient or pattern is reported, since svg2pdf.js leaves that line out too, and while a style sheet sets any stroke
- * property, an element with a `class` falls back to one colour rather than being outlined with what may be the wrong
- * width, dashes or caps.
+ * gradient or pattern is reported, since svg2pdf.js leaves that line out too, and in a document whose style sheet sets
+ * any stroke property, every gradient or pattern stroke falls back to one colour (with the notice) rather than being
+ * outlined with what may be the wrong width, dashes or caps: which rule reaches which element is not worked out here.
  */
 
 const SVG_MIME = "image/svg+xml";
@@ -37,6 +37,17 @@ const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 const GROUP_PROPERTIES = ["opacity", "clip-path", "mask", "filter"];
 const MARKERS = ["marker-start", "marker-mid", "marker-end"];
 const DEFAULT_MITER_LIMIT = 4;
+/** More dashes than this along one element are not outlined (the outline would be too large to write): one colour instead. */
+const MAX_DASHES = 100_000;
+
+/** About how many dashes `dash` cuts the path into. */
+function dashCount(path: PathData, dash: number[]): number {
+  const total = dash.reduce((a, b) => a + b, 0) * (dash.length % 2 === 1 ? 2 : 1);
+  if (dash.length === 0 || !(total > 0)) return 0;
+  let length = 0;
+  for (const line of flattenPath(path, 1)) for (let i = 1; i < line.length; i++) length += Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y);
+  return (length / total) * dash.length;
+}
 
 /** The value `property` has in an element's `style` attribute, or undefined when the attribute does not set it. */
 function styleValue(el: Element, property: string): string | undefined {
@@ -265,11 +276,12 @@ function joinOf(value: string | undefined): LineJoin {
   return value === "round" || value === "bevel" ? value : "miter";
 }
 
-/** True when the element paints its stroke before its fill (`paint-order`). */
-function strokeFirst(el: Element): boolean {
-  const order = (cascaded(el, "paint-order") ?? "normal").split(/\s+/);
-  const full = [...order.filter((t) => t === "fill" || t === "stroke" || t === "markers"), "fill", "stroke", "markers"];
-  return full.indexOf("stroke") < full.indexOf("fill");
+type PaintPart = "fill" | "stroke" | "markers";
+
+/** The order the element paints its fill, stroke and markers in (`paint-order`): the ones it names, then the rest as usual. */
+function paintOrder(el: Element): PaintPart[] {
+  const named = (cascaded(el, "paint-order") ?? "normal").split(/\s+/).filter((t): t is PaintPart => t === "fill" || t === "stroke" || t === "markers");
+  return [...new Set<PaintPart>([...named, "fill", "stroke", "markers"])];
 }
 
 /** One transform function as a matrix; translations are left out, as only the scale is wanted. Null for one not read. */
@@ -340,8 +352,9 @@ function pageScale(el: Element): number {
 /**
  * The element stroked with `paint` replaced by a group that stands in for it: its id, transform and whole-element
  * properties (opacity, clip, mask, filter), then the element itself with no stroke and no markers (when it still draws
- * a fill), and the stroke's outline filled with `paint` at the stroke's opacity, in the element's paint order, then a
- * copy of the element that draws only its markers, which SVG paints last. Curves are flattened to 0.05 pt on the page.
+ * a fill), the stroke's outline filled with `paint` at the stroke's opacity, and a copy of the element that draws only
+ * its markers, in the element's paint order (markers last unless `paint-order` says otherwise). Curves are flattened
+ * to 0.05 pt on the page.
  * `"nothing"` when SVG draws no stroke here (a width of zero, no geometry, a bounding-box paint on a flat box); null
  * when the stroke cannot be outlined.
  */
@@ -355,6 +368,7 @@ function outline(doc: Document, el: Element, server: Element, ids: Set<string>):
   const rescaledDashes = el.hasAttribute("pathLength") && dash !== null && dash.length > 0;
   if (path === null || width === null || width < 0 || dash === null || dashOffset === null || opacity === null || nonScaling || rescaledDashes) return null;
   if (width === 0 || path.length === 0) return "nothing";
+  if (dashCount(path, dash) > MAX_DASHES) return null;
   const paint = outlinePaint(doc, server, path, ids);
   if (paint === null) return null;
   if (paint === "none") return "nothing";
@@ -388,7 +402,6 @@ function outline(doc: Document, el: Element, server: Element, ids: Set<string>):
   }
   for (const property of GROUP_PROPERTIES) moveProperty(el, group, property);
   setOwn(el, "stroke", "none");
-  const parts: Element[] = [];
   // A line has no inside to fill; every other shape fills, open or closed.
   const fills = el.localName !== "line" && (cascaded(el, "fill") ?? "black") !== "none";
   const markerCopy = markers ? (el.cloneNode(true) as Element) : null;
@@ -398,9 +411,8 @@ function outline(doc: Document, el: Element, server: Element, ids: Set<string>):
     dropStyle(el, "marker");
     el.removeAttribute("marker");
   }
-  if (fills) parts.push(...(strokeFirst(el) ? [filled, el] : [el, filled]));
-  else parts.push(filled);
-  if (markerCopy) parts.push(markerCopy);
+  const drawn: Record<PaintPart, Element | null> = { fill: fills ? el : null, stroke: filled, markers: markerCopy };
+  const parts = paintOrder(el).flatMap((part) => drawn[part] ?? []);
   el.replaceWith(group);
   for (const part of parts) group.appendChild(part);
   return group;
@@ -431,9 +443,8 @@ export function outlinePaintedStrokes(svg: string, labelOf: (el: Element) => str
     const server = id === undefined ? null : doc.getElementById(id);
     if (!server || !(GRADIENTS.has(server.localName) || server.localName === "pattern")) continue;
 
-    // A class may give the element stroke properties from a style sheet, which `cascaded` does not see.
-    const styled = sheetStrokes && el.hasAttribute("class");
-    const done = SHAPES.has(el.localName) && !styled ? outline(doc, el, server, ids) : null;
+    // A style sheet may give the element stroke properties `cascaded` does not see, by any selector: no outline then.
+    const done = SHAPES.has(el.localName) && !sheetStrokes ? outline(doc, el, server, ids) : null;
     changed = true;
     if (done === "nothing") setOwn(el, "stroke", "none");
     else if (done === null) {

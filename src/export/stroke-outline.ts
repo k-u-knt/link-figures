@@ -28,6 +28,8 @@ const DEFAULT_MITER_LIMIT = 4;
 /** The cubic control constant for a quarter circle. */
 const KAPPA = 0.5522847498307936;
 const EPS = 1e-9;
+/** A dash pattern shorter than this in all (px) is drawn solid, as SVG draws one that sums to zero. */
+const MIN_DASH_TOTAL = 1e-6;
 
 /** A polyline's point; `corner` is false inside a flattened curve, where the line is smooth and no join style applies. */
 interface Vertex extends Pt {
@@ -154,9 +156,10 @@ function dashes(line: Polyline, dash: number[], offset: number): Polyline[] {
     left -= length - pos;
     if (current) current.push({ ...b });
   }
-  // Pattern entries that end exactly at the path's end: a dash of length zero there is still a dot.
+  // Pattern entries that end exactly at the path's end: a dash of length zero there is still a dot. One pass over the
+  // pattern at most, since a pattern of entries all within EPS would otherwise go round for ever.
   const end = pts[pts.length - 1];
-  while (left <= EPS) {
+  for (let pass = 0; left <= EPS && pass < pattern.length; pass++) {
     i = (i + 1) % pattern.length;
     left = pattern[i];
     on = !on;
@@ -294,7 +297,7 @@ function lineOutline(out: PathData, line: Polyline, hw: number, capKind: LineCap
  * The area a stroke of `width` covers along `path`, as closed subpaths to fill with the nonzero rule: what SVG draws for
  * `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-dasharray` (`dash`, in the path's units) and the
  * options' offset and miter limit. A zero-length subpath is a dot with round or square caps, as SVG draws it. A width
- * of zero (or less), or a dash list that draws nothing, gives an empty outline.
+ * of zero (or less) gives an empty outline; a dash list that sums to (next to) nothing is drawn solid, as SVG does.
  */
 export function strokeOutline(path: PathData, width: number, capKind: LineCap, join: LineJoin, dash: number[] = [], opts: OutlineOptions = {}): PathData {
   const hw = width / 2;
@@ -302,7 +305,7 @@ export function strokeOutline(path: PathData, width: number, capKind: LineCap, j
   const tolerance = opts.tolerance ?? OUTLINE_TOLERANCE_PX;
   const limit = Math.max(1, opts.miterLimit ?? DEFAULT_MITER_LIMIT);
   const dashTotal = dash.reduce((a, b) => a + b, 0);
-  const dashed = dash.length > 0 && dash.every((d) => d >= 0 && Number.isFinite(d)) && dashTotal > 0;
+  const dashed = dash.length > 0 && dash.every((d) => d >= 0 && Number.isFinite(d)) && dashTotal > MIN_DASH_TOTAL;
   const out: PathData = [];
   for (const line of polylines(path, tolerance)) {
     for (const piece of dashed ? dashes(line, dash, opts.dashOffset ?? 0) : [line]) lineOutline(out, piece, hw, capKind, join, limit, tolerance);

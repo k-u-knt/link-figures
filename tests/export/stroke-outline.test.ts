@@ -94,6 +94,13 @@ describe("strokeOutline", () => {
     for (const x of [2, 6, 18]) expect(inside(o, x, 0)).toBe(false);
   });
 
+  test("a dash pattern that sums to next to nothing is drawn solid, and quickly", () => {
+    const started = Date.now();
+    const o = strokeOutline(line([0, 0], [20, 0]), 2, "round", "miter", [1e-10, 1e-10]);
+    expect(Date.now() - started).toBeLessThan(500);
+    for (const x of [-0.5, 5, 10.3, 20.5]) expect(inside(o, x, 0)).toBe(true);
+  });
+
   test("a cubic's outline stays within the tolerance of half the width from the curve", () => {
     const curve: PathData = [{ op: "M", x: 0, y: 0 }, { op: "C", x1: 30, y1: 60, x2: 70, y2: -60, x: 100, y: 0 }];
     const o = strokeOutline(curve, 10, "butt", "miter");
@@ -235,15 +242,30 @@ describe("outlinePaintedStrokes", () => {
     expect([markers.getAttribute("fill"), markers.getAttribute("stroke")]).toEqual(["none", "none"]);
   });
 
-  test("while a style sheet sets stroke properties, an element with a class is drawn in one colour and reported", () => {
-    const { svg, warnings } = outlinePaintedStrokes(
-      doc(`${GRAD}<style>.thick { stroke-width: 6 }</style>`, '<path class="thick" d="M0 0 L50 0" fill="none" stroke="url(#g)"/><path d="M0 9 L50 9" fill="none" stroke="url(#g)"/>'),
-      label,
+  test("in a document whose style sheet sets stroke properties, every painted stroke is drawn in one colour and reported", () => {
+    // By the element's class, a classed ancestor, an element selector or an id: which rule reaches which is not guessed at.
+    for (const [sheet, body] of [
+      [".thick { stroke-width: 6 }", '<path class="thick" d="M0 0 L50 0" fill="none" stroke="url(#g)"/>'],
+      [".lines path { stroke-dasharray: 2 }", '<g class="lines"><path d="M0 0 L50 0" fill="none" stroke="url(#g)"/></g>'],
+      ["path { stroke-linecap: round }", '<path d="M0 0 L50 0" fill="none" stroke="url(#g)"/>'],
+      ["#p { stroke-width: 6 }", '<path id="p" d="M0 0 L50 0" fill="none" stroke="url(#g)"/>'],
+    ]) {
+      const { svg, warnings } = outlinePaintedStrokes(doc(`${GRAD}<style>${sheet}</style>`, `${body}<path d="M0 9 L50 9" fill="none" stroke="url(#g)"/>`), label);
+      const paths = Array.from(parse(svg).querySelectorAll("svg > path, svg > g > path"));
+      expect(paths.map((p) => p.getAttribute("stroke"))).toEqual(["#ff0000", "#ff0000"]);
+      expect(paths.some((p) => p.getAttribute("fill") === "url(#g)")).toBe(false);
+      expect(warnings).toEqual(["Shape: gradient line drawn in one colour in the PDF"]);
+    }
+  });
+
+  test("markers the paint order puts before the stroke are drawn under the outline", () => {
+    const marker = '<marker id="m" markerWidth="4" markerHeight="4"><path d="M0 0 L4 2 L0 4 Z"/></marker>';
+    const out = parse(
+      outlinePaintedStrokes(doc(GRAD + marker, '<path id="p" d="M0 0 L50 0" fill="none" stroke="url(#g)" stroke-width="2" marker-end="url(#m)" paint-order="markers stroke"/>'), label).svg,
     );
-    const out = parse(svg);
-    expect(out.querySelector("path.thick")?.getAttribute("stroke")).toBe("#ff0000");
-    expect(Array.from(out.querySelectorAll("path")).some((p) => p.getAttribute("fill") === "url(#g)")).toBe(true);
-    expect(warnings).toEqual(["Shape: gradient line drawn in one colour in the PDF"]);
+    const [markers, outline] = Array.from(out.getElementById("p")!.children);
+    expect(markers.getAttribute("marker-end")).toBe("url(#m)");
+    expect(outline.getAttribute("fill")).toBe("url(#g)");
   });
 
   test("a curve in an enlarged user space is flattened finer, to the same tolerance on the page", () => {
@@ -254,5 +276,13 @@ describe("outlinePaintedStrokes", () => {
     const plainCount = pieces((b) => b);
     expect(pieces((b) => `<g transform="translate(5 5) scale(10)">${b}</g>`)).toBeGreaterThan(plainCount * 2);
     expect(pieces((b) => `<svg width="100" height="100" viewBox="0 0 10 10">${b}</svg>`)).toBeGreaterThan(plainCount * 2);
+  });
+
+  test("dashes too fine to outline in reasonable size fall back to one colour with the notice, quickly", () => {
+    const started = Date.now();
+    const { svg, warnings } = outlinePaintedStrokes(doc(GRAD, '<path d="M0 0 L50 0" fill="none" stroke="url(#g)" stroke-dasharray="0.00001"/>'), label);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(parse(svg).querySelector("svg > path")?.getAttribute("stroke")).toBe("#ff0000");
+    expect(warnings).toEqual(["Shape: gradient line drawn in one colour in the PDF"]);
   });
 });

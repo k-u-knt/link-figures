@@ -34,6 +34,108 @@ Obsidian hides `.tif`/`.tiff` files in the file explorer unless Settings → Fil
 
 PDF export sets text in the built-in Helvetica for Arial and Helvetica, and in Times for Times New Roman; every other family (Calibri, Georgia, Courier New) falls back to Times, with a warning, until TrueType embedding lands in M2.
 
+## Shapes and connectors
+
+**Shapes.** "Rectangle" and "Ellipse" in the toolbar (the commands `tool.rect` and `tool.ellipse`) arm a drawing tool: drag on a page to draw the shape in the dragged box (hold Shift for a square or a circle), or click to place one of 30 × 20 mm centred on the click. The tool puts itself down after the shape, which is selected. A new shape is filled white and has a 1 pt solid black border. Select it and the inspector shows its fields: for a rectangle "Corner radius" (in mm; rounds the corners, kept within half the short side), then "Fill", a "Border" toggle (off is no border) and, while there is a border, "Border paint", "Border width" (pt) and "Border dash" (Solid, Dashed, Dotted, Dash-dot). An ellipse has no field of its own. "Fill" and every "… paint" field take any of the paint types below.
+
+**Paints.** A fill or a line is painted with one of five types, chosen in the paint's select: None, Solid (a colour and an opacity), Linear gradient (an angle in degrees, 0 left to right and 90 top to bottom, and colour stops), Radial gradient (a centre and a radius as fractions of the box, and colour stops) and Pattern (hatch, reversed hatch, crosshatch, dots or grid, in a colour over an optional background, with a scale and an angle). Gradients and patterns stay vector in both exports.
+
+**Connectors.** "Connector" in the toolbar (`tool.connector`) arms the line tool: drag from one item to another, and the line is drawn between them with an arrowhead at its end. Anything that can be attached to takes an end: a shape, a text label, an image panel or a content card (not another connector). While the tool is armed, the item under the pointer shows its anchors (its four edge midpoints, named `n`, `e`, `s` and `w`), and a drag shows the line it would make. An end dropped on an item is attached to it and follows it when it is moved, resized or rotated (the line leaves along the item's edge, as the item is turned); an end dropped on empty paper is free there. A click draws nothing. The toolbar's "Connector snap" toggle (`connector.snap-mode`) chooses what an end dropped on an item attaches to: "Connector snap: anchor", the nearest anchor, or "Connector snap: centre", the item's centre. The choice is for the open figure and is not saved with it; each end's "Start snap" and "End snap" in the inspector change an attached end afterwards.
+
+Select a connector and the inspector shows its "Route" (Straight, Curved or Orthogonal), the route's own field ("Bend" for curved, from −1 to 1; "Bend position" for orthogonal, from 0 to 1), the line's "Line paint", "Line width" (pt) and "Line dash", and for each end its "Start cap" and "End cap" (None, Arrow, Open arrow, Circle or Bar) with "Start cap size" and "End cap size" (a multiple of the line's width, 3 by default). A selected connector has a handle on each end (drag one onto another item to attach it, or onto paper to free it) and, on a curved or an orthogonal route, a handle on the line that sets its bend. A curved connector whose ends are attached leaves each item square to its edge, so its bend handle may not follow the pointer exactly.
+
+A connector's box is the area it draws and is set for it; it is never rotated. Deleting an item a connector is attached to leaves the connector's end where it was drawn, free; undo brings the item and the attachment back.
+
+**Frames.** An image panel can have a frame: the "Frame" toggle in its inspector, with "Frame paint", "Frame width" and "Frame dash". A frame takes the same paints and dashes as a border.
+
+**Export.** Shapes, connectors and frames are drawn in SVG and PDF as vectors: a gradient or pattern fill or line stays a gradient or pattern, dashes stay dashes, and arrowheads are paths. If anything in them could not be written as it is drawn, the export's notice says what.
+
+## Scripting
+
+The plugin can be driven by scripts and by AI as well as by hand. Everything the toolbar and the inspector do is a registered command that takes JSON arguments and gives a JSON result, and the UI runs the same commands as a script does, so the two make identical documents. The commands are reached through the plugin's API:
+
+```js
+const api = app.plugins.plugins["link-figures"].api;
+```
+
+This works in the Obsidian developer console, in another plugin and in the Obsidian CLI's `eval`. A figure is named by its vault path (`Notes/My figure.lnkfig.md`).
+
+| Call | What it does |
+|---|---|
+| `api.commands()` | Every registered command as `{ id, name, group, params?, needsView }`: its arguments and whether it needs the figure open (a tool or a zoom does). |
+| `await api.run(path, id, args?)` | Runs one command on the figure and resolves to its result. On an open figure it is one undo step there; on a figure that is not open the file is read, changed and saved. Rejects with a `CommandError` for an unknown command, bad arguments, or a command that needs the figure open when it is not. |
+| `await api.batch(path, calls)` | Runs `calls` (`[{ id, args? }, …]`) in order as one edit, all or nothing: every call is checked before any runs, and if one fails nothing changes. One undo step in an open figure, one save otherwise. Resolves to the array of their results. A `needsView` command cannot be in a batch. |
+| `await api.read(path)` | The figure's document as JSON: the open view's current one, else the file's. |
+| `api.registries` | The registries (commands, node types, shape kinds, routes, cap kinds, paint types, shape operations, adjustments, exporters). A new shape kind, route, cap kind or paint type is one registration; nothing else changes. |
+
+Calls on one figure run one after another, so a script need not await each. With the figure open, an edit that arrives while it has an unsaved change of its own lands in the open view, as one undo step, and the unsaved change is kept.
+
+**Commands that draw and edit.**
+
+| Id | Arguments (defaults in brackets) | Result |
+|---|---|---|
+| `shape.create` | `kind` (`"rect"`), `x`, `y`, `width`, `height` (page px; required), `id`, `page`, `params`, `fill`, `border` | `{ id }` |
+| `connector.create` | `from`, `to` (ends; required), `route` (`"straight"`), `routeParams`, `stroke`, `caps`, `id`, `page` | `{ id }` |
+| `node.update` | `id`, `patch` (required): a part of the node in its JSON form, merged into it | `{ id }` |
+| `node.move` | `ids` (the selection), `dx`, `dy` (page px; required), `pages` (`true`: each moved node goes to the page under its centre) | `{ ids }` |
+| `connector.setEnd` | `id`, `which` (0 the start, 1 the end), `end` (required) | `{ id }` |
+| `shape.operate` | `operation` (a registered shape operation), `ids` (required) | `{ added, removed }` |
+
+`id` is a name you choose for the new node (an id the figure already has is an error; without one, a new id is made), and a later call of the same batch can use it. `page` is the page id; with the figure open it defaults to the page in view, and with it closed it must be given (`(await api.read(path)).pages[0].id`). A new node goes above everything on its page. `shape.create` without `fill` is white, without `border` has the default border (`null` for none), and its `params` are the kind's defaults with yours over them; `connector.create` without `stroke` is a 1 pt solid black line, and without `caps` has none at the start and an arrow of size 3 at the end. In `node.update` an object is merged key by key (`{ fill: { color: "#ff0000" } }` changes only the colour), anything else replaces what was there, and a paint of another `type` replaces the old paint whole. Positions are page px, widths pt, colours `#rrggbb` with opacity separate.
+
+**Example.** Two rectangles with names of your choosing and an arrow between them, as one edit (run with the figure open or closed; replace the path):
+
+```sh
+obsidian eval code='(async () => {
+  const api = app.plugins.plugins["link-figures"].api;
+  const path = "Notes/My figure.lnkfig.md";
+  const page = (await api.read(path)).pages[0].id;
+  return JSON.stringify(await api.batch(path, [
+    { id: "shape.create", args: { id: "box-a", page, kind: "rect", x: 40, y: 60, width: 120, height: 70, params: { cornerRadius: 8 }, fill: { type: "solid", color: "#dbeafe" } } },
+    { id: "shape.create", args: { id: "box-b", page, kind: "rect", x: 300, y: 60, width: 120, height: 70, fill: { type: "solid", color: "#fee2e2" } } },
+    { id: "connector.create", args: { page, from: { kind: "attached", node: "box-a", snap: "anchor", anchor: "e" }, to: { kind: "attached", node: "box-b", snap: "anchor", anchor: "w" }, route: "straight" } },
+  ]));
+})()'
+```
+
+It prints the three results, `[{"id":"box-a"},{"id":"box-b"},{"id":"p-xxxx"}]` (the connector's id is made for it). Undo with one Cmd+Z in the open figure.
+
+**Document schema.** The nodes the commands make, as they are in the file (`pages` and the file layout are unchanged from M1).
+
+```ts
+// A drawn shape. `kind` is a registered shape kind ("rect", "ellipse"); `params` is that kind's own attributes
+// (rect: { cornerRadius } in px, 0 by default). `fill` { type: "none" } is no fill; `border` null is no border.
+type ShapeNode = NodeBase & { type: "shape"; kind: string; params: Record<string, unknown>; fill: Paint; border: Stroke | null };
+
+// A line between two ends. `route` is a registered route ("straight", "curved" with { bend }, default 0.25,
+// "orthogonal" with { offset }, default 0.5). `caps` are drawn at the start and the end. Its box is the area it draws, never rotated.
+type ConnectorNode = NodeBase & { type: "connector"; ends: [End, End]; route: string; routeParams: Record<string, unknown>; stroke: Stroke; caps: [Cap, Cap] };
+
+// A free point in page px, or an attachment to any node that can be attached to: at one of its anchors
+// ("n", "e", "s", "w" for a box or an ellipse; the line then leaves along that edge's normal) or at its centre.
+type End =
+  | { kind: "free"; x: number; y: number }
+  | { kind: "attached"; node: string; snap: "anchor"; anchor: string }
+  | { kind: "attached"; node: string; snap: "center" };
+
+// A registered cap kind ("none", "arrow", "openArrow", "circle", "bar"); `size` is a multiple of the stroke's width.
+type Cap = { kind: string; size: number };
+
+// A line, painted like a fill: a shape's border, a connector's line, an image panel's `frame`. `width` is in pt.
+type Stroke = { paint: Paint; width: number; dash: "solid" | "dash" | "dot" | "dashDot"; cap?: "butt" | "round" | "square"; join?: "miter" | "round" | "bevel" };
+
+// A registered paint type's id plus its own fields; one the plugin does not know is kept as it is.
+type Paint =
+  | { type: "none" }
+  | { type: "solid"; color: string; opacity?: number }                                  // opacity 0-1
+  | { type: "linear"; angle: number; stops: Stop[] }                                    // angle in degrees, 0 left to right, 90 top to bottom
+  | { type: "radial"; cx: number; cy: number; r: number; stops: Stop[] }                // fractions of the box; r of its longer side
+  | { type: "pattern"; pattern: "hatch" | "hatchReverse" | "crosshatch" | "dots" | "grid"; fg: string; bg: string | null; scale: number; angle: number };
+type Stop = { offset: number; color: string; opacity?: number };                        // offset 0-1
+```
+
+The paint defaults are `{ type: "solid", color: "#000000" }`, a linear gradient from `#000000` to `#ffffff` at angle 0, a radial one with `cx` and `cy` 0.5 and `r` 0.5, and a black hatch at scale 1 and angle 0 with no background.
+
 ## Settings
 
 | Setting | Default | Meaning |

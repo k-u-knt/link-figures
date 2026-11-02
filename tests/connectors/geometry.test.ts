@@ -6,7 +6,8 @@ import { flattenPath, pathBounds, pointAtEnd, toSvgPath, type PathData } from ".
 import type { ConnectorNode, Document, End, Node } from "../../src/model/types";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { createRegistries } from "../../src/registry";
-import { RouteRegistry } from "../../src/registry/route";
+import { maxLead, RouteRegistry, type EndPoint } from "../../src/registry/route";
+import type { Pt } from "../../src/model/geometry";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 
 const registries = createRegistries();
@@ -530,4 +531,153 @@ test.each([0, 0.25])("a short curved connector with a large arrow (bend %s) stop
   expect(across).toBeLessThan(0.01);
   expect(Math.hypot(stop.x - tip.x, stop.y - tip.y)).toBeCloseTo(inset, 6);
   expect(linesClearOfHeads(r, w3, [0, inset])).toBe(true);
+});
+
+/** The points of a path of moves and lines, rounded to 6 decimals. */
+const linePoints = (p: PathData): [number, number][] =>
+  p.filter((s): s is { op: "M" | "L"; x: number; y: number } => s.op === "M" || s.op === "L").map((s) => [+s.x.toFixed(6), +s.y.toFixed(6)]);
+
+/** Whether the path's first leg leaves along `a`'s direction and its last leg arrives against `b`'s (neither doubles back). */
+function neverDoublesBack(p: PathData, a: { pt: Pt; dir: Pt | null }, b: { pt: Pt; dir: Pt | null }): boolean {
+  const pts = linePoints(p);
+  const legs: [typeof a, [number, number], [number, number] | undefined][] = [
+    [a, pts[0], pts.find(([x, y]) => x !== pts[0][0] || y !== pts[0][1])],
+    [b, pts[pts.length - 1], [...pts].reverse().find(([x, y]) => x !== pts[pts.length - 1][0] || y !== pts[pts.length - 1][1])],
+  ];
+  return legs.every(([e, from, to]) => !e.dir || !to || (to[0] - from[0]) * e.dir.x + (to[1] - from[1]) * e.dir.y >= -1e-6);
+}
+
+const anchored = (node: string, anchor: string): End => ({ kind: "attached", node, snap: "anchor", anchor });
+
+describe("orthogonal stubs are capped per end, only when the other end genuinely lies ahead", () => {
+  // A = (0, 0, 100, 50), 1 pt line, size-3 arrows at both ends (inset 4 px), offset 0.5.
+  const thin = { ...thick, width: 1 };
+  const resolve = (bx: number, by: number, from: string, to: string, rotation = 0, offset = 0.5) => {
+    const doc = docWith(shape("a", "rect", 0, 0, 100, 50), shape("b", "rect", bx, by, 100, 50, rotation));
+    const c = connector(anchored("a", from), anchored("b", to), {
+      route: "orthogonal",
+      routeParams: { offset },
+      stroke: thin,
+      caps: [{ kind: "arrow", size: 3 }, { kind: "arrow", size: 3 }],
+    });
+    return resolveConnector(doc, c, registries);
+  };
+
+  test.each([
+    ["B to the right, a little lower, n → n", 140, 8, "n", "n", [[50, -4], [50, -12], [190, -12], [190, 4]]],
+    ["B to the left, a little lower, n → n", -130, 8, "n", "n", [[50, -4], [50, -12], [-80, -12], [-80, 4]]],
+    ["B to the left, e → s", -130, -30, "e", "s", [[104, 25], [112, 25], [112, 32], [-80, 32], [-80, 24]]],
+    ["B to the left, n → w", -130, -30, "n", "w", [[50, -4], [50, -12], [-142, -12], [-142, -5], [-134, -5]]],
+  ] as const)("%s: both stubs are kept in full", (_name, bx, by, from, to, expected) => {
+    const r = resolve(bx, by, from, to);
+    expect(linePoints(r.path)).toEqual(expected);
+    expect(neverDoublesBack(route("orthogonal").path(r.ends[0], r.ends[1], { offset: 0.5 }), r.ends[0], r.ends[1])).toBe(true);
+  });
+
+  test("a rotated item's slanted stub keeps the line clear of the head at offsets 0 and 1", () => {
+    for (const offset of [0, 1]) {
+      const doc = docWith(shape("a", "rect", 0, 0, 100, 50), shape("b", "rect", 110, -10, 100, 50, 30));
+      const c = connector(anchored("a", "e"), anchored("b", "w"), {
+        route: "orthogonal",
+        routeParams: { offset },
+        stroke: thick,
+        caps: [{ kind: "arrow", size: 4 }, { kind: "arrow", size: 4 }],
+      });
+      const r = resolveConnector(doc, c, registries);
+      const inset = registries.caps.get("arrow")!.inset(4, w3);
+      expect(finiteResult(r)).toBe(true);
+      expect(linesClearOfHeads(r, w3, [inset, inset])).toBe(true);
+      expect(neverDoublesBack(route("orthogonal").path(r.ends[0], r.ends[1], { offset }), r.ends[0], r.ends[1])).toBe(true);
+    }
+  });
+
+  test("facing stubs across a 20 px gap still meet half way, on one row and offset by a row", () => {
+    expect(linePoints(resolve(120, 0, "e", "w").path)).toEqual([[104, 25], [116, 25]]);
+    expect(linePoints(resolve(120, 20, "e", "w").path)).toEqual([[104, 25], [110, 25], [110, 45], [116, 45]]);
+  });
+
+  // A small grid: every anchor pair, three offsets, B at positions on every side of A, including ones a little above
+  // or below A's row, where a stub used to be cut short and the plain elbow doubled back through the items.
+  const grid = [-130, 0, 110, 140].flatMap((bx) => [-70, -10, 8, 60].map((by) => [bx, by] as const)).filter(([bx, by]) => Math.abs(bx) >= 100 || Math.abs(by) >= 50);
+  const anchors = ["n", "e", "s", "w"] as const;
+  test.each([0, 0.5, 1])("offset %s: across the grid, no route doubles back and no line runs beside a head", (offset) => {
+    const inset = registries.caps.get("arrow")!.inset(3, PT_TO_PX);
+    let checked = 0;
+    for (const [bx, by] of grid)
+      for (const from of anchors)
+        for (const to of anchors) {
+          const r = resolve(bx, by, from, to, 0, offset);
+          const tag = `B@${bx},${by} ${from}->${to}`;
+          expect(finiteResult(r), tag).toBe(true);
+          const routed = route("orthogonal").path(r.ends[0], r.ends[1], { offset });
+          expect(neverDoublesBack(routed, r.ends[0], r.ends[1]), tag).toBe(true);
+          expect(linesClearOfHeads(r, PT_TO_PX, [inset, inset]), tag).toBe(true);
+          checked++;
+        }
+    expect(checked).toBe(14 * 16);
+  });
+});
+
+describe("maxLead", () => {
+  const end = (x: number, y: number, dir: Pt | null): EndPoint => ({ pt: { x, y }, dir, lead: 0 });
+  const right = { x: 1, y: 0 };
+  const left = { x: -1, y: 0 };
+  const up = { x: 0, y: -1 };
+
+  test("ends facing each other: half the way, however far apart sideways", () => {
+    expect(maxLead(end(100, 25, right), end(120, 25, left))).toBe(10);
+    expect(maxLead(end(100, 25, right), end(120, 200, left))).toBe(10);
+    expect(maxLead(end(120, 200, left), end(100, 25, right))).toBe(10);
+  });
+
+  test("ends facing the same way, or one behind the other: no limit", () => {
+    expect(maxLead(end(190, 8, up), end(50, 0, up))).toBe(Infinity);
+    expect(maxLead(end(50, 0, up), end(190, 8, up))).toBe(Infinity);
+    expect(maxLead(end(100, 25, right), end(-30, 25, left))).toBe(Infinity);
+  });
+
+  test("ends looking into one quadrant: half the way; one ahead by a little but far to the side: no limit", () => {
+    // A's e at (100, 25) and B's n at (140, 40): each is ahead of the other and no further beside it than that.
+    expect(maxLead(end(140, 40, up), end(100, 25, right))).toBe(7.5);
+    expect(maxLead(end(100, 25, right), end(140, 40, up))).toBe(20);
+    // B's s at (-80, 20) with A's e at (100, 25): A is 5 ahead but 180 to the side, and B is behind A.
+    expect(maxLead(end(-80, 20, { x: 0, y: 1 }), end(100, 25, right))).toBe(Infinity);
+  });
+
+  test("a free other end: half the way when no further to the side than ahead", () => {
+    expect(maxLead(end(50, 0, up), end(50, -5, null))).toBe(2.5);
+    expect(maxLead(end(50, 0, up), end(200, -5, null))).toBe(Infinity);
+    expect(maxLead(end(50, 0, null), end(50, -5, null))).toBe(0);
+  });
+});
+
+test("a cubic that passes quickly through the end's inset circle is cut there, not where a coarse sample would first notice", () => {
+  // From (0, 0) to (300, 0), swinging far out and back through the tip near t ≈ 0.62: 64 even samples all miss the
+  // 4 px circle round the tip, so a sampled search would trim only at the very end and leave a loop through the head.
+  const dip = { ...registries, routes: new RouteRegistry() };
+  dip.routes.register({
+    id: "dip",
+    name: "Dip",
+    icon: "",
+    defaults: () => ({}),
+    fields: () => [],
+    path: () => [
+      { op: "M", x: 0, y: 0 },
+      { op: "C", x1: -600, y1: -800, x2: 900, y2: 500, x: 300, y: 0 },
+    ],
+  });
+  const c = connector(free(0, 0), free(300, 0), { route: "dip", stroke: { ...thick, width: 1 }, caps: [{ kind: "none", size: 3 }, { kind: "arrow", size: 3 }] });
+  const inset = registries.caps.get("arrow")!.inset(3, PT_TO_PX);
+  expect(inset).toBe(4);
+  const at = (t: number): Pt => {
+    const u = 1 - t;
+    return { x: 3 * u * u * t * -600 + 3 * u * t * t * 900 + t * t * t * 300, y: 3 * u * u * t * -800 + 3 * u * t * t * 500 };
+  };
+  for (let i = 1; i < 64; i++) expect(Math.hypot(at(i / 64).x - 300, at(i / 64).y)).toBeGreaterThan(inset + 1);
+  const r = resolveConnector(docWith(), c, dip);
+  expect(finiteResult(r)).toBe(true);
+  const stop = pointAtEnd(r.path, 1).pt;
+  expect(Math.hypot(stop.x - 300, stop.y)).toBeCloseTo(inset, 6);
+  expect(stop.x).toBeLessThan(299);
+  for (const line of flattenPath(r.path, 0.01)) for (const pt of line) expect(Math.hypot(pt.x - 300, pt.y)).toBeGreaterThanOrEqual(inset - 1e-3);
 });

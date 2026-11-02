@@ -116,45 +116,83 @@ function splitPiece(pc: Piece, t: number): [Piece, Piece] {
   ];
 }
 
-/** Where along the piece (each t in 0–1) its distance from `c` is exactly `r`: exact for a line, found by sampling and bisection on a cubic. */
+/** Where along the line from `a` to `b` (each t in 0–1) its distance from `c` is exactly `r`: the roots of a quadratic. */
+function lineCircleCrossings(a: Pt, b: Pt, c: Pt, r: number): number[] {
+  const d = { x: b.x - a.x, y: b.y - a.y };
+  const f = { x: a.x - c.x, y: a.y - c.y };
+  const A = d.x * d.x + d.y * d.y;
+  if (A === 0) return [];
+  const B = 2 * (f.x * d.x + f.y * d.y);
+  const C = f.x * f.x + f.y * f.y - r * r;
+  const disc = B * B - 4 * A * C;
+  if (disc < 0) return [];
+  const root = Math.sqrt(disc);
+  return [(-B - root) / (2 * A), (-B + root) / (2 * A)].filter((t) => t >= 0 && t <= 1);
+}
+
+/** How far a cubic's control points may lie off its chord for the piece to be taken as that chord. */
+const FLAT_PX = 1e-3;
+
+/** The deepest a cubic is split looking for crossings; at this depth a piece is a 2^-20 of the curve and is taken as flat. */
+const MAX_SPLIT_DEPTH = 20;
+
+/**
+ * Where along the piece (each t in 0–1) its distance from `c` is exactly `r`, in order. Exact for a line. A cubic is
+ * split adaptively: it lies inside the convex hull of its control points, so a part whose points' box is wholly
+ * outside the circle, or whose points are all inside it, never crosses and is dropped, and any other part is split
+ * until it is flat and then taken as its chord. So a quick pass through the circle between two far-apart samples is
+ * never missed. Each crossing found is then sharpened by bisection on the true distance where its part brackets it.
+ */
 function circleCrossings(pc: Piece, c: Pt, r: number): number[] {
   const { from, seg } = pc;
-  if (seg.op !== "C") {
-    const d = { x: seg.x - from.x, y: seg.y - from.y };
-    const f = { x: from.x - c.x, y: from.y - c.y };
-    const A = d.x * d.x + d.y * d.y;
-    if (A === 0) return [];
-    const B = 2 * (f.x * d.x + f.y * d.y);
-    const C = f.x * f.x + f.y * f.y - r * r;
-    const disc = B * B - 4 * A * C;
-    if (disc < 0) return [];
-    const root = Math.sqrt(disc);
-    return [(-B - root) / (2 * A), (-B + root) / (2 * A)].filter((t) => t >= 0 && t <= 1);
-  }
+  if (seg.op !== "C") return lineCircleCrossings(from, seg, c, r);
   const gap = (t: number): number => {
     const p = pointOn(pc, t);
     return Math.hypot(p.x - c.x, p.y - c.y) - r;
   };
-  const out: number[] = [];
-  const n = 64;
-  let prev = gap(0);
-  if (prev === 0) out.push(0);
-  for (let i = 1; i <= n; i++) {
-    const cur = gap(i / n);
-    if (cur === 0) out.push(i / n);
-    else if (prev !== 0 && Math.sign(cur) !== Math.sign(prev)) {
-      let lo = (i - 1) / n;
-      let hi = i / n;
-      for (let k = 0; k < 40; k++) {
-        const mid = (lo + hi) / 2;
-        if (Math.sign(gap(mid)) === Math.sign(prev)) lo = mid;
-        else hi = mid;
+  const found: number[] = [];
+  const visit = (part: Piece, t0: number, t1: number, depth: number): void => {
+    if (part.seg.op !== "C") return;
+    const p0 = part.from;
+    const p3: Pt = part.seg;
+    const pts: Pt[] = [p0, { x: part.seg.x1, y: part.seg.y1 }, { x: part.seg.x2, y: part.seg.y2 }, p3];
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const dx = Math.max(Math.min(...xs) - c.x, 0, c.x - Math.max(...xs));
+    const dy = Math.max(Math.min(...ys) - c.y, 0, c.y - Math.max(...ys));
+    if (Math.hypot(dx, dy) > r) return;
+    if (pts.every((p) => Math.hypot(p.x - c.x, p.y - c.y) <= r)) return;
+    const chord = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+    const off = (p: Pt): number =>
+      chord > 0 ? Math.abs((p3.x - p0.x) * (p.y - p0.y) - (p3.y - p0.y) * (p.x - p0.x)) / chord : Math.hypot(p.x - p0.x, p.y - p0.y);
+    if (depth >= MAX_SPLIT_DEPTH || (off(pts[1]) <= FLAT_PX && off(pts[2]) <= FLAT_PX)) {
+      const g0 = gap(t0);
+      const g1 = gap(t1);
+      for (const s of lineCircleCrossings(p0, p3, c, r)) {
+        let t = t0 + (t1 - t0) * s;
+        if (g0 !== 0 && g1 !== 0 && Math.sign(g0) !== Math.sign(g1)) {
+          let lo = t0;
+          let hi = t1;
+          for (let k = 0; k < 40; k++) {
+            const mid = (lo + hi) / 2;
+            if (Math.sign(gap(mid)) === Math.sign(g0)) lo = mid;
+            else hi = mid;
+          }
+          t = (lo + hi) / 2;
+        }
+        found.push(t);
       }
-      out.push((lo + hi) / 2);
+      return;
     }
-    prev = cur;
-  }
-  return out;
+    const [left, right] = splitPiece(part, 0.5);
+    const tm = (t0 + t1) / 2;
+    visit(left, t0, tm, depth + 1);
+    visit(right, tm, t1, depth + 1);
+  };
+  visit(pc, 0, 1, 0);
+  found.sort((a, b) => a - b);
+  // A crossing at a split point is found once from each side.
+  return found.filter((t, i) => i === 0 || t - found[i - 1] > 1e-9);
 }
 
 /** Every place along the path, as piece index + t, where it is exactly `r` from `c`, in path order. */
@@ -270,7 +308,7 @@ function atLeast(r: Rect, min: number): Rect {
  * - Each cap's tip is on its end. The line is cut where it is the cap's inset away from the tip in a straight line, and
  *   the cap is turned along the line from that stop to the tip, so the line always ends on the cap's axis and nothing of
  *   it lies within the inset of the tip, whatever the route. An end attached to an anchor also asks the route for a
- *   straight `lead` of the inset plus a pixel (never more than half the way to the other end, see `maxLead`), so in
+ *   straight `lead` of the inset plus a pixel (never more than half the way to an end that genuinely lies ahead, see `maxLead`), so in
  *   the usual case the remaining line is straight there and the cap sits square on the anchor.
  *
  * Every number is finite for any ends, including both ends on one item or at one point.

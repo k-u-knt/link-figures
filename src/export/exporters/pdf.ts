@@ -203,6 +203,8 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
         await drawPdfPanel(input.doc, lib, out, target, page, panel);
         const assets = input.assets.get(page.id) ?? new Map();
         const overlay = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([layer.nodeId]), paper: false, overlaysOnly: true });
+        // What drawing the overlay had to say (a frame's paint that is not registered) is said in the notice too.
+        for (const warning of overlay.warnings) warnings.add(warning);
         if (overlay.drawn > 0) {
           const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, overlay.svg, input.doc, page, warnings));
           target.drawPage(embedded, { x: 0, y: 0, width, height });
@@ -259,12 +261,14 @@ export const pdfExporter: Exporter = {
     await import("svg2pdf.js");
 
     const name = `${input.baseName}.pdf`;
+    // What only the PDF finds out: strokes it could not keep as vectors, and what a PDF panel's overlay layer said.
     const strokes = new Set<string>();
     if (plans.every((plan) => plan.panels.size === 0)) {
       const blob = await plainPdf(jsPDF, input.doc, input.pages, plans.map((plan) => plan.svg), strokes);
-      return { files: [{ name, blob }], warnings: [...input.warnings, ...fonts, ...strokes] };
+      return { files: [{ name, blob }], warnings: [...new Set([...input.warnings, ...fonts, ...strokes])] };
     }
     const blob = await layeredPdf(jsPDF, input, plans, strokes);
-    return { files: [{ name, blob }], warnings: [...input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w)), ...fonts, ...strokes] };
+    const kept = input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w));
+    return { files: [{ name, blob }], warnings: [...new Set([...kept, ...fonts, ...strokes])] };
   },
 };

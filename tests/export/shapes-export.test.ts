@@ -75,5 +75,10 @@ describe("SVG export", () => {
     const bare = docWith((doc) => ({ ...panel(doc), frame: null }));
     expect(buildPageSvg(bare, bare.pages[0], registries(), panelAssets()).svg).not.toContain("<path");
   });
-});
 
+  test("what drawing a frame warns about is said with the panel's label", () => {
+    const d = docWith((doc) => ({ ...panel(doc), frame: { paint: { type: "x.glow" }, width: 1, dash: "solid" } }));
+    const { warnings } = buildPageSvg(d, d.pages[0], registries(), panelAssets());
+    expect(warnings).toEqual([`Panel "plot.svg" (${d.pages[0].name}): no paint type "x.glow" is registered, drawn without paint`]);
+  });
+});

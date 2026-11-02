@@ -121,7 +121,8 @@ function dashes(line: Polyline, dash: number[], offset: number): Polyline[] {
 
   let phase = ((offset % total) + total) % total;
   let i = 0;
-  while (phase >= pattern[i]) {
+  // A dash of length zero where the path starts is still drawn (a dot); a dash that ends exactly there is not.
+  while (phase > pattern[i] || (phase === pattern[i] && pattern[i] > 0)) {
     phase -= pattern[i];
     i = (i + 1) % pattern.length;
   }
@@ -152,6 +153,20 @@ function dashes(line: Polyline, dash: number[], offset: number): Polyline[] {
     }
     left -= length - pos;
     if (current) current.push({ ...b });
+  }
+  // Pattern entries that end exactly at the path's end: a dash of length zero there is still a dot.
+  const end = pts[pts.length - 1];
+  while (left <= EPS) {
+    i = (i + 1) % pattern.length;
+    left = pattern[i];
+    on = !on;
+    if (on) {
+      if (left <= EPS) out.push({ pts: [{ ...end, corner: false }], closed: false, dir });
+    } else if (current) {
+      current.push({ ...end, corner: false });
+      out.push({ pts: current, closed: false, dir });
+      current = null;
+    }
   }
   if (current) out.push({ pts: current, closed: false, dir });
   // A dash with no length (a dot) keeps the direction of the segment it lies on, for its square caps.

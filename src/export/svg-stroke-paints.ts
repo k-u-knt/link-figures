@@ -1,5 +1,5 @@
-import { ellipsePath, pathBounds, rectPath, toSvgPath, type PathData } from "../model/path";
-import { strokeOutline, svgPathData, type LineCap, type LineJoin } from "./stroke-outline";
+import { ellipsePath, multiply, pathBounds, rectPath, toSvgPath, type Matrix, type PathData } from "../model/path";
+import { OUTLINE_TOLERANCE_PX, strokeOutline, svgPathData, type LineCap, type LineJoin } from "./stroke-outline";
 
 /**
  * Gradient and pattern strokes made drawable by svg2pdf.js (2.8.1), which paints a gradient or pattern on a fill but
@@ -9,8 +9,10 @@ import { strokeOutline, svgPathData, type LineCap, type LineJoin } from "./strok
  * gradient's first stop, a pattern's first colour), and the caller is told so.
  *
  * Properties are read as SVG cascades them through the document: the `style` attribute before the presentation
- * attribute, from the nearest ancestor that sets them. `<style>` rules are not read; a style sheet that strokes with a
- * gradient or pattern is reported, since svg2pdf.js leaves that line out too.
+ * attribute, from the nearest ancestor that sets them. `<style>` rules are not read: a style sheet that strokes with a
+ * gradient or pattern is reported, since svg2pdf.js leaves that line out too, and while a style sheet sets any stroke
+ * property, an element with a `class` falls back to one colour rather than being outlined with what may be the wrong
+ * width, dashes or caps.
  */
 
 const SVG_MIME = "image/svg+xml";
@@ -28,6 +30,9 @@ const LENGTH = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(?:px)?\s*$/i;
 /** A plain number or a percentage, for a gradient's objectBoundingBox coordinates. */
 const FRACTION = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(%?)\s*$/i;
 const STYLE_SHEET_STROKE = /stroke\s*:\s*url\(/i;
+/** A style sheet declaration of any stroke property (`stroke`, `stroke-width`, `stroke-dasharray`…). */
+const STYLE_SHEET_STROKE_PROPERTY = /(?:^|[{;\s])stroke[-a-z]*\s*:/i;
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 /** Properties that apply to an element as a whole, so they move to the group that stands in for it. */
 const GROUP_PROPERTIES = ["opacity", "clip-path", "mask", "filter"];
 const MARKERS = ["marker-start", "marker-mid", "marker-end"];
@@ -267,10 +272,76 @@ function strokeFirst(el: Element): boolean {
   return full.indexOf("stroke") < full.indexOf("fill");
 }
 
+/** One transform function as a matrix; translations are left out, as only the scale is wanted. Null for one not read. */
+function transformFunction(name: string, args: number[]): Matrix | null {
+  const rad = ((args[0] ?? 0) * Math.PI) / 180;
+  switch (name) {
+    case "matrix":
+      return args.length === 6 ? [args[0], args[1], args[2], args[3], 0, 0] : null;
+    case "scale":
+      return args.length >= 1 ? [args[0], 0, 0, args[1] ?? args[0], 0, 0] : null;
+    case "rotate":
+      return [Math.cos(rad), Math.sin(rad), -Math.sin(rad), Math.cos(rad), 0, 0];
+    case "skewX":
+      return [1, 0, Math.tan(rad), 1, 0, 0];
+    case "skewY":
+      return [1, Math.tan(rad), 0, 1, 0, 0];
+    case "translate":
+      return IDENTITY;
+    default:
+      return null;
+  }
+}
+
+/** A `transform` attribute's linear part (the identity for one it cannot read): the list's last function applies first. */
+function transformOf(value: string | null): Matrix {
+  if (value === null) return IDENTITY;
+  let m = IDENTITY;
+  const functions = Array.from(value.matchAll(/([a-zA-Z]+)\s*\(([^)]*)\)/g));
+  for (const [, name, raw] of functions.reverse()) {
+    const args = raw.split(/[\s,]+/).filter((v) => v !== "").map(Number);
+    const f = args.every(Number.isFinite) ? transformFunction(name, args) : null;
+    if (!f) return IDENTITY;
+    m = multiply(m, f);
+  }
+  return m;
+}
+
+/** The scale a nested `<svg>` puts on its content (its viewBox fitted to its width and height), as a matrix. */
+function viewportOf(el: Element): Matrix {
+  const box = (el.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
+  const width = plain(el.getAttribute("width"));
+  const height = plain(el.getAttribute("height"));
+  if (box.length !== 4 || !box.every(Number.isFinite) || !(box[2] > 0 && box[3] > 0) || width === null || height === null) return IDENTITY;
+  const sx = width / box[2];
+  const sy = height / box[3];
+  const align = (el.getAttribute("preserveAspectRatio") ?? "").trim();
+  if (align.startsWith("none")) return [sx, 0, 0, sy, 0, 0];
+  const k = align.endsWith("slice") ? Math.max(sx, sy) : Math.min(sx, sy);
+  return [k, 0, 0, k, 0, 0];
+}
+
+/**
+ * How much the element's user space is enlarged on the page, at most (the largest singular value of its transforms and
+ * nested viewports up to the page's own `<svg>`), so that a curve can be flattened to a tolerance on the page.
+ */
+function pageScale(el: Element): number {
+  let m = IDENTITY;
+  for (let node: Element | null = el; node && node.parentElement; node = node.parentElement) {
+    m = multiply(m, transformOf(node.getAttribute("transform")));
+    if (node !== el && node.localName === "svg") m = multiply(m, viewportOf(node));
+  }
+  const [a, b, c, d] = m;
+  const t = a * a + b * b + c * c + d * d;
+  const det = a * d - b * c;
+  return Math.sqrt((t + Math.sqrt(Math.max(0, t * t - 4 * det * det))) / 2);
+}
+
 /**
  * The element stroked with `paint` replaced by a group that stands in for it: its id, transform and whole-element
- * properties (opacity, clip, mask, filter), then the element itself with no stroke (when it still draws a fill or
- * markers), and the stroke's outline filled with `paint` at the stroke's opacity, in the element's paint order.
+ * properties (opacity, clip, mask, filter), then the element itself with no stroke and no markers (when it still draws
+ * a fill), and the stroke's outline filled with `paint` at the stroke's opacity, in the element's paint order, then a
+ * copy of the element that draws only its markers, which SVG paints last. Curves are flattened to 0.05 pt on the page.
  * `"nothing"` when SVG draws no stroke here (a width of zero, no geometry, a bounding-box paint on a flat box); null
  * when the stroke cannot be outlined.
  */
@@ -291,13 +362,16 @@ function outline(doc: Document, el: Element, server: Element, ids: Set<string>):
   const capValue = cascaded(el, "stroke-linecap") ?? "butt";
   const cap = (CAPS.includes(capValue) ? capValue : "butt") as LineCap;
   const limit = plain(cascaded(el, "stroke-miterlimit")) ?? DEFAULT_MITER_LIMIT;
-  const area = strokeOutline(path, width, cap, joinOf(cascaded(el, "stroke-linejoin")), dash, { dashOffset, miterLimit: limit });
+  const scale = pageScale(el);
+  const tolerance = scale > 0 && Number.isFinite(scale) ? OUTLINE_TOLERANCE_PX / scale : OUTLINE_TOLERANCE_PX;
+  const area = strokeOutline(path, width, cap, joinOf(cascaded(el, "stroke-linejoin")), dash, { dashOffset, miterLimit: limit, tolerance });
 
   const filled = doc.createElementNS(SVG_NS, "path");
   filled.setAttribute("d", toSvgPath(area));
   filled.setAttribute("fill", paint);
   const shown = Math.min(1, Math.max(0, opacity));
-  if (shown < 1) filled.setAttribute("fill-opacity", String(shown));
+  // Written even at 1, so the outline does not take a `fill-opacity` from an ancestor.
+  filled.setAttribute("fill-opacity", String(shown));
   filled.setAttribute("fill-rule", "nonzero");
   filled.setAttribute("stroke", "none");
   const markers = MARKERS.some((m) => (cascaded(el, m) ?? cascaded(el, "marker") ?? "none") !== "none");
@@ -314,10 +388,19 @@ function outline(doc: Document, el: Element, server: Element, ids: Set<string>):
   }
   for (const property of GROUP_PROPERTIES) moveProperty(el, group, property);
   setOwn(el, "stroke", "none");
+  const parts: Element[] = [];
   // A line has no inside to fill; every other shape fills, open or closed.
   const fills = el.localName !== "line" && (cascaded(el, "fill") ?? "black") !== "none";
-  const keep = fills || markers;
-  const parts = keep ? (strokeFirst(el) ? [filled, el] : [el, filled]) : [filled];
+  const markerCopy = markers ? (el.cloneNode(true) as Element) : null;
+  if (markerCopy) {
+    setOwn(markerCopy, "fill", "none");
+    for (const m of MARKERS) setOwn(el, m, "none");
+    dropStyle(el, "marker");
+    el.removeAttribute("marker");
+  }
+  if (fills) parts.push(...(strokeFirst(el) ? [filled, el] : [el, filled]));
+  else parts.push(filled);
+  if (markerCopy) parts.push(markerCopy);
   el.replaceWith(group);
   for (const part of parts) group.appendChild(part);
   return group;
@@ -335,6 +418,7 @@ export function outlinePaintedStrokes(svg: string, labelOf: (el: Element) => str
 
   const warnings = new Set<string>();
   const ids = new Set(Array.from(doc.querySelectorAll("[id]"), (el) => el.getAttribute("id")!));
+  const sheetStrokes = Array.from(doc.getElementsByTagName("style")).some((style) => STYLE_SHEET_STROKE_PROPERTY.test(style.textContent ?? ""));
   let changed = false;
   for (const el of Array.from(doc.querySelectorAll("*"))) {
     if (el.localName === "style" && STYLE_SHEET_STROKE.test(el.textContent ?? "")) {
@@ -347,7 +431,9 @@ export function outlinePaintedStrokes(svg: string, labelOf: (el: Element) => str
     const server = id === undefined ? null : doc.getElementById(id);
     if (!server || !(GRADIENTS.has(server.localName) || server.localName === "pattern")) continue;
 
-    const done = SHAPES.has(el.localName) ? outline(doc, el, server, ids) : null;
+    // A class may give the element stroke properties from a style sheet, which `cascaded` does not see.
+    const styled = sheetStrokes && el.hasAttribute("class");
+    const done = SHAPES.has(el.localName) && !styled ? outline(doc, el, server, ids) : null;
     changed = true;
     if (done === "nothing") setOwn(el, "stroke", "none");
     else if (done === null) {

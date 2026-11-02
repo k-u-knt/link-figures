@@ -86,6 +86,14 @@ describe("strokeOutline", () => {
     expect(inside(shifted, 5.5, 0)).toBe(true);
   });
 
+  test("dashes of length zero are dots with round caps, at the path's start and end too", () => {
+    const o = strokeOutline(line([0, 0], [20, 0]), 2, "round", "miter", [0, 4]);
+    for (const x of [0, 4, 8, 12, 16, 20]) expect(inside(o, x + 0.5, 0) || inside(o, x - 0.5, 0)).toBe(true);
+    expect(inside(o, -0.5, 0)).toBe(true);
+    expect(inside(o, 20.5, 0)).toBe(true);
+    for (const x of [2, 6, 18]) expect(inside(o, x, 0)).toBe(false);
+  });
+
   test("a cubic's outline stays within the tolerance of half the width from the curve", () => {
     const curve: PathData = [{ op: "M", x: 0, y: 0 }, { op: "C", x1: 30, y1: 60, x2: 70, y2: -60, x: 100, y: 0 }];
     const o = strokeOutline(curve, 10, "butt", "miter");
@@ -208,5 +216,43 @@ describe("outlinePaintedStrokes", () => {
     const { svg, warnings } = outlinePaintedStrokes(doc(pattern, '<path d="M0 0 L10 0" stroke="url(#h)" stroke-width="2mm"/>'), label);
     expect(parse(svg).querySelector("svg > path")?.getAttribute("stroke")).toBe("#123456");
     expect(warnings).toEqual(["Shape: pattern line drawn in one colour in the PDF"]);
+  });
+
+  test("an outline at full stroke opacity says so, rather than taking an ancestor's fill-opacity", () => {
+    const out = parse(outlinePaintedStrokes(doc(GRAD, '<g fill-opacity="0.2"><path d="M0 0 L50 0" fill="none" stroke="url(#g)" stroke-width="2"/></g>'), label).svg);
+    expect(out.querySelector("path")?.getAttribute("fill-opacity")).toBe("1");
+  });
+
+  test("markers draw over the outline, from a copy that draws only them; the filled element keeps none", () => {
+    const marker = '<marker id="m" markerWidth="4" markerHeight="4"><path d="M0 0 L4 2 L0 4 Z"/></marker>';
+    const out = parse(outlinePaintedStrokes(doc(GRAD + marker, '<path id="p" d="M0 0 L50 0 L50 20" fill="#eeeeee" stroke="url(#g)" stroke-width="2" marker-end="url(#m)"/>'), label).svg);
+    const group = out.getElementById("p")!;
+    const [shape, outline, markers] = Array.from(group.children);
+    expect(shape.getAttribute("fill")).toBe("#eeeeee");
+    expect(shape.getAttribute("marker-end")).toBe("none");
+    expect(outline.getAttribute("fill")).toBe("url(#g)");
+    expect(markers.getAttribute("marker-end")).toBe("url(#m)");
+    expect([markers.getAttribute("fill"), markers.getAttribute("stroke")]).toEqual(["none", "none"]);
+  });
+
+  test("while a style sheet sets stroke properties, an element with a class is drawn in one colour and reported", () => {
+    const { svg, warnings } = outlinePaintedStrokes(
+      doc(`${GRAD}<style>.thick { stroke-width: 6 }</style>`, '<path class="thick" d="M0 0 L50 0" fill="none" stroke="url(#g)"/><path d="M0 9 L50 9" fill="none" stroke="url(#g)"/>'),
+      label,
+    );
+    const out = parse(svg);
+    expect(out.querySelector("path.thick")?.getAttribute("stroke")).toBe("#ff0000");
+    expect(Array.from(out.querySelectorAll("path")).some((p) => p.getAttribute("fill") === "url(#g)")).toBe(true);
+    expect(warnings).toEqual(["Shape: gradient line drawn in one colour in the PDF"]);
+  });
+
+  test("a curve in an enlarged user space is flattened finer, to the same tolerance on the page", () => {
+    const pieces = (wrap: (body: string) => string) => {
+      const out = parse(outlinePaintedStrokes(doc(GRAD, wrap('<path d="M0 0 C3 6 7 -6 10 0" fill="none" stroke="url(#g)" stroke-width="1"/>')), label).svg);
+      return (out.querySelector('path[fill="url(#g)"]')?.getAttribute("d")?.match(/L/g) ?? []).length;
+    };
+    const plainCount = pieces((b) => b);
+    expect(pieces((b) => `<g transform="translate(5 5) scale(10)">${b}</g>`)).toBeGreaterThan(plainCount * 2);
+    expect(pieces((b) => `<svg width="100" height="100" viewBox="0 0 10 10">${b}</svg>`)).toBeGreaterThan(plainCount * 2);
   });
 });

@@ -7,7 +7,7 @@ import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "
 import type { FileNode, Node, Page } from "../../src/model/types";
 import type { ExportInput } from "../../src/registry/exporter";
 import { createRegistries } from "../../src/registry";
-import type { NodeType } from "../../src/registry/node-type";
+import type { NodeType, SvgContext } from "../../src/registry/node-type";
 
 // jsPDF and svg2pdf.js are replaced by a recorder: what is checked here is what the exporter asks of them, per page.
 // (Whether the PDF they make is right can only be seen in a real browser.)
@@ -279,6 +279,22 @@ test("what a PDF panel's node type draws over it (its frame) is a layer of its o
   expect(second).toBe("<svg>Page 2</svg>");
   const sizes = drawn(drawPage).map((o) => o.width);
   expect(sizes).toEqual([expect.closeTo(183 * MM_TO_PT), expect.closeTo(300), expect.closeTo(183 * MM_TO_PT), expect.closeTo(100), expect.closeTo(210 * MM_TO_PT)]);
+});
+
+test("what a PDF panel's overlay build warns about is in the notice, once", async () => {
+  const f = panelFigure();
+  f.i.registries.nodeTypes.register({
+    ...markerType("file"),
+    overlaySvg: (node: Node, ctx: SvgContext) => {
+      ctx.warnings.push(`${node.id}: frame paint not registered`);
+      return `<g id="${node.id}-frame"/>`;
+    },
+  } as NodeType);
+  const framed = f.panel(f.first, 0, [40, 30, 300, 200], pdfAsset(await sourcePdf([[300, 200]])));
+  const { warnings } = await pdfExporter.run({ ...f.i, warnings: [`${framed.id}: frame paint not registered`] }, {});
+  expect(warnings).toEqual([`${framed.id}: frame paint not registered`]);
+  const { warnings: fresh } = await pdfExporter.run(f.i, {});
+  expect(fresh).toEqual([`${framed.id}: frame paint not registered`]);
 });
 
 test("a PDF panel below everything leaves an empty first layer that still draws the paper", async () => {

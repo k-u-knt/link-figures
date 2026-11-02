@@ -118,5 +118,9 @@ test("a paint type this plugin does not know survives a round trip, extra keys a
 test("a stroke missing its width or dash gets 1 pt solid", () => expect(frameOf(withFrame('{"paint":{"type":"none"}}'))).toEqual({ paint: { type: "none" }, width: 1, dash: "solid" }));
 test("a frame that is not a stroke is a FormatError", () => {
   const message = 'Node p-3f9a: "frame" must be null or a stroke { paint: { type, … }, width, dash }';
-  for (const bad of ['"red"', "[]", '{"width":1}', '{"paint":"red"}', '{"paint":{"color":"#000000"}}']) expect(() => withFrame(bad)).toThrow(new FormatError(message));
+  for (const bad of ['"red"', "[]", '{"paint":"red"}', '{"paint":{"color":"#000000"}}', '{"color":3}']) expect(() => withFrame(bad)).toThrow(new FormatError(message));
+});
+test("an old frame with neither a paint nor a colour opens as solid black", () => {
+  expect(frameOf(withFrame('{"width":2,"dash":"dot"}'))).toEqual({ paint: { type: "solid", color: "#000000" }, width: 2, dash: "dot" });
+  expect(frameOf(withFrame("{}"))).toEqual({ paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" });
 });

@@ -34,10 +34,20 @@ type Control = HTMLInputElement | HTMLSelectElement;
 /** The text and number controls that have been typed into and not yet committed: what is in them is the user's, not the model's. */
 const typedInto = new WeakSet<Control>();
 
+/** The checkbox beside a `nullable` colour input: whether there is a colour at all. */
+const nullToggles = new WeakMap<Control, HTMLInputElement>();
+
 function setControlValue(control: Control, field: Field, value: unknown): void {
-  if (field.kind === "toggle") (control as HTMLInputElement).checked = value === true;
+  if (field.kind === "toggle") (control as HTMLInputElement).checked = field.onValue !== undefined ? value !== null && value !== undefined : value === true;
   else if (field.kind === "number") control.value = typeof value === "number" && Number.isFinite(value) ? formatNumber(value) : "";
-  else if (field.kind === "color") control.value = colorInputValue(value);
+  else if (field.kind === "color" && field.nullable) {
+    const present = typeof value === "string";
+    const toggle = nullToggles.get(control);
+    if (toggle) toggle.checked = present;
+    (control as HTMLInputElement).disabled = !present;
+    // With no colour, the input keeps the one it last showed: turning the colour back on brings that one back.
+    if (present) control.value = colorInputValue(value);
+  } else if (field.kind === "color") control.value = colorInputValue(value);
   else control.value = typeof value === "string" ? value : "";
 }
 
@@ -182,7 +192,8 @@ const COMPOSITES: Partial<Record<Field["kind"], (holder: HTMLElement, field: Fie
  * One `.lf-field` row per field: a label and the control its `kind` calls for. `read` gives the value to show and
  * `write` is told what the user sets; numbers are passed on as the user reads them (in the field's `unit`), kept
  * within `min` and `max`. Text, numbers and selects write when they are committed (Enter, leaving the field), colours
- * as they are picked. A `paint` or `stops` field is a group of such rows (see `paintComposite`, `stopsComposite`).
+ * as they are picked. A `paint` or `stops` field is a group of such rows (see `paintComposite`, `stopsComposite`). A
+ * toggle with an `onValue`, and a `nullable` colour, write null for "none" (see `Field`).
  */
 export function renderFields(container: HTMLElement, fields: Field[], read: Read, write: Write, env: FieldEnv = {}): void {
   for (const field of fields) {
@@ -201,6 +212,8 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
     const holder = row.createDiv({ cls: "lf-field-control" });
     const attr = { "data-key": field.key };
 
+    // A nullable colour's checkbox comes before its colour input, and is not the field's control (`data-key`).
+    const nullToggle = field.kind === "color" && field.nullable ? holder.createEl("input", { type: "checkbox", cls: "lf-null-toggle" }) : null;
     let control: Control;
     if (field.kind === "select") {
       control = holder.createEl("select", { cls: "dropdown", attr });
@@ -220,8 +233,15 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
     }
     if (field.unit) holder.createSpan({ cls: "lf-unit", text: field.unit });
 
+    if (nullToggle) nullToggles.set(control, nullToggle);
     const show = (): void => setControlValue(control, field, read(field.key));
     show();
+    if (nullToggle) {
+      nullToggle.addEventListener("change", () => {
+        write(field.key, nullToggle.checked ? colorInputValue(control.value) : null);
+        show();
+      });
+    }
     if (field.kind === "color") {
       // Live while the picker is dragged; the store merges the run of commits into one undo step.
       control.addEventListener("input", () => write(field.key, control.value));
@@ -237,7 +257,10 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
     }
     control.addEventListener("change", () => {
       typedInto.delete(control);
-      if (field.kind === "toggle") write(field.key, (control as HTMLInputElement).checked);
+      if (field.kind === "toggle") {
+        const checked = (control as HTMLInputElement).checked;
+        write(field.key, field.onValue === undefined ? checked : checked ? structuredClone(field.onValue) : null);
+      }
       else if (field.kind === "number") {
         const n = (control as HTMLInputElement).valueAsNumber;
         // Nothing, or something that is not a number: the value that was there comes back.

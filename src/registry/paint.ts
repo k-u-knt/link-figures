@@ -83,3 +83,19 @@ export function strokeAttrs(stroke: Stroke, ref: string, opacity?: number): stri
   if (opacity !== undefined && opacity < 1) attrs.push(`stroke-opacity="${opacity}"`);
   return attrs.join(" ");
 }
+
+const DASH_OPTIONS: { value: Stroke["dash"]; label: string }[] = [
+  { value: "solid", label: "Solid" },
+  { value: "dash", label: "Dashed" },
+  { value: "dot", label: "Dotted" },
+  { value: "dashDot", label: "Dash-dot" },
+];
+
+/** The inspector fields of the stroke at `key` (`"border"`), labelled after `name` (`"Border"`): its paint, its width in pt and its dashes. */
+export function strokeFields(key: string, name: string): Field[] {
+  return [
+    { kind: "paint", key: `${key}.paint`, label: `${name} paint` },
+    { kind: "number", key: `${key}.width`, label: `${name} width`, unit: "pt", min: 0, step: 0.25 },
+    { kind: "select", key: `${key}.dash`, label: `${name} dash`, options: DASH_OPTIONS },
+  ];
+}

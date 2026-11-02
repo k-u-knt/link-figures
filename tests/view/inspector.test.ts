@@ -1,7 +1,9 @@
-import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
-import type { FileNode, Node, Stroke } from "../../src/model/types";
+import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
+import { createShapeNodeType } from "../../src/nodes/shape-node";
+import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
@@ -29,6 +31,8 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   const registries = createRegistries();
   registries.nodeTypes.register(fileType);
   for (const paint of builtinPaintTypes) registries.paints.register(paint);
+  for (const kind of builtinShapeKinds) registries.shapes.register(kind);
+  registries.nodeTypes.register(createShapeNodeType(registries));
   const selection = new SelectionState();
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
@@ -593,3 +597,94 @@ describe("paint fields", () => {
   });
 });
 
+
+describe("shape fields", () => {
+  function shaped() {
+    const s = setup((d) => { d.nodes.push(shapeNodeDefaults(d.pages[0], { id: "p-shp" }, [])); });
+    s.selection.set(["p-shp"]);
+    return s;
+  }
+  const shapeOf = (store: DocumentStore) => store.doc.nodes[0] as ShapeNode;
+  const borderToggle = (el: FakeEl) => el.control("border");
+
+  test("a rectangle shows its corner radius in mm, stored in px", () => {
+    const { el, store } = shaped();
+    expect(el.control("params.cornerRadius").value).toBe("0");
+    el.typeInto("params.cornerRadius", "2");
+    expect(shapeOf(store).params.cornerRadius).toBeCloseTo(mmToPx(2), 1);
+    expect(el.control("params.cornerRadius").value).toBe("2");
+  });
+
+  test("turning the border off writes null and hides its fields; turning it on writes the default border", () => {
+    const { el, store, labels } = shaped();
+    const seen = labels();
+    expect(borderToggle(el).checked).toBe(true);
+    expect(keysOf(el)).toContain("border.width");
+
+    borderToggle(el).checked = false;
+    borderToggle(el).fire("change");
+    expect(shapeOf(store).border).toBeNull();
+    expect(keysOf(el).filter((k) => k.startsWith("border."))).toEqual([]);
+    expect(borderToggle(el).checked).toBe(false);
+
+    borderToggle(el).checked = true;
+    borderToggle(el).fire("change");
+    expect(shapeOf(store).border).toEqual(defaultBorder());
+    expect(keysOf(el)).toEqual(expect.arrayContaining(["border.paint.type", "border.width", "border.dash"]));
+    expect(seen).toEqual(["inspect:border", "inspect:border"]);
+
+  });
+
+  test("turning the border off is one undo step", () => {
+    const { el, store } = shaped();
+    store.commit("paint", (d) => { (d.nodes[0] as ShapeNode).border!.width = 3; });
+    borderToggle(el).checked = false;
+    borderToggle(el).fire("change");
+    store.undo();
+    expect(shapeOf(store).border).toEqual({ ...defaultBorder(), width: 3 });
+    expect(borderToggle(el).checked).toBe(true);
+    expect(el.control("border.width").value).toBe("3");
+  });
+
+  test("a border turned on twice on two shapes gives each its own copy", () => {
+    const { el, store, selection } = setup((d) => {
+      d.nodes.push(shapeNodeDefaults(d.pages[0], { id: "p-a", border: null }, []), shapeNodeDefaults(d.pages[0], { id: "p-b", border: null }, ["p-a"]));
+    });
+    selection.set(["p-a", "p-b"]);
+    borderToggle(el).checked = true;
+    borderToggle(el).fire("change");
+    const [a, b] = store.doc.nodes as ShapeNode[];
+    expect(a.border).toEqual(defaultBorder());
+    expect(a.border).not.toBe(b.border);
+  });
+
+  test("a pattern's background is a colour that may be none: a checkbox beside it turns it on and off", () => {
+    const { el, store } = shaped();
+    const fill = el.control("fill.type");
+    fill.value = "pattern";
+    fill.fire("change");
+    expect(shapeOf(store).fill).toMatchObject({ type: "pattern", bg: null });
+    const bg = el.control("fill.bg");
+    const toggle = el.find((e) => e.hasClass("lf-null-toggle"))!;
+    expect(toggle.checked).toBe(false);
+    expect(bg.disabled).toBe(true);
+
+    toggle.checked = true;
+    toggle.fire("change");
+    expect(shapeOf(store).fill.bg).toBe("#000000");
+    expect(bg.disabled).toBe(false);
+    bg.value = "#336699";
+    bg.fire("input");
+    expect(shapeOf(store).fill.bg).toBe("#336699");
+
+    toggle.checked = false;
+    toggle.fire("change");
+    expect(shapeOf(store).fill.bg).toBeNull();
+    expect(bg.disabled).toBe(true);
+    // The colour last shown stays, and comes back when the background is turned on again.
+    expect(bg.value).toBe("#336699");
+    toggle.checked = true;
+    toggle.fire("change");
+    expect(shapeOf(store).fill.bg).toBe("#336699");
+  });
+});

@@ -3,6 +3,7 @@ import { CommandRegistry } from "./command";
 import { ExporterRegistry } from "./exporter";
 import { NodeTypeRegistry } from "./node-type";
 import { PaintRegistry } from "./paint";
+import { ShapeKindRegistry } from "./shape-kind";
 
 export interface Registries {
   commands: CommandRegistry;
@@ -10,6 +11,7 @@ export interface Registries {
   exporters: ExporterRegistry;
   adjustments: AdjustmentRegistry;
   paints: PaintRegistry;
+  shapes: ShapeKindRegistry;
 }
 
 export function createRegistries(): Registries {
@@ -19,5 +21,6 @@ export function createRegistries(): Registries {
     exporters: new ExporterRegistry(),
     adjustments: new AdjustmentRegistry(),
     paints: new PaintRegistry(),
+    shapes: new ShapeKindRegistry(),
   };
 }

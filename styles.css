@@ -105,6 +105,54 @@
   color: var(--text-faint);
 }
 
+/* A field made of other fields (a paint, a gradient's stops): its label on a line, its rows indented beneath. */
+.lf-field-group {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--size-4-1);
+}
+
+.lf-field-group > .lf-field-label {
+  flex: none;
+}
+
+.lf-field-group > .lf-field-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--size-4-1);
+  padding-left: var(--size-4-2);
+  border-left: 1px solid var(--background-modifier-border);
+}
+
+.lf-field-group .lf-field {
+  margin-bottom: 0;
+}
+
+/* One gradient stop: its offset, colour and opacity rows, and its remove button. */
+.lf-stop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding-bottom: var(--size-4-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.lf-stop-remove {
+  align-self: flex-end;
+  font-size: var(--font-ui-smaller);
+}
+
+.lf-stop-add {
+  align-self: flex-start;
+  font-size: var(--font-ui-smaller);
+}
+
+/* The checkbox beside a colour that may be none (a pattern's background). */
+.lf-field-control .lf-null-toggle {
+  flex: none;
+  margin: 0;
+}
+
 /* The stage with the inspector beside it. */
 .lf-main {
   flex: 1;
@@ -235,6 +283,15 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
+}
+
+/* A shape draws its outline in an SVG over its box; a border wider than the box shows outside it. */
+.lf-shape > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 /* The picture is placed by script (crop and fit), not by object-fit: the frame at the crop's region, the image inside it. */

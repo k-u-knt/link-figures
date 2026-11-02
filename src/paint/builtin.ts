@@ -176,7 +176,7 @@ export const patternPaint: PaintType = {
       ],
     },
     { kind: "color", key: "fg", label: "Color" },
-    { kind: "color", key: "bg", label: "Background" },
+    { kind: "color", key: "bg", label: "Background", nullable: true },
     { kind: "number", key: "scale", label: "Scale", min: 0.1, step: 0.1 },
     { kind: "number", key: "angle", label: "Angle (°)", step: 1 },
   ],

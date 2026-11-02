@@ -100,8 +100,20 @@ export interface TextNode extends NodeBase {
   font: Font;
 }
 
-/** M2 widens this union. */
-export type Node = FileNode | TextNode;
+/**
+ * A drawn shape: `kind` is a registered shape kind's id (an unknown one is kept as it is) and `params` that kind's own
+ * attributes (a rectangle's `cornerRadius`, in px). `fill` paints the inside (`{ type: "none" }` for none) and `border`
+ * the edge (null for none).
+ */
+export interface ShapeNode extends NodeBase {
+  type: "shape";
+  kind: string;
+  params: Record<string, unknown>;
+  fill: Paint;
+  border: Stroke | null;
+}
+
+export type Node = FileNode | TextNode | ShapeNode;
 
 export interface Document {
   version: 1;

@@ -1,7 +1,7 @@
 import { DEFAULT_FONT, MM_TO_PX } from "../constants";
 import { mmToPx } from "./geometry";
 import { getPreset } from "./presets";
-import type { Document, FileNode, Page, TextNode } from "./types";
+import type { Document, FileNode, Page, ShapeNode, Stroke, TextNode } from "./types";
 
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const ID_LENGTH = 4;
@@ -83,6 +83,33 @@ export function textNodeDefaults(page: Page, partial: Partial<TextNode>, existin
     locked: false,
     text: "Text",
     font: { ...DEFAULT_FONT },
+    ...partial,
+  };
+}
+
+/** The border a shape starts with, and gets back when its border is turned on: 1 pt solid black. */
+export function defaultBorder(): Stroke {
+  return { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid" };
+}
+
+/** A 30 × 20 mm rectangle, filled white, with the default border. */
+export function shapeNodeDefaults(page: Page, partial: Partial<ShapeNode>, existingIds: Iterable<string>): ShapeNode {
+  return {
+    id: newId("p", existingIds),
+    type: "shape",
+    page: page.id,
+    x: 0,
+    y: 0,
+    width: mmToPx(30),
+    height: mmToPx(20),
+    z: 0,
+    rotation: 0,
+    opacity: 1,
+    locked: false,
+    kind: "rect",
+    params: { cornerRadius: 0 },
+    fill: { type: "solid", color: "#ffffff" },
+    border: defaultBorder(),
     ...partial,
   };
 }

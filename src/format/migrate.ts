@@ -1,4 +1,5 @@
 import { DEFAULT_FONT, FORMAT_VERSION } from "../constants";
+import { defaultBorder } from "../model/defaults";
 import type { Document } from "../model/types";
 import { FormatError } from "./errors";
 
@@ -7,7 +8,10 @@ type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** Same values as `fileNodeDefaults` / `textNodeDefaults` in model/defaults.ts (a test keeps them in step). */
+/**
+ * Same values as `fileNodeDefaults` / `textNodeDefaults` / `shapeNodeDefaults` in model/defaults.ts (tests keep them in
+ * step), except that a shape with no `params` gets none: they belong to its kind, which may not be the default one.
+ */
 const COMMON_DEFAULTS = (): Json => ({ z: 0, rotation: 0, opacity: 1, locked: false });
 const NODE_DEFAULTS: Record<string, () => Json> = {
   file: () => ({
@@ -25,6 +29,7 @@ const NODE_DEFAULTS: Record<string, () => Json> = {
     adjustments: [],
   }),
   text: () => ({ ...COMMON_DEFAULTS(), text: "", font: { ...DEFAULT_FONT } }),
+  shape: () => ({ ...COMMON_DEFAULTS(), kind: "rect", params: {}, fill: { type: "solid", color: "#ffffff" }, border: defaultBorder() }),
 };
 
 /** Keeps every key already in `source` (so unknown keys survive) and adds the missing ones from `defaults`. */
@@ -64,8 +69,8 @@ function migrateAdjustments(nodeId: string, raw: unknown): Json[] {
 
 /**
  * A stroke in the current form: an old `{ color, opacity?, … }` becomes `{ paint: { type: "solid", color, opacity? }, … }`
- * (its other keys, cap and join among them, kept), a missing width or dash reads as 1 pt solid. The paint needs a
- * string `type`; one this plugin does not know is kept as it is.
+ * (its other keys, cap and join among them, kept), one with neither a paint nor a colour is solid black, and a missing
+ * width or dash reads as 1 pt solid. The paint needs a string `type`; one this plugin does not know is kept as it is.
  */
 export function migrateStroke(nodeId: string, key: string, raw: unknown): Json {
   const bad = () => new FormatError(`Node ${nodeId}: "${key}" must be null or a stroke { paint: { type, … }, width, dash }`);
@@ -74,6 +79,8 @@ export function migrateStroke(nodeId: string, key: string, raw: unknown): Json {
   if (stroke.paint === undefined && typeof stroke.color === "string") {
     const { color, opacity, ...rest } = stroke;
     stroke = { paint: { type: "solid", color, ...(opacity !== undefined ? { opacity } : {}) }, ...rest };
+  } else if (stroke.paint === undefined && stroke.color === undefined) {
+    stroke = { paint: { type: "solid", color: "#000000" }, ...stroke };
   }
   if (!isRecord(stroke.paint) || typeof stroke.paint.type !== "string") throw bad();
   return fill(stroke, { width: 1, dash: "solid" });
@@ -97,6 +104,12 @@ function migrateNode(raw: unknown, index: number): Json {
   if (type === "text") {
     if (!isRecord(node.font)) throw new FormatError(`Node ${id}: "font" must be an object`);
     node.font = { ...DEFAULT_FONT, ...node.font };
+  }
+  if (type === "shape") {
+    if (typeof node.kind !== "string") throw new FormatError(`Node ${id}: "kind" must be a string`);
+    if (!isRecord(node.params)) throw new FormatError(`Node ${id}: "params" must be an object`);
+    if (!isRecord(node.fill) || typeof node.fill.type !== "string") throw new FormatError(`Node ${id}: "fill" must be a paint { type, … }`);
+    if (node.border !== null) node.border = migrateStroke(id, "border", node.border);
   }
   return node;
 }

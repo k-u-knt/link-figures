@@ -111,14 +111,14 @@ class ShapeNodeRenderer implements NodeRenderer {
   }
 }
 
+/** What `node.update` checks of a shape's own fields. */
+const SHAPE_FIELDS: ParamSpec = { kind: { type: "string" }, params: { type: "object" }, fill: { type: "paint" }, border: { type: "stroke", nullable: true } };
+
 /**
  * A drawn shape, of any registered kind, filled and bordered with any registered paint (both found through the
  * context's registries). Its inspector is the kind's own fields (under `params.`), the fill, a Border toggle (off is
  * `border: null`, on is the default border) and, while there is a border, the border's paint, width and dashes.
  */
-/** What `node.update` checks of a shape's own fields. */
-const SHAPE_FIELDS: ParamSpec = { kind: { type: "string" }, params: { type: "object" }, fill: { type: "paint" }, border: { type: "stroke", nullable: true } };
-
 export const shapeNodeType: NodeType<ShapeNode> = {
   type: "shape",
   name: "Shape",

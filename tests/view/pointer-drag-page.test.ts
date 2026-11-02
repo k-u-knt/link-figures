@@ -75,10 +75,12 @@ function setup(build: (doc: Document) => void) {
   const controller = new PointerController(view as never);
   view.store = new DocumentStore(doc, () => controller.commitTime());
   controller.attach(stage as never);
-  const pointer = (type: "pointerdown" | "pointermove" | "pointerup", clientX: number, clientY: number, extra: object = {}) =>
+  const pointer = (type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", clientX: number, clientY: number, extra: object = {}) =>
     stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, clientX, clientY, target: {}, ...extra });
   const nodeOf = (id: string) => view.store.doc.nodes.find((n) => n.id === id)!;
-  return { doc, view, pointer, nodeOf };
+  const key = (name: string) =>
+    stage.fire("keydown", { key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false, target: {}, preventDefault: () => {} });
+  return { doc, view, pointer, nodeOf, key };
 }
 
 const PAGE2_Y = mmToPx(297 + PAGE_GAP_MM);
@@ -151,4 +153,31 @@ test("nodes landing on different pages narrow the selection to the first one's p
   expect(nodeOf("p-a").page).toBe(doc.pages[0].id);
   expect(nodeOf("p-b").page).toBe(doc.pages[1].id);
   expect(view.selection.ids).toEqual(["p-a"]);
+});
+
+test("a quick drag and a nudge straight after it are two undo steps", () => {
+  const { view, pointer, nodeOf, key } = setup((d) => { file(d, { id: "p-a" }); });
+  pointer("pointerdown", 50, 30);
+  pointer("pointermove", 60, 40);
+  pointer("pointerup", 60, 40);
+  const dragged = { x: nodeOf("p-a").x, y: nodeOf("p-a").y };
+  expect(dragged).toEqual({ x: 20, y: 30 });
+  key("ArrowRight");
+  expect(nodeOf("p-a").x).toBeGreaterThan(20);
+  view.store.undo();
+  expect(nodeOf("p-a")).toMatchObject(dragged);
+  view.store.undo();
+  expect(nodeOf("p-a")).toMatchObject({ x: 10, y: 20 });
+});
+
+test("a cancelled drag closes its undo step: what follows is a step of its own", () => {
+  const { view, pointer, nodeOf, key } = setup((d) => { file(d, { id: "p-a" }); });
+  pointer("pointerdown", 50, 30);
+  pointer("pointermove", 60, 40);
+  pointer("pointercancel", 60, 40);
+  key("ArrowDown");
+  view.store.undo();
+  expect(nodeOf("p-a")).toMatchObject({ x: 20, y: 30 });
+  view.store.undo();
+  expect(nodeOf("p-a")).toMatchObject({ x: 10, y: 20 });
 });

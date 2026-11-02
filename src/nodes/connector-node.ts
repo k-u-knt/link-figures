@@ -130,13 +130,6 @@ const SNAP_OPTIONS = [
   { value: "center", label: "Centre" },
 ];
 
-/**
- * A line between two ends, each free or attached to an item, drawn by any registered route and capped by any registered
- * cap kinds (all found through the context's registries). Its box is the area it draws and it is never rotated: the
- * store's connector normaliser keeps both so, which is why the inspector offers neither. Its inspector is the route, the
- * route's own fields (under `routeParams.`), the line's stroke, each cap's kind and size, and each attached end's snap.
- * A connector cannot be attached to.
- */
 /** What `node.update` checks of a connector's own fields, besides its ends and caps (two of each). */
 const CONNECTOR_FIELDS: ParamSpec = { route: { type: "string" }, routeParams: { type: "object" }, stroke: { type: "stroke" } };
 
@@ -184,6 +177,13 @@ function moveEnd(end: End, dx: number, dy: number): End {
   return end.kind === "free" ? { kind: "free", x: roundPx(end.x + dx), y: roundPx(end.y + dy) } : end;
 }
 
+/**
+ * A line between two ends, each free or attached to an item, drawn by any registered route and capped by any registered
+ * cap kinds (all found through the context's registries). Its box is the area it draws and it is never rotated: the
+ * store's connector normaliser keeps both so, which is why the inspector offers neither. Its inspector is the route, the
+ * route's own fields (under `routeParams.`), the line's stroke, each cap's kind and size, and each attached end's snap.
+ * A connector cannot be attached to.
+ */
 export const connectorNodeType: NodeType<ConnectorNode> = {
   type: "connector",
   name: "Connector",

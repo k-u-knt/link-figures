@@ -1,3 +1,4 @@
+import { MIN_NODE_PX } from "../constants";
 import { rectContainsPt, rectIntersects, type Pt, type Rect } from "../model/geometry";
 import type { NodeId } from "../model/types";
 
@@ -148,4 +149,12 @@ export function handleAt(rect: Rect, p: Pt, tolerance: number): Handle | null {
 /** To hundredths of a pixel, so positions written to the file by a drag do not trail digits. */
 export function roundPx(v: number): number {
   return Math.round(v * 100) / 100;
+}
+
+/**
+ * A node's width or height kept to the least a node may have (`MIN_NODE_PX`, a millimetre): what a resize by a handle
+ * and `node.update` both keep, so the two give the same sizes.
+ */
+export function nodeSizePx(px: number): number {
+  return Math.max(MIN_NODE_PX, px);
 }

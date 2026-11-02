@@ -459,7 +459,6 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.renderChrome();
   }
 
-
   /** The natural size of the image a node shows (waiting for it to load); rejects for a node that shows no image. */
   imageSize(id: NodeId): Promise<{ width: number; height: number }> {
     return this.nodeHost.naturalSize(id);

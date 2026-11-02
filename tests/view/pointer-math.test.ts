@@ -1,4 +1,5 @@
-import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
+import { MIN_NODE_PX } from "../../src/constants";
+import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, nodeSizePx, rectFromPoints, resizeRect, roundPx } from "../../src/view/pointer-math";
 
 const r = { x: 10, y: 10, width: 100, height: 50 };
 test("se handle grows width and height", () => expect(resizeRect(r, "se", 20, 10, { keepAspect: false, min: 1 })).toEqual({ x: 10, y: 10, width: 120, height: 60 }));
@@ -231,4 +232,8 @@ test("hitAll lists everything under the point, topmost first", () => {
   ];
   expect(hitAll(items, { x: 20, y: 20 })).toEqual(["later-page", "high", "tie", "low"]);
   expect(hitAll(items, { x: 0, y: 0 })).toEqual([]);
+});
+
+test("a node's size is kept to a millimetre at least", () => {
+  expect([nodeSizePx(0), nodeSizePx(MIN_NODE_PX / 2), nodeSizePx(40)]).toEqual([MIN_NODE_PX, MIN_NODE_PX, 40]);
 });

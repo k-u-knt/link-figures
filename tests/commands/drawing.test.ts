@@ -1,4 +1,5 @@
 import { createApi, type OpenFigure } from "../../src/api";
+import { MIN_NODE_PX } from "../../src/constants";
 import { drawingCommands } from "../../src/commands/drawing";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
@@ -134,6 +135,7 @@ describe("shape.create", () => {
   test.each([
     ["an unknown kind", { page: "pg-1", kind: "x.star", x: 0, y: 0, width: 1, height: 1 }, /no shape kind "x.star"/],
     ["an id the figure has", { id: "t", page: "pg-1", x: 0, y: 0, width: 1, height: 1 }, /already has a node "t"/],
+    ["an empty id", { id: "", page: "pg-1", x: 0, y: 0, width: 1, height: 1 }, /"id" must not be empty/],
     ["no page, headless", { x: 0, y: 0, width: 1, height: 1 }, /needs "page"/],
     ["an unknown page", { page: "pg-9", x: 0, y: 0, width: 1, height: 1 }, /no page "pg-9"/],
     ["a negative width", { page: "pg-1", x: 0, y: 0, width: -1, height: 1 }, /may not be negative/],
@@ -268,6 +270,17 @@ describe("node.update", () => {
     // Given params are kept.
     await api.run(PATH, "node.update", { id: "c", patch: { route: "orthogonal", routeParams: { offset: 0.2 } } });
     expect((await nodeOf<ConnectorNode>(doc(), "c")).routeParams).toEqual({ offset: 0.2 });
+  });
+
+  test("a width or height under a millimetre is a millimetre, as a resize by a handle keeps it; a connector's box stays its own", async () => {
+    const { api, doc } = await withShapeAndConnector();
+    await api.run(PATH, "node.update", { id: "s", patch: { width: 0, height: 0.5 } });
+    expect(await nodeOf<ShapeNode>(doc(), "s")).toMatchObject({ width: MIN_NODE_PX, height: MIN_NODE_PX });
+    await api.run(PATH, "node.update", { id: "s", patch: { width: 40 } });
+    expect((await nodeOf<ShapeNode>(doc(), "s")).width).toBe(40);
+    const c = await nodeOf<ConnectorNode>(doc(), "c");
+    await api.run(PATH, "node.update", { id: "c", patch: { height: 0 } });
+    expect((await nodeOf<ConnectorNode>(doc(), "c")).height).toBe(c.height);
   });
 
   test("an end snapped to an anchor without naming one takes the anchor nearest where it is drawn", async () => {

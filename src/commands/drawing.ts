@@ -6,7 +6,7 @@ import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Pai
 import type { Registries } from "../registry";
 import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/params";
-import { dragRect, roundPx } from "../view/pointer-math";
+import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
 import { writePageField } from "../view/page-fields";
 import { editor, targetIds, targetPage, whenCommitted } from "./builtin";
 
@@ -47,7 +47,8 @@ function creationPage(ctx: CommandContext, command: string, args: { page?: unkno
 /** The caller's `id` for a new node, when it gave one; an id the figure already has is an error. */
 function newNodeId(ctx: CommandContext, command: string, id: unknown): string | undefined {
   if (id === undefined) return undefined;
-  if (id === "" || ctx.store.doc.nodes.some((n) => n.id === id)) throw new CommandError(`${command}: the figure already has a node "${String(id)}"`);
+  if (id === "") throw new CommandError(`${command}: "id" must not be empty`);
+  if (ctx.store.doc.nodes.some((n) => n.id === id)) throw new CommandError(`${command}: the figure already has a node "${String(id)}"`);
   return id as string;
 }
 
@@ -198,7 +199,8 @@ const BASE_FIELDS: ParamSpec = {
 
 /**
  * Changes node `id` by `patch`, a part of the node in its JSON form (`{ fill: { color: "#ff0000" } }`), merged into it
- * (see `mergePatch`). Its `id` and `type` cannot change; an empty `name` removes the name. The node's type then adds what
+ * (see `mergePatch`). Its `id` and `type` cannot change; an empty `name` removes the name; a width or height under a
+ * millimetre is a millimetre (`nodeSizePx`), as a resize by a handle keeps it. The node's type then adds what
  * the change brings with it (`completeUpdate`), and every field that changed is checked (the base fields here, the
  * type's own by `checkField`); keys that neither knows are kept, as the file format keeps them. A locked node is changed
  * too: naming it is explicit.
@@ -217,6 +219,13 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
   const type = ctx.registries.nodeTypes.get(node.type);
   const updateCtx = { registries: ctx.registries, doc: ctx.store.doc };
+  // A size the patch gives is kept to the least a node may have, as a resize by a handle keeps it; one that is not a
+  // size at all (negative, not a number) is left for the checks below to refuse. A type's derived size is its own.
+  const derived = new Set(type?.derivedFields ?? []);
+  for (const key of ["width", "height"]) {
+    const value = after[key];
+    if (key in patch && !derived.has(key) && typeof value === "number" && value >= 0) after[key] = nodeSizePx(value);
+  }
   if (type?.completeUpdate) after = type.completeUpdate(node, after as unknown as Node, patch, updateCtx) as unknown as Record<string, unknown>;
   // A value the patch gives again as it is, is no change: the commit stays as small as what actually changes.
   const changed = Object.keys(after).filter((key) => !sameValue(after[key], before[key]));

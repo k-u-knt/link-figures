@@ -6,7 +6,7 @@ import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { DragTargets, ToolPreview } from "../registry/command";
 import type { HandleDrag, InteractionContext, NodeType } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
-import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
+import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, nodeSizePx, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
 import { pagePointAt, pageWorldRect } from "./viewport";
 
 /** Screen pixels a press has to travel before it is a drag; a click that wobbles is still a click. */
@@ -346,8 +346,8 @@ export class PointerController {
       node.x = roundPx(next.x);
       node.y = roundPx(next.y);
       // Rounding must not take a size back under the least it may be.
-      node.width = Math.max(MIN_NODE_PX, roundPx(next.width));
-      node.height = Math.max(MIN_NODE_PX, roundPx(next.height));
+      node.width = nodeSizePx(roundPx(next.width));
+      node.height = nodeSizePx(roundPx(next.height));
     });
   }
 
@@ -560,13 +560,17 @@ export class PointerController {
     if (g.kind !== "idle" && ev.pointerId === g.pointerId) this.endGesture();
   }
 
-  /** Back to idle, with the pointer released and the marquee gone. Safe to call at any time. */
+  /**
+   * Back to idle, with the pointer released and the marquee gone, and the gesture's undo step closed: whatever is done
+   * next (a nudge straight after a drag, say) is a step of its own, even under the same label. Safe to call at any time.
+   */
   private endGesture(): void {
     const g = this.gesture;
     // First, so the capture event that the release below causes finds nothing to end.
     this.gesture = { kind: "idle" };
     this.dragStartedAt = null;
     if (g.kind === "idle") return;
+    this.store.endMerge();
     if (g.kind === "marquee" || g.kind === "drawing" || g.kind === "handling") g.el?.remove();
     try {
       if (this.stage?.hasPointerCapture(g.pointerId)) this.stage.releasePointerCapture(g.pointerId);

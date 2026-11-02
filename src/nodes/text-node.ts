@@ -177,7 +177,6 @@ class TextNodeRenderer implements NodeRenderer {
   }
 }
 
-/** A label: text set in one font, for the letters and captions of a figure. */
 /** What `node.update` checks of a text node's own fields. */
 const TEXT_FIELDS: ParamSpec = {
   text: { type: "string" },
@@ -195,6 +194,7 @@ const TEXT_FIELDS: ParamSpec = {
   },
 };
 
+/** A label: text set in one font, for the letters and captions of a figure. */
 export const textNodeType: NodeType<TextNode> = {
   type: "text",
   name: "Text",

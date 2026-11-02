@@ -5,13 +5,14 @@ import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } fr
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
 import type { Registries } from "../registry";
 import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
-import { isCap, paramError, type ParamSpec } from "../registry/params";
+import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/params";
 import { dragRect, roundPx } from "../view/pointer-math";
-import { targetIds, targetPage, whenCommitted } from "./builtin";
+import { writePageField } from "../view/page-fields";
+import { editor, targetIds, targetPage, whenCommitted } from "./builtin";
 
 /**
- * The commands that draw: create shapes and connectors, change any node's attributes, move a connector's end, and run a
- * shape operation. They take JSON arguments and are what the drawing tools, the inspector and scripts all run, so the
+ * The commands that draw: create shapes and connectors, change any node's or page's attributes, move a connector's end,
+ * and run a shape operation. They take JSON arguments and are what the drawing tools, the inspector and scripts all run, so the
  * three make the same documents. None is a toolbar button (`hidden`): each needs arguments to mean anything. The shape
  * tools (Rectangle, Ellipse) are the toolbar's way to them: each runs `shape.create`.
  */
@@ -234,6 +235,66 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     }
   });
   return { id: node.id };
+}
+
+/** What `page.update` checks of a page's fields. Sizes and margins are millimetres. */
+const PAGE_FIELDS: ParamSpec = {
+  name: { type: "string" },
+  preset: { type: "string" },
+  width: { type: "number", exclusiveMinimum: 0 },
+  height: { type: "number", exclusiveMinimum: 0 },
+  paper: { type: "string", pattern: COLOR_PATTERN },
+  margins: {
+    type: "object",
+    properties: {
+      top: { type: "number", minimum: 0 },
+      right: { type: "number", minimum: 0 },
+      bottom: { type: "number", minimum: 0 },
+      left: { type: "number", minimum: 0 },
+    },
+  },
+  grid: { type: "object", properties: { spacing: { type: "number", exclusiveMinimum: 0 }, show: { type: "boolean" } } },
+};
+
+/** The fields whose writing `writePageField` settles: a preset sets the size, and a size that is not the preset's makes the page custom. */
+const SIZE_KEYS = ["preset", "width", "height"];
+
+/**
+ * Changes page `id` by `patch`, merged into it as `node.update` merges (`{ margins: { left: 15 } }`). Its `id` cannot
+ * change; keys it does not know are kept, as the file format keeps them. A `preset` sets the size to the preset's (and
+ * is applied before a `width` or `height` the same patch gives); a width or height that is then not the preset's makes
+ * the page custom. With the figure open, a width or height over the Maximum page size setting is cut down to it and the
+ * view says so, as the inspector's edits are; headless it is not cut, as `add-page` does not cut.
+ */
+function updatePage(ctx: CommandContext, args: { id: string; patch: Record<string, unknown> }): { id: PageId } {
+  const command = "page.update";
+  const { patch } = args;
+  const page = ctx.store.doc.pages.find((p) => p.id === args.id);
+  if (!page) throw new CommandError(`${command}: there is no page "${args.id}"`);
+  checkPlain(command, "patch", patch);
+  if ("id" in patch && patch.id !== page.id) throw new CommandError(`${command}: a page's "id" cannot change`);
+  const before = page as unknown as Record<string, unknown>;
+  const after: Record<string, unknown> = { ...before };
+  for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
+  const changed = Object.keys(after).filter((key) => !sameValue(after[key], before[key]));
+  for (const key of changed) {
+    const error = Object.hasOwn(PAGE_FIELDS, key) ? paramError(key, PAGE_FIELDS[key], after[key]) : null;
+    if (error !== null) throw new CommandError(`${command}: ${error}`);
+  }
+  const limit = ctx.view ? editor(ctx).pageLimitMm() : Infinity;
+  // The preset first, so a size given with it is the one the page keeps.
+  const ordered = [...SIZE_KEYS.filter((key) => changed.includes(key)), ...changed.filter((key) => !SIZE_KEYS.includes(key))];
+  let clamped = false;
+  ctx.store.commit(command, (draft) => {
+    const target = draft.pages.find((p) => p.id === page.id);
+    if (!target) return;
+    for (const key of ordered) {
+      if (SIZE_KEYS.includes(key)) clamped = writePageField(target, key, after[key], limit) || clamped;
+      else (target as unknown as Record<string, unknown>)[key] = after[key];
+    }
+  });
+  if (clamped) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
+  return { id: page.id };
 }
 
 /** Sets end `which` (0 the start, 1 the end) of connector `id` to `end`: attaches it, moves it to another item, or frees it. */
@@ -552,6 +613,16 @@ export function drawingCommands(): Command[] {
       params: { id: { type: "string", required: true }, patch: { type: "object", required: true } },
       applies: always,
       run: (ctx, args) => updateNode(ctx, args as { id: string; patch: Record<string, unknown> }),
+    },
+    {
+      id: "page.update",
+      name: "Update page",
+      icon: "file-cog",
+      group: "page",
+      hidden: true,
+      params: { id: { type: "string", required: true }, patch: { type: "object", required: true } },
+      applies: always,
+      run: (ctx, args) => updatePage(ctx, args as { id: string; patch: Record<string, unknown> }),
     },
     {
       id: "connector.setEnd",

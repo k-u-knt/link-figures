@@ -1,13 +1,12 @@
 import { prepareCall, runInOneCommit, type PreparedCall } from "../commands/headless";
-import { DEFAULT_PAGE_LIMIT_MM } from "../constants";
 import { mmToPx, pxToMm } from "../model/geometry";
-import type { Node, NodeId, Paint } from "../model/types";
+import type { Node, NodeId, Page, Paint } from "../model/types";
 import { getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
 import type { Registries } from "../registry";
 import type { LinkFiguresView } from "./figure-view";
-import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writePageField, writeValue } from "./page-fields";
+import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writeValue } from "./page-fields";
 import { roundPx } from "./pointer-math";
 
 /** Numbers are shown to hundredths: a node's millimetres come from pixels and would otherwise trail digits. */
@@ -306,7 +305,8 @@ interface Section {
  * with nodes selected it shows the first one's fields (the base fields and its node type's), and writes go to every
  * selected node. A node's write runs the `node.update` command for each node it changes, all in one commit labelled
  * `inspect:<key>`, so a run of edits to one field is one undo step, and the inspector makes the same documents as a
- * script that sends the same patches; a write the command refuses is shown as a notice and changes nothing. A page's write is a commit labelled `inspect:<key>` too.
+ * script that sends the same patches; a write the command refuses is shown as a notice and changes nothing. A page's
+ * write runs `page.update` the same way (which cuts a size down to the page limit and says so).
  * Values are shown as the user thinks of them: a node's position and size in millimetres, though it stores pixels.
  */
 export class Inspector {
@@ -314,14 +314,10 @@ export class Inspector {
   /** A change of section is waiting for the control being typed into to lose the focus. */
   private pending = false;
 
-  /**
-   * `onPageLimit` is told the limit when a page edit had to be cut down to it, and `onWriteFailed` what went wrong when
-   * a write was refused (the view shows both as notices).
-   */
+  /** `onWriteFailed` is told what went wrong when a write was refused (the view shows it as a notice). */
   constructor(
     private readonly view: LinkFiguresView,
     private readonly el: HTMLElement,
-    private readonly onPageLimit: (limitMm: number) => void = () => {},
     private readonly onWriteFailed: (message: string) => void = () => {},
   ) {
     // `change` has committed the field's write by the time the focus leaves it, so the section that was held back is then drawn.
@@ -395,11 +391,12 @@ export class Inspector {
     if (!page) return null;
     const id = page.id;
     const live = () => this.view.store.doc.pages.find((p) => p.id === id);
+    const fields = pageFields();
     return {
       title: "Page",
       subtitle: page.name,
       signature: `page:${id}:${page.name}`,
-      fields: pageFields(),
+      fields,
       read: (key) => {
         const current = live();
         if (!current) return undefined;
@@ -408,13 +405,10 @@ export class Inspector {
         return readValue(current, key);
       },
       write: (key, value) => {
-        const limit = this.view.plugin.settings?.maxPageSizeMm ?? DEFAULT_PAGE_LIMIT_MM;
-        let clamped = false;
-        this.view.store.commit(`inspect:${key}`, (draft) => {
-          const target = draft.pages.find((p) => p.id === id);
-          if (target) clamped = writePageField(target, key, value, limit);
-        });
-        if (clamped) this.onPageLimit(limit);
+        const current = live();
+        if (!current) return;
+        const call = prepareCall(this.view.plugin.registries, { id: "page.update", args: { id, patch: patchFor(current, key, value) } });
+        this.runWrite(key, fields, [call]);
       },
     };
   }
@@ -470,16 +464,17 @@ export class Inspector {
 }
 
 /**
- * The `node.update` patch that sets `key` (a dotted path, `border.width`, `caps.0.kind`) of `node` to `value`: the whole
- * top-level field with that one value changed, so a list (the caps, a gradient's stops) is written whole, as `node.update`
- * writes lists. An empty `name` is passed on as it is: `node.update` removes the name.
+ * The `node.update` (or `page.update`) patch that sets `key` (a dotted path, `border.width`, `caps.0.kind`) of `target`,
+ * a node or a page, to `value`: the whole top-level field with that one value changed, so a list (the caps, a gradient's
+ * stops) is written whole, as the update commands write lists. An empty `name` is passed on as it is: `node.update`
+ * removes the name.
  */
-export function patchFor(node: Node, key: string, value: unknown): Record<string, unknown> {
+export function patchFor(target: Node | Page, key: string, value: unknown): Record<string, unknown> {
   const copy = (v: unknown): unknown => (typeof v === "object" && v !== null ? structuredClone(v) : v);
   const dot = key.indexOf(".");
   if (dot === -1) return { [key]: copy(value) };
   const top = key.slice(0, dot);
-  const field = copy((node as unknown as Record<string, unknown>)[top]) as object;
+  const field = copy((target as unknown as Record<string, unknown>)[top]) as object;
   writeValue(field, key.slice(dot + 1), copy(value));
   return { [top]: field };
 }

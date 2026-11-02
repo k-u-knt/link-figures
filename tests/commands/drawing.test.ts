@@ -302,6 +302,55 @@ describe("node.update", () => {
   });
 });
 
+describe("page.update", () => {
+  const pageOf = async (doc: Promise<Document>) => (await doc).pages[0];
+
+  test("merges the patch into the page, keeping unknown keys; a preset sets the size, and a size of its own makes it custom", async () => {
+    const { api, doc } = setup();
+    expect(await api.run(PATH, "page.update", { id: "pg-1", patch: { name: "Main", margins: { left: 15 }, futureKey: 1 } })).toEqual({ id: "pg-1" });
+    expect(await pageOf(doc())).toMatchObject({ name: "Main", margins: { top: 0, right: 0, bottom: 0, left: 15 }, futureKey: 1 });
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { preset: "nature-double" } });
+    expect(await pageOf(doc())).toMatchObject({ preset: "nature-double", width: 183, height: 170 });
+    // The preset first, then the size given with it: the page is that size, and custom.
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { height: 100, preset: "a4-portrait" } });
+    expect(await pageOf(doc())).toMatchObject({ preset: "custom", width: 210, height: 100 });
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { grid: { show: true } } });
+    expect((await pageOf(doc())).grid).toEqual({ spacing: 5, show: true });
+  });
+
+  test("in an open view it is one undo step, and a size over the page limit is cut down to it and said", async () => {
+    const { api, view } = setup({ open: true });
+    const store = view!.store;
+    const limits: number[] = [];
+    const ctx = view!.commandContext;
+    view!.commandContext = () => {
+      const c = ctx();
+      return { ...c, view: { ...c.view!, pageLimitMm: () => 1000, notePageLimit: (mm: number) => void limits.push(mm) } as never };
+    };
+    const before = store.doc;
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { width: 1500, paper: "#eeeeee" } });
+    expect(store.doc.pages[0]).toMatchObject({ width: 1000, paper: "#eeeeee", preset: "custom" });
+    expect(limits).toEqual([1000]);
+    store.undo();
+    expect(store.doc).toEqual(before);
+  });
+
+  test.each([
+    ["a missing page", { id: "pg-9", patch: {} }, /no page "pg-9"/],
+    ["a new id", { id: "pg-1", patch: { id: "pg-2" } }, /"id" cannot change/],
+    ["a width of 0", { id: "pg-1", patch: { width: 0 } }, /"width" must be more than 0/],
+    ["a paper that is not #rrggbb", { id: "pg-1", patch: { paper: "red" } }, /"paper" must match/],
+    ["a negative margin", { id: "pg-1", patch: { margins: { top: -1 } } }, /"margins.top" must be at least 0/],
+    ["a grid without spacing", { id: "pg-1", patch: { grid: { spacing: 0 } } }, /"grid.spacing" must be more than 0/],
+    ["a name that is not a string", { id: "pg-1", patch: { name: 3 } }, /"name" must be a string/],
+  ])("%s is an error that changes nothing", async (_name, args, message) => {
+    const { api, saved } = setup();
+    const before = saved();
+    await expect(api.run(PATH, "page.update", args)).rejects.toThrow(message);
+    expect(saved()).toEqual(before);
+  });
+});
+
 describe("connector.setEnd", () => {
   test("attaches an end, then frees it", async () => {
     const { api, doc } = setup();

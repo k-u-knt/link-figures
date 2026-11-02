@@ -32,7 +32,7 @@ export interface EditorView extends FigureViewLike {
 }
 
 /** The view a `needsView` command acts on; the API refuses such a command headless, so this only guards against a slip. */
-function editor(ctx: CommandContext): EditorView {
+export function editor(ctx: CommandContext): EditorView {
   if (!ctx.view) throw new CommandError("this command needs the figure to be open");
   return ctx.view as EditorView;
 }

@@ -1,5 +1,6 @@
 import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
+import { DEFAULT_PAGE_LIMIT_MM } from "../../src/constants";
 import { createFigureStore } from "../../src/model/normalise";
 import { DocumentStore } from "../../src/model/store";
 import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
@@ -50,6 +51,7 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   // The inspector's node writes run the node.update command.
   for (const command of drawingCommands()) registries.commands.register(command);
   const selection = new SelectionState();
+  const pageLimits: number[] = [];
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
   const view = {
     readOnly: false,
@@ -59,17 +61,20 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
     pageIndex: 0,
     currentPage: () => store.doc.pages[view.pageIndex],
     focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[view.pageIndex])!,
+    // What page.update asks of the view: the Maximum page size setting, and to say when a size was cut down to it.
+    pageLimitMm: (): number => (view.plugin as { settings?: { maxPageSizeMm: number } }).settings?.maxPageSizeMm ?? DEFAULT_PAGE_LIMIT_MM,
+    notePageLimit: (limitMm: number) => void pageLimits.push(limitMm),
     commandContext: () => ({ app: {} as never, registries, view, store, selection: selection.ids, page: view.focusPage() }),
   };
   const el = new FakeEl("div");
   // What the view shows as notices.
   const notices: string[] = [];
-  const inspector = new Inspector(view as never, el as never, undefined, (message) => notices.push(message));
+  const inspector = new Inspector(view as never, el as never, (message) => notices.push(message));
   // What the figure view does: render on every store change and every selection change.
   store.subscribe(() => inspector.render());
   selection.onChange(() => inspector.render());
   inspector.render();
-  return { doc, store, selection, view, el, inspector, notices, labels: () => labelsOf(store) };
+  return { doc, store, selection, view, el, inspector, notices, pageLimits, labels: () => labelsOf(store) };
 }
 
 const labelsOf = (store: DocumentStore) => {
@@ -155,12 +160,13 @@ describe("page section", () => {
     expect(seen).toEqual(["inspect:width", "inspect:height"]);
   });
 
-  test("a width over the page limit is shown, and kept, at the limit", () => {
-    const { el, store, view } = setup();
+  test("a width over the page limit is shown, and kept, at the limit, and the view says so", () => {
+    const { el, store, view, pageLimits } = setup();
     (view.plugin as any).settings = { maxPageSizeMm: 2000 };
     el.typeInto("width", "2500");
     expect(store.doc.pages[0].width).toBe(2000);
     expect(el.control("width").value).toBe("2000");
+    expect(pageLimits).toEqual([2000]);
     // Typing it again when the page is already at the limit changes nothing in the model, yet the field is put right.
     el.typeInto("width", "2500");
     expect(el.control("width").value).toBe("2000");
@@ -812,6 +818,32 @@ describe("connector fields", () => {
     el.control("route").fire("change");
     expect(connectorOf(store)).toMatchObject({ route: "curved", routeParams: { bend: 0.25 } });
     expect(keysOf(el)).toContain("routeParams.bend");
+  });
+});
+
+describe("the inspector runs page.update", () => {
+  const onePage = (d: ReturnType<typeof createDocument>) => {
+    // One page id, so two documents built this way are equal.
+    d.pages[0].id = "pg-1";
+  };
+
+  test("inspector page writes and page.update with the same patches give identical documents", () => {
+    const ui = setup(onePage);
+    const api = setup(onePage);
+    const seen = ui.labels();
+    ui.el.control("preset").value = "nature-double";
+    ui.el.control("preset").fire("change");
+    ui.el.typeInto("height", "120");
+    ui.el.typeInto("margins.left", "15");
+    ui.el.control("paper").value = "#f4f4f4";
+    ui.el.control("paper").fire("input");
+    const command = api.view.plugin.registries.commands.get("page.update")!;
+    for (const patch of [{ preset: "nature-double" }, { height: 120 }, { margins: { left: 15 } }, { paper: "#f4f4f4" }]) {
+      command.run(api.view.commandContext() as never, { id: "pg-1", patch });
+    }
+    expect(ui.store.doc).toEqual(api.store.doc);
+    expect(ui.store.doc.pages[0]).toMatchObject({ preset: "custom", width: 183, height: 120, paper: "#f4f4f4" });
+    expect(seen).toEqual(["inspect:preset", "inspect:height", "inspect:margins.left", "inspect:paper"]);
   });
 });
 

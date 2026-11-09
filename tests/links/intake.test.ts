@@ -4,6 +4,9 @@ import { mmToPx } from "../../src/model/geometry";
 import { DocumentStore } from "../../src/model/store";
 import type { FileNode } from "../../src/model/types";
 import { Viewport } from "../../src/view/viewport";
+import { panelCommands } from "../../src/commands/panels";
+import { createRegistries } from "../../src/registry";
+import type { CommandContext } from "../../src/registry/command";
 import { FakeAccess, type FakeVault } from "./fake-access";
 
 // `obsidian` ships only typings; the intake needs just these two.
@@ -55,6 +58,13 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
   const pdf = vi.fn(async () => ({ dataUrl: "data:pdf-page", width: 300, height: 600, pageCount: 1 }));
   const tiff = vi.fn();
   const exists = (path: string) => path in files || folders.has(path);
+  const registries = createRegistries();
+  const panelCreate = vi.fn();
+  for (const command of panelCommands()) {
+    const run = command.run;
+    // Counted, so a test can see that every panel is made by the command.
+    registries.commands.register({ ...command, run: (ctx, args) => (panelCreate(args), run(ctx, args)) });
+  }
 
   const view = {
     file: { path: FIGURE },
@@ -85,8 +95,12 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
       settings,
       access: new FakeAccess({ files } as FakeVault),
       decoders: { pdf, tiff, adjusts: () => false },
+      registries,
     },
     store,
+    commandContext(): CommandContext {
+      return { app: this.app as never, registries, view: this as never, store, selection: [], page: store.doc.pages[0] };
+    },
     viewport: new Viewport(),
     stageEl: { clientWidth: 800, clientHeight: 600, focus: vi.fn() },
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
@@ -119,7 +133,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
 
   const intake = new Intake(view as unknown as ViewArg);
   intake.attach({} as HTMLElement);
-  return { intake, store, written, files, images, settings, folders, commits, view, pdf, tiff, handlers: view.handlers };
+  return { intake, store, written, files, images, settings, folders, commits, view, pdf, tiff, panelCreate, handlers: view.handlers };
 }
 
 /** Puts a node of the given z on page `index` (0 or 1), as if it had been there already. */
@@ -263,6 +277,31 @@ describe("a file dragged from Obsidian", () => {
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
     s.store.undo();
     expect(fileNodes(s)).toHaveLength(0);
+  });
+
+  test("every new node is made by panel.create, with the link, the page, the box and the z the drop gives", async () => {
+    const s = setup();
+    s.view.app.dragManager = { draggable: { type: "files", files: [{ path: "Notes/plot.png" }, { path: "Notes/analysis.md" }] } };
+    s.handlers.drop(dropEvent({ x: 60, y: 80 }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect(s.panelCreate).toHaveBeenCalledTimes(2);
+    const [first, second] = s.panelCreate.mock.calls.map((c) => c[0]);
+    expect(first).toMatchObject({ page: s.store.doc.pages[0].id, file: "Notes/plot.png", subpath: "", show: "image", x: 60, y: 80 });
+    expect(first.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    expect(second).toMatchObject({ file: "Notes/analysis", show: "content", x: 60 });
+    expect(second.height).toBeUndefined();
+    expect(s.view.setSelection).toHaveBeenLastCalledWith(fileNodes(s).map((n) => n.id));
+  });
+
+  test("two drops in a row are two undo steps", async () => {
+    const s = setup();
+    s.view.app.dragManager = { draggable: { type: "file", file: { path: "Notes/plot.png" } } };
+    s.handlers.drop(dropEvent());
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    s.handlers.drop(dropEvent({ x: 300 }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    s.store.undo();
+    expect(fileNodes(s)).toHaveLength(1);
   });
 
   test("an image whose SVG has no size of its own keeps the default box", async () => {

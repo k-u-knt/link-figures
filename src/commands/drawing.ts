@@ -40,14 +40,14 @@ function checkPlain(command: string, name: string, value: unknown): void {
 }
 
 /** The page a node is created on: the one `args.page` names, else the view's; headless it must be named. */
-function creationPage(ctx: CommandContext, command: string, args: { page?: unknown }): Page {
+export function creationPage(ctx: CommandContext, command: string, args: { page?: unknown }): Page {
   const page = targetPage(ctx, command, args);
   if (!page) throw new CommandError(`${command} needs "page" when the figure is not open`);
   return page;
 }
 
 /** The caller's `id` for a new node, when it gave one; an id the figure already has is an error. */
-function newNodeId(ctx: CommandContext, command: string, id: unknown): string | undefined {
+export function newNodeId(ctx: CommandContext, command: string, id: unknown): string | undefined {
   if (id === undefined) return undefined;
   if (id === "") throw new CommandError(`${command}: "id" must not be empty`);
   if (ctx.store.doc.nodes.some((n) => n.id === id)) throw new CommandError(`${command}: the figure already has a node "${String(id)}"`);
@@ -55,12 +55,12 @@ function newNodeId(ctx: CommandContext, command: string, id: unknown): string | 
 }
 
 /** The `z` that puts a new node above everything on `page`. */
-function topOf(doc: Document, page: Page): number {
+export function topOf(doc: Document, page: Page): number {
   return doc.nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1) + 1;
 }
 
 /** Adds `node` in one commit labelled `command`, selects it in the view once that is in, and returns its id. */
-function addNode(ctx: CommandContext, command: string, node: Node): { id: NodeId } {
+export function addNode(ctx: CommandContext, command: string, node: Node): { id: NodeId } {
   ctx.store.commit(command, (draft) => {
     draft.nodes.push(node);
   });

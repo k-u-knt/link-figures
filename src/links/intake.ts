@@ -1,6 +1,7 @@
 import { normalizePath, Notice, type App } from "obsidian";
 import { MIN_NODE_PX } from "../constants";
 import { splitLinktext } from "../format/links-section";
+import { prepareCall, runInOneCommit } from "../commands/headless";
 import { fileNodeDefaults } from "../model/defaults";
 import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
@@ -115,8 +116,8 @@ export class Intake {
 
   /**
    * Makes a node for each action, from the left: saves what has to be saved, resolves each link and measures the image
-   * it shows, then adds all the nodes to the page in one commit (`"insert"`, so one undo takes them all out and leaves
-   * any saved file alone) and selects them. The view draws and resolves new nodes on that commit (`NodeHost.applyChange`),
+   * it shows, then adds all the nodes to the page with `panel.create` in one commit (`"insert"`, so one undo takes them
+   * all out and leaves any saved file alone) and selects them. The view draws and resolves new nodes on that commit (`NodeHost.applyChange`),
    * so they are not resolved again here. An item that cannot be saved is reported in a Notice and left out (nothing was
    * written for it); the others go in. An item that is saved or linked but cannot be decoded goes in too, at the default
    * size, so that its panel shows the badge for it and the file is not left orphaned; a Notice gives the decoder's reason.
@@ -350,35 +351,44 @@ export class Intake {
     }
   }
 
-  /** The one commit. Everything awaited so far may have outlived the document, so the page and the store are looked up afresh. */
+  /**
+   * The one commit: a `panel.create` per item, run together as one commit labelled "insert", which is an undo step of its
+   * own. Everything awaited so far may have outlived the document, so the page and the store are looked up afresh.
+   */
   private insert(items: Measured[], at: IntakeTarget): NodeId[] {
     const view = this.view;
     const store = view.store;
-    const doc = store.doc;
-    const page = doc.pages.find((p) => p.id === at.page.id);
+    const page = store.doc.pages.find((p) => p.id === at.page.id);
     if (!page) {
       new Notice("Link Figures: the page was removed before the items could be added, so nothing was added.");
       return [];
     }
 
-    const taken = new Set(doc.nodes.map((n) => n.id));
-    let z = doc.nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1);
-    const nodes = items.map((item, i) => {
-      const node = fileNodeDefaults(
-        page,
-        { file: item.file, subpath: item.subpath, show: item.show, x: roundPx(at.x), y: roundPx(at.y + i * mmToPx(STAGGER_MM)), z: ++z },
-        taken,
-      );
-      taken.add(node.id);
-      // The width is the default (a share of the page's); the height follows the picture.
-      if (item.size) node.height = Math.max(MIN_NODE_PX, roundPx((node.width * item.size.height) / item.size.width));
-      return node;
-    });
-
-    store.commit("insert", (draft) => {
-      draft.nodes.push(...nodes);
-    });
-    const ids = nodes.map((n) => n.id);
+    const { registries } = view.plugin;
+    // The width is the default (a share of the page's); the height follows the picture.
+    const width = fileNodeDefaults(page, { file: "", subpath: "", show: "image" }, []).width;
+    const calls = items.map((item, i) =>
+      prepareCall(registries, {
+        id: "panel.create",
+        args: {
+          page: page.id,
+          file: item.file,
+          subpath: item.subpath,
+          show: item.show,
+          x: roundPx(at.x),
+          y: roundPx(at.y + i * mmToPx(STAGGER_MM)),
+          ...(item.size ? { height: Math.max(MIN_NODE_PX, roundPx((width * item.size.height) / item.size.width)) } : {}),
+        },
+      }),
+    );
+    store.endMerge();
+    let results: unknown[];
+    try {
+      results = runInOneCommit(store, view.commandContext(), calls, "insert");
+    } finally {
+      store.endMerge();
+    }
+    const ids = results.map((r) => (r as { id: NodeId }).id);
     view.setSelection(ids);
     return ids;
   }

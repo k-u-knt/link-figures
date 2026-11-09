@@ -9,6 +9,7 @@ import { cropCommands } from "./commands/crop";
 import { displayCommands } from "./commands/display";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
+import { panelCommands } from "./commands/panels";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE, normalisePageLimit } from "./constants";
@@ -86,7 +87,7 @@ export default class LinkFiguresPlugin extends Plugin {
     );
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
-    for (const command of drawingCommands()) this.registries.commands.register(command);
+    for (const command of [...drawingCommands(), ...panelCommands()]) this.registries.commands.register(command);
     // Group, Ungroup, Align and Distribute act on the selection, so they are in the palette (and can take hotkeys); the hidden ones need arguments.
     for (const command of [...groupCommands(), ...arrangeCommands()]) {
       if (command.hidden) this.registries.commands.register(command);

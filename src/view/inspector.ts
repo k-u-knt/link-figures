@@ -1,6 +1,7 @@
 import { prepareCall, runInOneCommit, type PreparedCall } from "../commands/headless";
 import { mmToPx, pxToMm } from "../model/geometry";
 import type { Node, NodeId, Page, Paint } from "../model/types";
+import { childrenOf } from "../model/groups";
 import { getPreset } from "../model/presets";
 import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
@@ -427,10 +428,13 @@ export class Inspector {
     const paintKeys = fields.filter((f) => f.kind === "paint").map((f) => f.key);
     const targets = new Set(ids);
     const live = () => this.view.store.doc.nodes.find((n) => n.id === first.id);
+    // A group (a type that has members) is titled with its type's name and how many direct members it has.
+    const members = ids.length === 1 && type?.members ? childrenOf(this.view.store.doc, first.id).length : null;
+    const title = ids.length > 1 ? `${ids.length} nodes` : members !== null ? `${type?.name ?? "Group"} (${members} items)` : "Node";
     return {
-      title: ids.length > 1 ? `${ids.length} nodes` : "Node",
-      subtitle: ids.length > 1 ? undefined : type?.name,
-      signature: `node:${ids.join(",")}:${fields.map((f) => f.key).join(",")}`,
+      title,
+      subtitle: ids.length > 1 || members !== null ? undefined : type?.name,
+      signature: `node:${ids.join(",")}:${fields.map((f) => f.key).join(",")}:${title}`,
       fields,
       read: (key) => {
         const node = live();

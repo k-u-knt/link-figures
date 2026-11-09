@@ -84,9 +84,19 @@ export function dragRect(from: Pt, to: Pt, square: boolean): Rect {
   return rectFromPoints(from, { x: from.x + sx * side, y: from.y + sy * side });
 }
 
-/** The ids of the unlocked items that overlap `marquee` (touching does not count), in the order given. */
-export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean }[], marquee: Rect): NodeId[] {
-  return items.filter((item) => !item.locked && rectIntersects(item.rect, marquee)).map((item) => item.id);
+/**
+ * The ids of the unlocked items that overlap `marquee` (touching does not count), in the order given. An item marked
+ * `whole` (a group) is taken only when the marquee holds all of it.
+ */
+export function marqueeSelect(items: { id: NodeId; rect: Rect; locked: boolean; whole?: boolean }[], marquee: Rect): NodeId[] {
+  return items
+    .filter((item) => !item.locked && (item.whole ? rectHolds(marquee, item.rect) : rectIntersects(item.rect, marquee)))
+    .map((item) => item.id);
+}
+
+/** Whether `outer` holds the whole of `inner` (edges may touch). */
+function rectHolds(outer: Rect, inner: Rect): boolean {
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
 }
 
 /**

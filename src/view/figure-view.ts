@@ -67,6 +67,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
+  /**
+   * The group the user has entered by double-clicking it, or null: presses then act on its direct children rather than
+   * on whole top-level units. View state only, not saved; the pointer controller keeps it (see `PointerController`).
+   */
+  enteredGroup: NodeId | null = null;
   /** The tool that the next press on a page places (see `Command.place`), or null. A new document, or none, disarms it. */
   armedTool: Command | null = null;
 

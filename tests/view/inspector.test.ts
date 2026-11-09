@@ -1,4 +1,4 @@
-import { createDocument, createPage, defaultBorder, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, defaultBorder, fileNodeDefaults, groupNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { DEFAULT_PAGE_LIMIT_MM } from "../../src/constants";
 import { createFigureStore } from "../../src/model/normalise";
@@ -7,6 +7,7 @@ import type { FileNode, Node, ShapeNode, Stroke } from "../../src/model/types";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import type { ConnectorNode } from "../../src/model/types";
 import { connectorNodeType } from "../../src/nodes/connector-node";
+import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
@@ -247,6 +248,21 @@ describe("updating", () => {
     expect(el.querySelector('[data-key="width"]')).not.toBe(page);
     selection.clear();
     expect(titleOf(el)).toBe("Page");
+  });
+
+  test("a selected group is titled with its number of direct members, which follows the document", () => {
+    const { el, selection, store, view } = setup((d) => {
+      addNode(d, { id: "p-a", parent: "p-g" });
+      addNode(d, { id: "p-b", parent: "p-h" });
+      addNode(d, { id: "p-c", parent: "p-h" });
+      d.nodes.push(groupNodeDefaults(d.pages[0], { id: "p-h", parent: "p-g" }, []));
+      d.nodes.push(groupNodeDefaults(d.pages[0], { id: "p-g" }, []));
+    });
+    view.plugin.registries.nodeTypes.register(groupNodeType);
+    selection.set(["p-g"]);
+    expect(titleOf(el)).toBe("Group (2 items)");
+    store.commit("add", (d) => { d.nodes.push({ ...fileNodeDefaults(d.pages[0], { file: "x.png", subpath: "", show: "image" }, []), id: "p-d", parent: "p-g" } as Node); });
+    expect(titleOf(el)).toBe("Group (3 items)");
   });
 
   test("a view that is read-only has an empty inspector", () => {

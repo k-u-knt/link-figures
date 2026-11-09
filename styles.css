@@ -418,6 +418,14 @@
   outline-style: dashed;
 }
 
+/* The group that is entered (double-clicked into): a faint dashed outline on its box. */
+.lf-group-entered {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  outline: calc(1px / var(--lf-zoom, 1)) dashed var(--text-faint);
+}
+
 /* Handles opt back in to pointer events (for their cursor); the pointer controller finds them in the model. */
 .lf-handle {
   position: absolute;

@@ -5,7 +5,7 @@ import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
 import { expandUnits, isGroup, isLocked } from "../model/groups";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
-import type { End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
+import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
 import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
@@ -248,7 +248,10 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   });
   const ids = copies.map((c) => c.id);
   const view = ctx.view;
-  if (view && args?.ids === undefined) whenCommitted(ctx, () => view.setSelection(ids));
+  // The copies are selected as the units they make: a group's copy, not its members' copies besides.
+  const copied = new Set(ids);
+  const units = copies.filter((c) => c.parent === undefined || !copied.has(c.parent)).map((c) => c.id);
+  if (view && args?.ids === undefined) whenCommitted(ctx, () => view.setSelection(units));
   return { ids };
 }
 
@@ -324,9 +327,12 @@ function linkedFileNode(ctx: CommandContext): Extract<Node, { type: "file" }> | 
   return node?.type === "file" && node.file !== "" ? node : undefined;
 }
 
-/** Whether `node` is a file node that shows an image and may be changed: the kind of panel whose box can follow its image. */
-function isUnlockedImage(node: Node | undefined): node is FileNode {
-  return node?.type === "file" && node.show === "image" && !node.locked;
+/**
+ * Whether `node` is a file node of `doc` that shows an image and may be changed (it is not locked, nor in a locked
+ * group): the kind of panel whose box can follow its image.
+ */
+function isUnlockedImage(doc: Document, node: Node | undefined): node is FileNode {
+  return node?.type === "file" && node.show === "image" && !isLocked(doc, node.id);
 }
 
 /**
@@ -337,7 +343,7 @@ function isUnlockedImage(node: Node | undefined): node is FileNode {
 async function resetAspect(ctx: CommandContext): Promise<void> {
   const view = editor(ctx);
   const selected = new Set(ctx.selection);
-  const panels = ctx.store.doc.nodes.filter((n): n is FileNode => selected.has(n.id) && isUnlockedImage(n));
+  const panels = ctx.store.doc.nodes.filter((n): n is FileNode => selected.has(n.id) && isUnlockedImage(ctx.store.doc, n));
   const sizes = new Map<NodeId, { width: number; height: number }>();
   await Promise.all(
     panels.map(async (panel) => {
@@ -350,10 +356,11 @@ async function resetAspect(ctx: CommandContext): Promise<void> {
   );
   if (sizes.size === 0) return;
   // The image can take a while to load, so the panels are looked up again: one may have been deleted, locked or reshaped meanwhile.
+  const doc = ctx.store.doc;
   ctx.store.commit("reset-aspect", (draft) => {
     for (const node of draft.nodes) {
       const size = sizes.get(node.id);
-      if (!size || !isUnlockedImage(node)) continue;
+      if (!size || !isUnlockedImage(doc, node)) continue;
       const aspect = ((node.crop?.w ?? 1) * size.width) / ((node.crop?.h ?? 1) * size.height);
       // A crop with no area has no aspect ratio.
       if (!Number.isFinite(aspect) || aspect <= 0) continue;
@@ -401,7 +408,7 @@ function builtinCommands(): Command[] {
       icon: "ratio",
       group: "arrange",
       needsView: true,
-      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(n)),
+      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(ctx.store.doc, n)),
       run: resetAspect,
     },
     { id: "add-page", name: "Add page", icon: "file-plus", group: "page", params: PAGE_PARAMS, applies: () => true, run: addPage },

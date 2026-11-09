@@ -1,6 +1,7 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
+import { descendantsOf, isGroup, isLocked, outermostUnit, parentOf } from "../model/groups";
 import { toSvgPath } from "../model/path";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
@@ -31,7 +32,7 @@ type Intent =
   | { kind: "move" }
   | { kind: "resize"; id: NodeId; handle: Handle }
   | { kind: "handle"; id: NodeId; handle: string }
-  | { kind: "marquee"; pageId: PageId; base: NodeId[] };
+  | { kind: "marquee"; pageId: PageId; base: NodeId[]; within: NodeId | null; leaveOnClick: boolean };
 
 /**
  * `idle -> pressed -> moving | resizing | handling | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool
@@ -39,15 +40,17 @@ type Intent =
  * `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels; `from` is the same point on the
  * press page, `under` the items there (topmost first), and `el` what the drag draws in that page's overlay (the dragged
  * box, or the tool's own preview), once the press has become a drag. `handling` drags a handle of a node's own (see
- * `NodeType.handles`): `drag` is what its release does, as the node type last said.
+ * `NodeType.handles`): `drag` is what its release does, as the node type last said. A marquee selects the units of
+ * the level `within` (the children of that entered group, or the top-level units); a press on empty paper inside the
+ * entered group (`leaveOnClick`) sweeps at its level, and leaves it when it ends as a click.
  */
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
   | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean }
-  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect }
+  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: boolean; started: boolean }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
-  | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; el: HTMLElement }
+  | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; within: NodeId | null; el: HTMLElement }
   | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
@@ -83,6 +86,8 @@ export class PointerController {
   private readonly parts = new Map<NodeId, SelectionParts>();
   /** What an armed tool shows for the pointer hovering over a page (see `Command.preview`), or null. */
   private hoverEl: Element | null = null;
+  /** The faint dashed outline of the entered group (see `LinkFiguresView.enteredGroup`), or null. */
+  private enteredEl: HTMLElement | null = null;
 
   constructor(private readonly view: LinkFiguresView) {}
 
@@ -129,6 +134,8 @@ export class PointerController {
     this.endGesture();
     this.unsubscribeStore?.();
     this.clearParts();
+    // A group entered in another document is not one of this one's.
+    this.view.enteredGroup = null;
     this.unsubscribeStore = this.view.store.subscribe(() => this.onStoreChange());
     this.sync();
   }
@@ -151,6 +158,18 @@ export class PointerController {
 
   private get store(): DocumentStore {
     return this.view.store;
+  }
+
+  /** The entered group (see `LinkFiguresView.enteredGroup`), or null when none is, or it is no longer a group of the document. */
+  private get entered(): NodeId | null {
+    const id = this.view.enteredGroup ?? null;
+    return id !== null && isGroup(this.store.doc, id, this.view.plugin.registries) ? id : null;
+  }
+
+  /** Enters group `id` (null: leaves every group), and outlines it. */
+  private setEntered(id: NodeId | null): void {
+    this.view.enteredGroup = id;
+    this.placeEnteredOutline();
   }
 
   // Pointer
@@ -198,8 +217,17 @@ export class PointerController {
     }
 
     const selectedPage = this.selectionPage(doc);
-    // Nodes are not clipped to their page, so what is under the pointer is looked for among every page's nodes.
-    const hit = hitTest(this.itemsOnAllPages(doc), world);
+    // Nodes are not clipped to their page, so what is under the pointer is looked for among every page's nodes. What is
+    // hit is a drawn node; the press acts on the unit it is part of at the entered level (a whole group at top level).
+    const drawn = hitTest(this.itemsOnAllPages(doc), world);
+    let entered = this.entered;
+    // A press on a node outside the entered group leaves it entirely, and what was selected in it.
+    if (drawn !== null && entered !== null && !descendantsOf(doc, entered).includes(drawn)) {
+      this.setEntered(null);
+      entered = null;
+      selection.clear();
+    }
+    const hit = drawn === null ? null : outermostUnit(doc, drawn, entered);
 
     if (hit) {
       // The page that counts for a selection is the node's own, wherever on the canvas it has ended up.
@@ -218,10 +246,18 @@ export class PointerController {
       return;
     }
 
-    // Empty paper (or no paper): shift keeps what is selected on this page, anything else starts afresh.
+    // Empty paper (or no paper): shift keeps what is selected on this page, anything else starts afresh. Inside the
+    // entered group's box a sweep selects among its children, and a click leaves it (see `onPointerUp`); anywhere else
+    // the press leaves it at once.
     const page = pageAt(doc, world);
+    const group = entered === null ? undefined : doc.nodes.find((n) => n.id === entered);
+    const inside = !!group && group.page === page?.id && rectContainsPt(nodeWorldRect(doc, group), world);
+    if (entered !== null && !inside) {
+      this.setEntered(null);
+      entered = null;
+    }
     if (!ev.shiftKey || page === null || page.id !== selectedPage) selection.clear();
-    if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids] }, null);
+    if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids], within: entered, leaveOnClick: inside }, null);
   }
 
   private press(ev: PointerEvent, world: Pt, intent: Intent, collapseTo: NodeId | null): void {
@@ -279,29 +315,30 @@ export class PointerController {
       const ids = doc.nodes.filter((n) => editable.has(n.id)).map((n) => n.id);
       if (ids.length > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false };
       const page = this.selectionPage(doc);
-      return page === null ? null : this.beginMarquee(g, page, []);
+      return page === null ? null : this.beginMarquee(g, page, [], this.entered);
     }
     if (intent.kind === "resize") {
       const node = doc.nodes.find((n) => n.id === intent.id);
       if (!node) return null;
       const start = { x: node.x, y: node.y, width: node.width, height: node.height };
-      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start };
+      const group = isGroup(doc, node.id, this.view.plugin.registries);
+      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start, group, started: false };
     }
     if (intent.kind === "handle") {
       if (!doc.nodes.some((n) => n.id === intent.id)) return null;
       return { kind: "handling", pointerId: g.pointerId, world: g.world, id: intent.id, handle: intent.handle, drag: null, el: null };
     }
-    return this.beginMarquee(g, intent.pageId, intent.base);
+    return this.beginMarquee(g, intent.pageId, intent.base, intent.within);
   }
 
-  /** A marquee on a page that keeps `base` selected; null when the page is not drawn. */
-  private beginMarquee(g: Pressed, pageId: PageId, base: NodeId[]): Marquee | null {
+  /** A marquee on a page that keeps `base` selected and selects units of the level `within`; null when the page is not drawn. */
+  private beginMarquee(g: Pressed, pageId: PageId, base: NodeId[], within: NodeId | null): Marquee | null {
     const host = this.overlayOf(pageId);
     if (!host) return null;
     const el = host.ownerDocument.createElement("div");
     el.className = "lf-marquee";
     host.appendChild(el);
-    return { kind: "marquee", pointerId: g.pointerId, world: g.world, pageId, base, el };
+    return { kind: "marquee", pointerId: g.pointerId, world: g.world, pageId, base, within, el };
   }
 
   /**
@@ -335,12 +372,22 @@ export class PointerController {
     this.select([...this.view.selection.ids]);
   }
 
+  /**
+   * Resizes the node to the box the drag has taken it to. A group is resized by `node.update` on its box, which scales
+   * its members (see `scaleUnits`); the calls of one drag make one undo step. Any other node's box is written directly.
+   */
   private resizeBy(g: Resizing, dx: number, dy: number, keepAspect: boolean): void {
     if (!this.store.doc.nodes.some((n) => n.id === g.id)) {
       this.endGesture();
       return;
     }
     const next = resizeRect(g.start, g.handle, dx, dy, { keepAspect, min: MIN_NODE_PX });
+    if (g.group) {
+      const box = { x: roundPx(next.x), y: roundPx(next.y), width: nodeSizePx(roundPx(next.width)), height: nodeSizePx(roundPx(next.height)) };
+      this.view.runCommandById("node.update", { id: g.id, patch: box }, g.started ? "continue" : "start");
+      g.started = true;
+      return;
+    }
     this.store.commit("resize", (draft) => {
       const node = draft.nodes.find((n) => n.id === g.id);
       if (!node) return;
@@ -352,7 +399,10 @@ export class PointerController {
     });
   }
 
-  /** Draws the marquee from where the press began to `now`, and selects the unlocked nodes of its page that it touches. */
+  /**
+   * Draws the marquee from where the press began to `now`, and selects the units of its level on its page that are not
+   * locked (nor in a locked group): a node it touches, a group only when it holds the whole of it.
+   */
   private sweep(g: Marquee, now: Pt): void {
     const doc = this.store.doc;
     const page = doc.pages.find((p) => p.id === g.pageId);
@@ -367,7 +417,7 @@ export class PointerController {
     style.top = `${rect.y - paper.y}px`;
     style.width = `${rect.width}px`;
     style.height = `${rect.height}px`;
-    this.view.selection.set([...g.base, ...marqueeSelect(this.itemsOn(doc, page), rect)]);
+    this.view.selection.set([...g.base, ...marqueeSelect(this.unitsOn(doc, page, g.within), rect)]);
   }
 
   // Dragging a handle of a node's own
@@ -552,6 +602,8 @@ export class PointerController {
     }
     const selection = this.view.selection;
     if (g.kind === "pressed" && g.collapseTo !== null && selection.ids.length > 1) selection.set([g.collapseTo]);
+    // A click on empty paper inside the entered group leaves it, as one anywhere else did on the press.
+    if (g.kind === "pressed" && g.intent.kind === "marquee" && g.intent.leaveOnClick) this.setEntered(null);
     if (g.kind === "moving") this.finishMove(g);
     this.endGesture();
   }
@@ -587,13 +639,26 @@ export class PointerController {
    * What a double-click on a node means is for the node's type to say (a text node starts editing). A press on a node
    * captures the pointer, which sends the `click` and `dblclick` that follow to the stage, so the node's own element
    * never sees them. The node under the pointer is therefore found in the model, as for a press, and told by an
-   * `lf-activate` event on its element.
+   * `lf-activate` event on its element. A double-click on a member of a group that is not entered enters that group
+   * instead (one level each time) and selects the unit clicked at the new level: only a node that is a unit of the
+   * entered level itself is told.
    */
   private onDoubleClick(ev: MouseEvent): void {
     if (this.view.readOnly || isEditable(ev.target)) return;
+    const doc = this.store.doc;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    const hit = hitTest(this.itemsOnAllPages(this.store.doc), world);
-    const el = hit === null ? undefined : this.view.nodeHost.elementFor(hit);
+    const hit = hitTest(this.itemsOnAllPages(doc), world);
+    if (hit === null) return;
+    let entered = this.entered;
+    if (entered !== null && !descendantsOf(doc, entered).includes(hit)) entered = null;
+    const unit = outermostUnit(doc, hit, entered);
+    if (unit !== hit) {
+      this.setEntered(unit);
+      this.select([outermostUnit(doc, hit, unit)]);
+      return;
+    }
+    if (entered !== this.entered) this.setEntered(entered);
+    const el = this.view.nodeHost.elementFor(hit);
     el?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
   }
 
@@ -645,6 +710,16 @@ export class PointerController {
           handled = true;
           break;
         }
+        // Then the entered group is left, one level each time, with the group left selected.
+        {
+          const entered = this.entered;
+          if (entered !== null) {
+            this.setEntered(parentOf(this.store.doc, entered));
+            this.select([entered]);
+            handled = true;
+            break;
+          }
+        }
         handled = this.view.selection.ids.length > 0;
         this.view.selection.clear();
         break;
@@ -663,6 +738,8 @@ export class PointerController {
   // Selection and what is drawn for it
 
   private onStoreChange(): void {
+    // An entered group that is gone (deleted, ungrouped, dissolved) is left.
+    if ((this.view.enteredGroup ?? null) !== null && this.entered === null) this.view.enteredGroup = null;
     // Undo, a reload or a delete can take a selected node away.
     const present = new Set(this.store.doc.nodes.map((n) => n.id));
     const selection = this.view.selection;
@@ -686,20 +763,46 @@ export class PointerController {
       const node = byId.get(id);
       if (node) this.place(node);
     }
+    this.placeEnteredOutline();
+  }
+
+  /** Draws the entered group's dashed outline on its box, in its page's overlay; removes it when no group is entered. */
+  private placeEnteredOutline(): void {
+    const id = this.entered;
+    const node = id === null ? undefined : this.store.doc.nodes.find((n) => n.id === id);
+    const host = node ? this.overlayOf(node.page) : null;
+    if (!node || !host) {
+      this.enteredEl?.remove();
+      this.enteredEl = null;
+      return;
+    }
+    if (this.enteredEl?.parentElement !== host) {
+      this.enteredEl?.remove();
+      this.enteredEl = host.ownerDocument.createElement("div");
+      this.enteredEl.className = "lf-group-entered";
+      host.appendChild(this.enteredEl);
+    }
+    const style = this.enteredEl.style;
+    style.left = `${node.x}px`;
+    style.top = `${node.y}px`;
+    style.width = `${node.width}px`;
+    style.height = `${node.height}px`;
   }
 
   private place(node: Node): void {
     const host = this.overlayOf(node.page);
     let parts = this.parts.get(node.id);
+    // Locked itself or through a group it is in.
+    const locked = isLocked(this.store.doc, node.id);
     // Moved to another page, or its page was drawn afresh, or locked since: what was drawn no longer fits.
-    if (parts && (!host || parts.box.parentElement !== host || parts.locked !== node.locked || parts.own !== this.hasOwnHandles(node))) {
+    if (parts && (!host || parts.box.parentElement !== host || parts.locked !== locked || parts.own !== this.hasOwnHandles(node))) {
       parts.box.remove();
       this.parts.delete(node.id);
       parts = undefined;
     }
     if (!host) return;
     if (!parts) {
-      parts = this.draw(host, node);
+      parts = this.draw(host, node, locked);
       this.parts.set(node.id, parts);
     }
     const style = parts.box.style;
@@ -707,17 +810,17 @@ export class PointerController {
     style.top = `${node.y}px`;
     style.width = `${node.width}px`;
     style.height = `${node.height}px`;
-    if (parts.own && !node.locked) this.placeOwnHandles(parts.box, node);
+    if (parts.own && !locked) this.placeOwnHandles(parts.box, node);
   }
 
-  private draw(host: HTMLElement, node: Node): SelectionParts {
+  private draw(host: HTMLElement, node: Node, locked: boolean): SelectionParts {
     const doc = host.ownerDocument;
     const box = doc.createElement("div");
     const own = this.hasOwnHandles(node);
-    box.className = ["lf-selection", "lf-selected", ...(node.locked ? ["is-locked"] : []), ...(own ? ["has-own-handles"] : [])].join(" ");
+    box.className = ["lf-selection", "lf-selected", ...(locked ? ["is-locked"] : []), ...(own ? ["has-own-handles"] : [])].join(" ");
     // A locked node can be selected (so that the inspector can unlock it) but not reshaped: it gets no handles, and a dashed outline.
     // A node with handles of its own gets those, drawn where they are each time it changes (see `placeOwnHandles`).
-    if (!node.locked && !own) {
+    if (!locked && !own) {
       for (const handle of HANDLES) {
         const el = doc.createElement("div");
         el.className = "lf-handle";
@@ -726,7 +829,7 @@ export class PointerController {
       }
     }
     host.appendChild(box);
-    return { box, locked: node.locked, own };
+    return { box, locked, own };
   }
 
   /** Draws the handles of `node`'s own (see `NodeType.handles`) in its selection box, which sits on its box. */
@@ -762,6 +865,8 @@ export class PointerController {
   private clearParts(): void {
     for (const parts of this.parts.values()) parts.box.remove();
     this.parts.clear();
+    this.enteredEl?.remove();
+    this.enteredEl = null;
   }
 
   private overlayOf(pageId: PageId): HTMLElement | null {
@@ -773,10 +878,10 @@ export class PointerController {
     }
   }
 
-  /** The nodes of the selection that may be changed: the ones that are in the document and not locked. */
+  /** The nodes of the selection that may be changed: the ones that are in the document and not locked, nor in a locked group. */
   private editableSelection(doc: Document): Set<NodeId> {
     const selected = new Set(this.view.selection.ids);
-    return new Set(doc.nodes.filter((n) => selected.has(n.id) && !n.locked).map((n) => n.id));
+    return new Set(doc.nodes.filter((n) => selected.has(n.id) && !isLocked(doc, n.id)).map((n) => n.id));
   }
 
   /** The page the selected nodes are on (they are all on one), or null when nothing is selected. */
@@ -796,7 +901,7 @@ export class PointerController {
     // The latest selected is the one drawn on top.
     for (const id of [...this.view.selection.ids].reverse()) {
       const node = byId.get(id);
-      if (!node || node.locked) continue;
+      if (!node || isLocked(doc, id)) continue;
       if (this.hasOwnHandles(node)) {
         const origin = origins.get(node.page);
         if (!origin) continue;
@@ -844,14 +949,22 @@ export class PointerController {
     });
   }
 
-  /** Every node, to press: see `hitItems`. */
+  /** Every drawn node, to press: see `hitItems`. */
   private itemsOnAllPages(doc: Document): HitItem[] {
-    return this.hitItems(doc, doc.nodes);
+    return this.hitItems(doc, this.drawnNodes(doc));
   }
 
-  /** The nodes of the page `pageId` under the world point `world`, topmost first. */
+  /** The drawn nodes of the page `pageId` under the world point `world`, topmost first. */
   private itemsUnder(doc: Document, pageId: PageId, world: Pt): NodeId[] {
-    return hitAll(this.hitItems(doc, doc.nodes.filter((n) => n.page === pageId)), world);
+    return hitAll(this.hitItems(doc, this.drawnNodes(doc).filter((n) => n.page === pageId)), world);
+  }
+
+  /**
+   * The nodes that are drawn, which a pointer can be on: every node but containers (a type with `members`, a group),
+   * whose box only surrounds their members. A press finds a member, and acts on its unit (see `outermostUnit`).
+   */
+  private drawnNodes(doc: Document): Node[] {
+    return doc.nodes.filter((n) => !this.nodeType(n)?.members);
   }
 
   private nodeType(node: Node): NodeType | undefined {
@@ -868,10 +981,14 @@ export class PointerController {
     return SNAP_REACH_PX / this.view.viewport.zoom;
   }
 
-  private itemsOn(doc: Document, page: Page): { id: NodeId; rect: Rect; z: number; locked: boolean }[] {
+  /**
+   * The units of `page` at the level `within`: the children of that group, or the top-level nodes when it is null; each
+   * locked when it or a group it is in is, and a container (a group) to be held whole by a marquee.
+   */
+  private unitsOn(doc: Document, page: Page, within: NodeId | null): { id: NodeId; rect: Rect; locked: boolean; whole: boolean }[] {
     return doc.nodes
-      .filter((n) => n.page === page.id)
-      .map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), z: n.z, locked: n.locked }));
+      .filter((n) => n.page === page.id && (n.parent ?? null) === within)
+      .map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), locked: isLocked(doc, n.id), whole: !!this.nodeType(n)?.members }));
   }
 }
 

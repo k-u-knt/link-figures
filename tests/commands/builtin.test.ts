@@ -2,12 +2,13 @@ import { registerBuiltinCommands, restack, type EditorView } from "../../src/com
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
 import { MIN_NODE_PX } from "../../src/constants";
-import { createDocument, createPage, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, fileNodeDefaults, groupNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { mmToPx } from "../../src/model/geometry";
 import { createFigureStore } from "../../src/model/normalise";
 import { DocumentStore } from "../../src/model/store";
 import type { ConnectorNode, Document, End, Node, NodeId, Page } from "../../src/model/types";
 import { connectorNodeType } from "../../src/nodes/connector-node";
+import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { createRegistries, type Registries } from "../../src/registry";
 import { CommandError, type Command, type CommandContext } from "../../src/registry/command";
@@ -57,6 +58,7 @@ function builtinRegistries(): Registries {
   const registries = createRegistries();
   registries.nodeTypes.register(shapeNodeType);
   registries.nodeTypes.register(connectorNodeType);
+  registries.nodeTypes.register(groupNodeType);
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
   for (const route of builtinRoutes) registries.routes.register(route);
   for (const cap of builtinCapKinds) registries.caps.register(cap);
@@ -286,6 +288,20 @@ test("duplicate offsets copies by 5 mm, gives them new ids, puts them on top, an
   expect(nodes.slice(0, 3).map((n) => [n.x, n.y])).toEqual([[10, 20], [30, 40], [50, 60]]);
 });
 
+test("duplicate of a selected group selects the group's copy, not the copies of its members too", () => {
+  const { command, ctx, view, store } = setup((d) => {
+    fileNode(d, { id: "p-a", z: 0, parent: "p-g" });
+    fileNode(d, { id: "p-b", z: 1, parent: "p-g" });
+    d.nodes.push(groupNodeDefaults(d.pages[0], { id: "p-g" }, []));
+  });
+  view.selection = ["p-g"];
+  command("duplicate").run(ctx());
+  const copies = store.doc.nodes.filter((n) => !["p-a", "p-b", "p-g"].includes(n.id));
+  expect(copies).toHaveLength(3);
+  const copyOfGroup = copies.find((n) => n.type === "group")!;
+  expect(view.selection).toEqual([copyOfGroup.id]);
+});
+
 test("duplicate is one undo step", () => {
   const { command, ctx, view, store } = setup((d) => { fileNode(d, { id: "p-aaaa" }); });
   view.selection = ["p-aaaa"];
@@ -505,6 +521,20 @@ describe("reset-aspect", () => {
     // One commit for all of them.
     store.undo();
     expect(heights(store)).toEqual({ "p-a": 100, "p-b": 100, "p-unknown": 100, "p-locked": 100, "p-content": 100, "p-text": 100 });
+    expect(store.canUndo()).toBe(false);
+  });
+
+  test("skips a panel in a locked group: it is locked through its group", async () => {
+    const { command, ctx, view, store } = setup((d) => {
+      fileNode(d, { id: "p-a", width: 100, height: 100, parent: "p-g" });
+      fileNode(d, { id: "p-b", width: 100, height: 100, parent: "p-g" });
+      d.nodes.push(groupNodeDefaults(d.pages[0], { id: "p-g", locked: true }, []));
+    });
+    view.sizes = { "p-a": { width: 200, height: 100 }, "p-b": { width: 200, height: 100 } };
+    view.selection = ["p-a"];
+    expect(command("reset-aspect").applies(ctx())).toBe(false);
+    await command("reset-aspect").run(ctx());
+    expect(heights(store)).toMatchObject({ "p-a": 100, "p-b": 100 });
     expect(store.canUndo()).toBe(false);
   });
 

@@ -215,3 +215,40 @@ test("an error in drawing the line that is not a malformed field is not swallowe
   const run = s.api.run(PATH, "node.update", { id: "c", patch: { route: "x.broken", ends: [{ kind: "free", x: 0, y: 0 }, { kind: "attached", node: "s", snap: "anchor" }] } });
   await expect(run).rejects.toThrow("route exploded");
 });
+
+describe("a stroke with a key no stroke has is refused (check 16), the same for connectors and shapes", () => {
+  const KNOWN = /"stroke\.color" is not a stroke key: a stroke has paint, width, dash, cap and join/;
+  test("node.update of a connector's stroke with {color}", async () => {
+    const { api, saved } = await withConnector();
+    const before = saved();
+    const run = api.run(PATH, "node.update", { id: "c", patch: { stroke: { color: "#ff0000" } } });
+    await refuses(run, /^node\.update: /);
+    await expect(run).rejects.toThrow(KNOWN);
+    expect(saved()).toEqual(before);
+  });
+
+  test("node.update of a shape's border, shape.create and connector.create say the same", async () => {
+    const { api, saved } = await withConnector();
+    const before = saved();
+    await refuses(api.run(PATH, "node.update", { id: "s", patch: { border: { color: "#ff0000" } } }), /"border\.color" is not a stroke key: a stroke has paint, width, dash, cap and join/);
+    const stroke = { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid", color: "#ff0000" };
+    await refuses(api.run(PATH, "shape.create", { page: "pg-1", x: 0, y: 0, width: 50, height: 50, border: stroke }), /^shape\.create: .*"border\.color" is not a stroke key/);
+    await refuses(api.run(PATH, "connector.create", { page: "pg-1", from: { kind: "free", x: 0, y: 0 }, to: { kind: "free", x: 9, y: 9 }, stroke }), /^connector\.create: .*"stroke\.color" is not a stroke key/);
+    expect(saved()).toEqual(before);
+  });
+
+  test("a whole stroke, with a cap and a join, is still taken; and a file with such strokes still loads", async () => {
+    const { api, connector, saved } = await withConnector();
+    const stroke = { paint: { type: "solid", color: "#ff0000" }, width: 2, dash: "dash", cap: "round", join: "bevel" };
+    await api.run(PATH, "node.update", { id: "c", patch: { stroke } });
+    await api.run(PATH, "node.update", { id: "s", patch: { border: stroke } });
+    expect(connector().stroke).toEqual(stroke);
+    expect(saved().nodes.find((n) => n.id === "s")).toMatchObject({ border: stroke });
+    // A file is read as it always was: a key it has beside a stroke's own (written before this check) is kept, not refused.
+    const doc = saved();
+    const c = doc.nodes.find((n) => n.id === "c") as ConnectorNode;
+    (c.stroke as unknown as Record<string, unknown>).color = "#00ff00";
+    expect((loadDocument(serializeFigureFile(doc, emptyParsed())).doc.nodes.find((n) => n.id === "c") as ConnectorNode).stroke).toEqual({ ...stroke, color: "#00ff00" });
+  });
+});
+

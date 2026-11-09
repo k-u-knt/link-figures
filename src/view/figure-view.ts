@@ -39,6 +39,16 @@ const blankDocument = (): Document => createDocument(DEFAULT_SETTINGS.defaultPre
 /** Wheel zoom: one unit of `deltaY` scales the zoom by `exp(-0.01)`, which suits a trackpad pinch (a ctrl+wheel). */
 const WHEEL_ZOOM_RATE = 0.01;
 
+/** Why `text` does not load as a figure, or null when it does. */
+function unreadableReason(text: string, registries: LinkFiguresPlugin["registries"]): string | null {
+  try {
+    loadDocument(text, registries);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function describeLoadError(error: unknown): string {
   if (error instanceof FormatError || error instanceof NotFigureError) return error.message;
   console.error("Link Figures: unexpected error while reading a figure file", error);
@@ -77,6 +87,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
+  /**
+   * Obsidian's TextFileView (not in its typings): when the file changes on disk while the view has an edit not yet
+   * saved, a plain-text view merges base, ours and theirs line by line, which for the figure's JSON can give two node
+   * objects with no comma between them. A figure is not plain text: the view takes up the file as it is instead.
+   */
+  isPlaintext = false;
   /**
    * The group the user has entered by double-clicking it, or null: presses then act on its direct children rather than
    * on whole top-level units. View state only, not saved; the pointer controller keeps it (see `PointerController`).
@@ -234,6 +250,25 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     const waiters = this.loadWaiters;
     this.loadWaiters = [];
     for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * As Obsidian's, but the view never writes what the plugin could not read back: nothing while the file could not be
+   * read (it is shown as it is and not changed), and a text that does not load as a figure is refused, the file kept as
+   * it was, with a Notice.
+   */
+  async save(clear?: boolean): Promise<void> {
+    if (this.readOnly) return;
+    if (this.loaded) {
+      const problem = unreadableReason(this.getViewData(), this.plugin.registries);
+      if (problem !== null) {
+        const message = `Link Figures: ${this.file?.path ?? "the figure"} was not saved: what would be written could not be read back as a figure (${problem}). The file is kept as it was.`;
+        console.error(message);
+        new Notice(message);
+        return;
+      }
+    }
+    return super.save(clear);
   }
 
   getViewData(): string {

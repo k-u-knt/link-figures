@@ -202,7 +202,8 @@ export function runHeadless(app: App, registries: Registries, files: FigureFiles
  * Applies `apply` to the figure at `path` without a view, in one atomic read-and-write of the file: the text is loaded
  * into a store with a figure's normalisers (no history is kept), handed to `apply` in a headless context (no view, no
  * selection, no page), and the file gets the document back when it changed, else its text as it was. A file that
- * cannot be read as a figure, or an `apply` that throws, rejects and changes nothing.
+ * cannot be read as a figure, an `apply` that throws, or a changed document whose text would not load back as a figure
+ * (`CommandError`), rejects and changes nothing.
  */
 export async function withHeadlessFigure<T>(
   app: App,
@@ -233,7 +234,15 @@ export async function withHeadlessFigure<T>(
       ...(options.pageLimitMm !== undefined ? { pageLimitMm: options.pageLimitMm } : {}),
     };
     result = apply(ctx, store);
-    return store.doc === loaded ? text : serializeFigureFile(store.doc, parsed);
+    if (store.doc === loaded) return text;
+    const written = serializeFigureFile(store.doc, parsed);
+    // Never a text the plugin could not read back: the call is refused and the file kept as it was.
+    try {
+      loadDocument(written, registries);
+    } catch (error) {
+      throw new CommandError(`the figure could not be read back after the edit (${error instanceof Error ? error.message : String(error)}); the file was not changed`);
+    }
+    return written;
   });
   return result as T;
 }

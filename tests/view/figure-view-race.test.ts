@@ -4,6 +4,7 @@ import { drawingCommands } from "../../src/commands/drawing";
 import { FigureWrites } from "../../src/commands/figure-writes";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { loadDocument } from "../../src/format/load";
+import { serializeFigureFile } from "../../src/format/serialize";
 import { newFigureText } from "../../src/format/new-figure";
 import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
@@ -232,9 +233,21 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     openFigure: () => (view && view.hasDocument() ? view : null),
     loadingFigure: () => (view && view.isLoading() ? view.whenLoaded() : null),
   });
-  const page = loadDocument(initialText).doc.pages[0].id;
-  const shape = (id: string, x: number) => ({ kind: "rect", page, x, y: 10, width: 20, height: 20, id });
-  return { api, disk, writes, vault, openFile, shape, get view() { return view!; } };
+  const shape = (id: string, x: number) => ({ kind: "rect", page: loadDocument(initialText).doc.pages[0].id, x, y: 10, width: 20, height: 20, id });
+  /** Someone else (a sync, another plugin) writes the file. */
+  const externalWrite = (text: string) => {
+    disk.text = text;
+    writes.push({ by: "external", text });
+    modified();
+  };
+  /** Opens the figure in a view and waits for it to load. */
+  const opened = async () => {
+    const opening = openFile();
+    await vi.advanceTimersByTimeAsync(10);
+    await opening;
+    return view!;
+  };
+  return { api, registries, disk, writes, vault, openFile, opened, externalWrite, shape, get view() { return view!; } };
 }
 
 beforeEach(() => {
@@ -293,5 +306,66 @@ describe("a figure opened while API calls write it", () => {
     await t.view.onUnloadFile(t.view.file!);
     expect(t.writes).toEqual([]);
     expect(t.disk.text).toBe(hand);
+  });
+});
+
+describe("the plugin never writes a figure it cannot read back", () => {
+  test("a change made to the file elsewhere while the view has an unsaved edit is never merged with it as text", async () => {
+    const t = setup();
+    const view = await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("mine", 10));
+    expect(view.dirty).toBe(true);
+    // Another writer adds a shape of its own to the file as it was.
+    const theirs = loadDocument(t.disk.text).doc;
+    theirs.nodes.push({ ...view.store.doc.nodes[0], id: "theirs" });
+    t.externalWrite(serializeFigureFile(theirs, loadDocument(t.disk.text).parsed));
+    await vi.advanceTimersByTimeAsync(5000);
+    for (const w of t.writes) expect(parses(w.text), `a write by ${w.by} must parse`).toBe(true);
+    expect(view.readOnly).toBe(false);
+    expect(parses(t.disk.text)).toBe(true);
+  });
+
+  test("a save whose text does not parse writes nothing, keeps the file and says so", async () => {
+    const t = setup();
+    const view = await t.opened();
+    const before = t.disk.text;
+    await t.api.run(PATH, "shape.create", t.shape("a1", 10));
+    vi.spyOn(view, "getViewData").mockReturnValue(before.replace('"nodes": []', '"nodes": [ { } { } ]'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.writes).toEqual([]);
+    expect(t.disk.text).toBe(before);
+    expect(notices.some((n) => n.includes("not saved"))).toBe(true);
+  });
+
+  test("a view that could not read its file never writes it", async () => {
+    const bad = newFigureText("a4-portrait", 1).replace('"nodes": []', '"nodes": [ { } { } ]');
+    const t = setup(bad);
+    const view = await t.opened();
+    expect(view.readOnly).toBe(true);
+    // Obsidian's idea of what is on disk differs from what the view holds (as after a merge it did): still nothing is written.
+    (view as unknown as { lastSavedData: string }).lastSavedData = "something else";
+    view.requestSave();
+    await vi.advanceTimersByTimeAsync(5000);
+    await view.onUnloadFile(view.file!);
+    expect(t.writes).toEqual([]);
+    expect(t.disk.text).toBe(bad);
+  });
+
+  test("a headless call whose result would not parse writes nothing and is refused", async () => {
+    const t = setup();
+    t.registries.commands.register({
+      id: "test.break",
+      name: "Break",
+      group: "edit",
+      applies: () => true,
+      run: (ctx) => ctx.store.commit("break", (draft) => void (draft.pages[0].width = Number.NaN)),
+    });
+    const before = t.disk.text;
+    const call = t.api.run(PATH, "test.break");
+    const settled = call.then(() => "resolved", (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settled).toMatch(/could not be read back/);
+    expect(t.writes).toEqual([]);
+    expect(t.disk.text).toBe(before);
   });
 });

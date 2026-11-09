@@ -125,6 +125,9 @@ export function validateArgs(spec: ParamSpec, args: unknown): ValidatedArgs {
  * `frame`) checks it here. A file is not: its strokes are read by `migrateStroke`, which keeps what it does not know.
  */
 export function paramError(name: string, param: Param, value: unknown, given?: { value: unknown }): string | null {
+  // Within `node.update` (`judgingPatch`), a top-level field is judged by what its patch gives, though the caller (a
+  // plugin's checkField) passed nothing.
+  if (given === undefined && updatePatch !== null && !name.includes(".")) given = { value: updatePatch[name] };
   if (value === null && param.nullable) return null;
   const check = CHECKS[param.type];
   if (!check.test(value)) return `"${name}" must be ${check.what}${param.nullable ? " or null" : ""}`;
@@ -163,6 +166,24 @@ export function paramError(name: string, param: Param, value: unknown, given?: {
     }
   }
   return null;
+}
+
+/** The patch `node.update` is checking fields against (see `judgingPatch`), or null outside it. */
+let updatePatch: Record<string, unknown> | null = null;
+
+/**
+ * Runs `check` (a node update's field checks) with `patch` as the patch every `paramError` and `fieldError` in it
+ * judges a top-level field's stroke keys by, unless told otherwise: so a node type's `checkField` gets patch-only
+ * judging whether or not it passes its context on. `node.update` runs its checks in it.
+ */
+export function judgingPatch<T>(patch: Record<string, unknown>, check: () => T): T {
+  const outer = updatePatch;
+  updatePatch = patch;
+  try {
+    return check();
+  } finally {
+    updatePatch = outer;
+  }
 }
 
 /** A colour as the model keeps it: `#rrggbb`. For a param's `pattern`. */

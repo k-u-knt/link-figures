@@ -7,8 +7,8 @@ import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } fr
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
 import type { Registries } from "../registry";
 import { CommandError, unreadableIn, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
-import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/params";
-import { nodeTypeFor } from "../registry/node-type";
+import { COLOR_PATTERN, isCap, judgingPatch, paramError, type ParamSpec } from "../registry/params";
+import { nodeTypeFor, type NodeType, type UpdateContext } from "../registry/node-type";
 import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
 import { CUSTOM_PRESET, writePageField } from "../view/page-fields";
 import { editor, pageLimitMm, targetIds, targetPage, whenCommitted } from "./builtin";
@@ -252,15 +252,8 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   if (type?.completeUpdate) after = type.completeUpdate(node, after as unknown as Node, patch, updateCtx) as unknown as Record<string, unknown>;
   // A value the patch gives again as it is, is no change: the commit stays as small as what actually changes.
   const changed = Object.keys(after).filter((key) => !sameValue(after[key], before[key]));
-  for (const key of changed) {
-    const value = after[key];
-    const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null);
-    if (error !== null) throw new CommandError(`${command}: ${error}`);
-    if (key === "page" && !ctx.store.doc.pages.some((p) => p.id === value)) throw new CommandError(`${command}: there is no page "${String(value)}"`);
-    // A type may refuse a page change it cannot make by this command (a connector attached to items: node.move).
-    const pageError = key === "page" ? (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null) : null;
-    if (pageError !== null) throw new CommandError(`${command}: ${pageError}`);
-  }
+  // The checks judge a stroke by the keys its patch gives (see `judgingPatch`), whatever a type's checkField passes on.
+  judgingPatch(patch, () => checkChanged(command, ctx, changed, after, type, updateCtx));
   ctx.store.commit(command, (draft) => {
     const target = draft.nodes.find((n) => n.id === node.id) as unknown as Record<string, unknown> | undefined;
     if (!target) return;
@@ -270,6 +263,19 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     }
   });
   return { id: node.id };
+}
+
+/** `node.update`'s check of each field that `changed`: the base fields here, the type's own by its `checkField`. */
+function checkChanged(command: string, ctx: CommandContext, changed: string[], after: Record<string, unknown>, type: NodeType | undefined, updateCtx: UpdateContext): void {
+  for (const key of changed) {
+    const value = after[key];
+    const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null);
+    if (error !== null) throw new CommandError(`${command}: ${error}`);
+    if (key === "page" && !ctx.store.doc.pages.some((p) => p.id === value)) throw new CommandError(`${command}: there is no page "${String(value)}"`);
+    // A type may refuse a page change it cannot make by this command (a connector attached to items: node.move).
+    const pageError = key === "page" ? (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null) : null;
+    if (pageError !== null) throw new CommandError(`${command}: ${pageError}`);
+  }
 }
 
 /** What `node.update` may write on a group; everything else about a group is worked out from its members. */

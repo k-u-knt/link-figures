@@ -15,6 +15,7 @@ import { textNodeType } from "../../src/nodes/text-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries, type Registries } from "../../src/registry";
 import { CommandError } from "../../src/registry/command";
+import { fieldError } from "../../src/registry/params";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { normalizePath } from "../export/fake-vault";
 
@@ -274,4 +275,30 @@ describe("a stroke with a key no stroke has is refused (check 16), the same for 
     await refuses(api.run(PATH, "node.update", { id: "c", patch: { stroke: { colour: "#ff0000" } } }), /"stroke\.colour" is not a stroke key/);
     await refuses(api.run(PATH, "node.update", { id: "c", patch: { stroke: { width: 1, color: "#ff0000" } } }), /"stroke\.color" is not a stroke key/);
   });
+
+  test("a plugin type whose checkField ignores its context gets the same patch-only judging from node.update", async () => {
+    const { api, saved, write } = setup();
+    const r = (api as unknown as { registries: Registries }).registries;
+    r.nodeTypes.register({
+      type: "x.line",
+      name: "Line",
+      icon: "x",
+      mount: () => ({ update() {}, unmount() {} }),
+      bounds: (n: Document["nodes"][number]) => n,
+      inspector: () => [],
+      toSvg: () => "",
+      // As a plugin may write it: no context passed on.
+      checkField: (key: string, value: unknown) => fieldError({ stroke: { type: "stroke" } }, key, value),
+    } as never);
+    const doc = saved();
+    const stroke = { paint: { type: "solid", color: "#000000" }, width: 1, dash: "solid", color: "#00ff00" };
+    doc.nodes.push({ id: "l", type: "x.line", page: "pg-1", x: 0, y: 0, width: 10, height: 10, z: 5, rotation: 0, opacity: 1, locked: false, stroke } as never);
+    write(doc);
+    await api.run(PATH, "node.update", { id: "l", patch: { stroke: { width: 3 } } });
+    expect(saved().nodes.find((n) => n.id === "l")).toMatchObject({ stroke: { width: 3, color: "#00ff00" } });
+    await refuses(api.run(PATH, "node.update", { id: "l", patch: { stroke: { colour: "#ff0000" } } }), /"stroke\.colour" is not a stroke key/);
+    // Outside node.update the whole stroke is judged, as before.
+    expect(fieldError({ stroke: { type: "stroke" } }, "stroke", stroke)).toMatch(/"stroke\.color" is not a stroke key/);
+  });
 });
+

@@ -94,6 +94,17 @@ describe("panel.display", () => {
     expect(channels()![0]).toMatchObject({ min: 1200, lut: "fire", visible: false });
   });
 
+  it("switches a disabled display adjustment on, with the LUT changed, in one undo step", async () => {
+    const disabled = { type: "display", enabled: false, params: { channels: seedDisplay(grey16, "auto") } };
+    const { call, node, channels, store } = setup({ partial: { adjustments: [disabled] } });
+    await call("panel.display", { id: "p-1", set: { lut: "fire" } });
+    expect(node().adjustments).toHaveLength(1);
+    expect(node().adjustments[0].enabled).toBe(true);
+    expect(channels()![0].lut).toBe("fire");
+    store.undo();
+    expect(node().adjustments).toEqual([disabled]);
+  });
+
   it("refuses a channel out of range", async () => {
     const { call } = setup();
     await expect(call("panel.display", { id: "p-1", channel: 1, set: { lut: "fire" } })).rejects.toThrow(/panel\.display: .*channel/);
@@ -157,6 +168,16 @@ describe("panel.display-auto", () => {
     expect(channels()![0]).toMatchObject({ min: 56, max: 255 });
   });
 
+  it("switches a disabled display adjustment on, in one undo step", async () => {
+    const disabled = { type: "display", enabled: false, params: { channels: seedDisplay(ramp16, "auto") } };
+    const { call, node, channels, store } = setup({ plane: ramp16, partial: { adjustments: [disabled] } });
+    await call("panel.display-auto", { id: "p-1" });
+    expect(node().adjustments[0].enabled).toBe(true);
+    expect(channels()![0]).toMatchObject({ min: 3, max: 996 });
+    store.undo();
+    expect(node().adjustments).toEqual([disabled]);
+  });
+
   it("refuses with the not-loaded message when there are no samples", async () => {
     const { call } = setup({ plane: null });
     await expect(call("panel.display-auto", { id: "p-1" })).rejects.toThrow("panel.display-auto: the image is not loaded; open the figure");
@@ -169,7 +190,8 @@ describe("panel.display-auto", () => {
     expect(command.hidden).toBeFalsy();
     expect(command.applies(ctx(["p-1"]))).toBe(true);
     expect(command.applies(ctx([]))).toBe(false);
-    expect(setup({ file: "diagram.svg" }).r.commands.get("panel.display-auto")!.applies(setup({ file: "diagram.svg" }).ctx(["p-1"]))).toBe(false);
+    const svg = setup({ file: "diagram.svg" });
+    expect(svg.r.commands.get("panel.display-auto")!.applies(svg.ctx(["p-1"]))).toBe(false);
   });
 });
 

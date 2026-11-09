@@ -16,7 +16,7 @@ export function displayChannelCount(plane: Plane): 1 | 3 {
 }
 
 /** The highest sample value of the plane's bit depth. */
-function topValue(plane: Plane): number {
+export function topValue(plane: Plane): number {
   return plane.bitsPerSample === 8 ? 255 : 65535;
 }
 

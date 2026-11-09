@@ -1,5 +1,6 @@
-import { channelSamples, displayChannelCount, readChannel, seedDisplay, type DisplayChannel } from "../adjust/display";
+import { channelSamples, readChannel, seedDisplay, topValue, type DisplayChannel } from "../adjust/display";
 import type { Plane } from "../links/decoders/tiff-convert";
+import { extensionOf } from "../links/intake-classify";
 import { sourceKindOf } from "../links/resolver";
 import { histogram, percentiles } from "../model/histogram";
 import type { FileNode, NodeId } from "../model/types";
@@ -72,8 +73,7 @@ const HISTOGRAM_PARAMS: ParamSpec = {
 
 /** Whether panel `node` shows a vector source (SVG or PDF), which has no samples to display. */
 function isVector(node: FileNode): boolean {
-  const ext = /\.([^./\\]+)$/.exec(node.file)?.[1] ?? "";
-  const kind = sourceKindOf(ext);
+  const kind = sourceKindOf(extensionOf(node.file));
   return kind === "svg" || kind === "pdf";
 }
 
@@ -126,15 +126,15 @@ function checkChannel(command: string, channel: number, count: number): void {
 }
 
 /** The highest sample value of the panel's image: from the plane, or headless 255 for a raster file and 65535 for a TIFF. */
-function topValue(node: FileNode, plane: Plane | null): number {
-  if (plane) return plane.bitsPerSample === 8 ? 255 : 65535;
-  const ext = /\.([^./\\]+)$/.exec(node.file)?.[1] ?? "";
-  return sourceKindOf(ext) === "raster" ? 255 : 65535;
+function topOf(node: FileNode, plane: Plane | null): number {
+  if (plane) return topValue(plane);
+  return sourceKindOf(extensionOf(node.file)) === "raster" ? 255 : 65535;
 }
 
 /**
  * Writes `channels` as the panel's `display` adjustment in one commit named `command`: patched in place when there is
- * one, else inserted first (it maps the samples, so it runs before any pixel adjustment). Other adjustments are kept.
+ * one (and switched on, so an edit to a disabled one is never a silent no-op), else inserted first (it maps the
+ * samples, so it runs before any pixel adjustment). Other adjustments are kept.
  */
 function writeDisplay(ctx: CommandContext, command: string, id: NodeId, channels: DisplayChannel[]): void {
   ctx.store.commit(command, (draft) => {
@@ -142,7 +142,7 @@ function writeDisplay(ctx: CommandContext, command: string, id: NodeId, channels
     const params = { channels: channels.map((c) => ({ ...c })) };
     const index = target.adjustments.findIndex((a) => a.type === DISPLAY);
     if (index === -1) target.adjustments.unshift({ type: DISPLAY, enabled: true, params });
-    else target.adjustments[index] = { ...target.adjustments[index], params: { ...target.adjustments[index].params, ...params } };
+    else target.adjustments[index] = { ...target.adjustments[index], enabled: true, params: { ...target.adjustments[index].params, ...params } };
   });
 }
 
@@ -150,7 +150,7 @@ function writeDisplay(ctx: CommandContext, command: string, id: NodeId, channels
 function visibleSamples(plane: Plane, channel: number): ArrayLike<number> {
   const { values, invert } = channelSamples(plane, channel);
   if (!invert) return values;
-  const top = plane.bitsPerSample === 8 ? 255 : 65535;
+  const top = topValue(plane);
   const out = plane.bitsPerSample === 8 ? new Uint8Array(values.length) : new Uint16Array(values.length);
   for (let i = 0; i < values.length; i++) out[i] = top - values[i];
   return out;
@@ -165,7 +165,7 @@ function display(ctx: CommandContext, args: DisplayArgs): Record<string, never> 
   checkChannel(command, args.channel, channels.length);
   const { min, max, gamma, lut, visible } = args.set;
   if (lut !== undefined && !ctx.registries.luts.get(lut)) throw new CommandError(`${command}: there is no LUT "${lut}"`);
-  const top = topValue(node, plane);
+  const top = topOf(node, plane);
   const clamp = (v: number): number => Math.min(top, Math.max(0, v));
   const channel = { ...channels[args.channel] };
   if (min !== undefined) channel.min = clamp(min);
@@ -214,7 +214,7 @@ function histogramOf(ctx: CommandContext, args: HistogramArgs): HistogramResult 
   const channels = currentChannels(command, node, plane);
   checkChannel(command, args.channel, channels.length);
   const { values, invert } = channelSamples(plane, args.channel);
-  const top = plane.bitsPerSample === 8 ? 255 : 65535;
+  const top = topValue(plane);
   let dataMin = Infinity;
   let dataMax = -Infinity;
   for (let i = 0; i < values.length; i++) {
@@ -226,7 +226,7 @@ function histogramOf(ctx: CommandContext, args: HistogramArgs): HistogramResult 
   const shown = channels[args.channel];
   let lo = Math.min(dataMin, shown.min, shown.max);
   let hi = Math.max(dataMax, shown.min, shown.max);
-  if (lo === hi) {
+  if (!(hi > lo)) {
     lo -= 0.5;
     hi += 0.5;
   }

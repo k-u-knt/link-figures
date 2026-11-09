@@ -18,6 +18,11 @@ describe("histogram", () => {
     expect(histogram(Uint8Array.from([255, 255, 0]), 8, 2, 0, 255)).toEqual([2, 1]);
   });
 
+  it("widens an empty or reversed interval by ±0.5 itself, so every value is counted", () => {
+    expect(histogram(Uint8Array.from([5, 5]), 0, 3, 5, 5)).toEqual([0, 2, 0]);
+    expect(histogram(Uint8Array.from([5, 6, 7]), 0, 4, 9, 2).reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
   it("puts a flat channel widened by ±0.5 in the middle bin", () => {
     expect(histogram(Uint16Array.from([700, 700]), 0, 3, 699.5, 700.5)).toEqual([0, 2, 0]);
   });
@@ -28,6 +33,11 @@ describe("percentiles", () => {
     const values = Uint16Array.from({ length: 1000 }, (_, i) => 999 - i);
     expect(percentiles(values, 0.35)).toEqual({ min: 3, max: 996 });
     expect(percentiles(values, 0)).toEqual({ min: 0, max: 999 });
+  });
+
+  it("keeps an index that is a whole number in exact arithmetic (n = 22000, 0.35%)", () => {
+    const values = Uint16Array.from({ length: 22000 }, (_, i) => i);
+    expect(percentiles(values, 0.35)).toEqual({ min: 77, max: 21922 });
   });
 
   it("gives 0..0 for no values", () => {

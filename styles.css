@@ -147,6 +147,26 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* A heading over the fields after it (a display channel's name). */
+.lf-field-heading {
+  margin: var(--size-4-3) 0 var(--size-4-2);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+/* A display channel's histogram: 220×60 CSS px whatever its bitmap's pixel ratio; its handles are dragged. */
+.lf-histogram {
+  width: 220px;
+  height: 60px;
+  max-width: 100%;
+  cursor: ew-resize;
+  touch-action: none;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
 /* The checkbox beside a colour that may be none (a pattern's background). */
 .lf-field-control .lf-null-toggle {
   flex: none;

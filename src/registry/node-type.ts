@@ -199,6 +199,11 @@ export interface FieldRoute<N extends Node = Node> {
    * `doc`, as the command would refuse it); every node of the type when not given.
    */
   applies?(node: N, doc: Document, ctx?: InspectorContext): boolean;
+  /**
+   * Written on the first selected node only, the one whose fields the inspector shows (a panel's display: per-image
+   * ranges rarely match); by default on every selected node of the type that it applies to.
+   */
+  firstOnly?: boolean;
   /** The command call (its id and JSON arguments) that sets the field of `node` to `value`. */
   call(node: N, value: unknown, ctx?: InspectorContext): { id: string; args: Record<string, unknown> };
 }

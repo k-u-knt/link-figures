@@ -1,8 +1,8 @@
-import { channelSamples, readChannel, seedDisplay, topValue, type DisplayChannel } from "../adjust/display";
+import { channelSamples, displayChannelsOf, topValue, type DisplayChannel } from "../adjust/display";
 import type { Plane } from "../links/decoders/tiff-convert";
 import { extensionOf } from "../links/intake-classify";
 import { sourceKindOf } from "../links/resolver";
-import { histogram, percentiles } from "../model/histogram";
+import { percentiles, planeHistogram, type HistogramResult } from "../model/histogram";
 import type { FileNode, NodeId } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
@@ -33,15 +33,7 @@ interface HistogramArgs {
   bins: number;
 }
 
-/** What `panel.histogram` returns: the channel's data range, the binned interval, and the counts (§10.2). */
-export interface HistogramResult {
-  dataMin: number;
-  dataMax: number;
-  lo: number;
-  hi: number;
-  bitsPerSample: 8 | 16;
-  counts: number[];
-}
+export type { HistogramResult };
 
 const DISPLAY_PARAMS: ParamSpec = {
   id: { type: "string", required: true },
@@ -109,15 +101,8 @@ function displayOf(node: FileNode) {
  */
 function currentChannels(command: string, node: FileNode, plane: Plane | null): DisplayChannel[] {
   const existing = displayOf(node);
-  if (!plane) {
-    if (!existing) throw new CommandError(`${command}: the image is not loaded; open the figure`);
-    const given = Array.isArray(existing.params.channels) ? (existing.params.channels as unknown[]) : [];
-    const fallback: DisplayChannel = { min: 0, max: 65535, gamma: 1, lut: "grey", visible: true };
-    return given.map((c) => readChannel(c, fallback));
-  }
-  if (!existing) return seedDisplay(plane, node.range);
-  const given = Array.isArray(existing.params.channels) ? (existing.params.channels as unknown[]) : [];
-  return seedDisplay(plane, "auto").map((fallback, c) => readChannel(given[c], fallback));
+  if (!plane && !existing) throw new CommandError(`${command}: the image is not loaded; open the figure`);
+  return displayChannelsOf(existing?.params, plane, node.range);
 }
 
 /** Refuses `channel` unless `channels` has it. */
@@ -213,25 +198,7 @@ function histogramOf(ctx: CommandContext, args: HistogramArgs): HistogramResult 
   const plane = requireSamples(ctx, command, node.id);
   const channels = currentChannels(command, node, plane);
   checkChannel(command, args.channel, channels.length);
-  const { values, invert } = channelSamples(plane, args.channel);
-  const top = topValue(plane);
-  let dataMin = Infinity;
-  let dataMax = -Infinity;
-  for (let i = 0; i < values.length; i++) {
-    const v = invert ? top - values[i] : values[i];
-    if (v < dataMin) dataMin = v;
-    if (v > dataMax) dataMax = v;
-  }
-  if (values.length === 0) dataMin = dataMax = 0;
-  const shown = channels[args.channel];
-  let lo = Math.min(dataMin, shown.min, shown.max);
-  let hi = Math.max(dataMax, shown.min, shown.max);
-  if (!(hi > lo)) {
-    lo -= 0.5;
-    hi += 0.5;
-  }
-  const counts = histogram(values, invert ? plane.bitsPerSample : 0, args.bins, lo, hi);
-  return { dataMin, dataMax, lo, hi, bitsPerSample: plane.bitsPerSample, counts };
+  return planeHistogram(plane, args.channel, channels[args.channel], args.bins);
 }
 
 /** The one selected panel showing a TIFF or raster image that may be changed, if that is what is selected. */

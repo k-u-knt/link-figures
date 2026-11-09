@@ -12,6 +12,7 @@ import type { Field } from "../registry/fields";
 import type { FieldRoute, ImageState, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { strokeFields } from "../registry/paint";
 import { fieldError, paramError, type ParamSpec } from "../registry/params";
+import { displayFields, displayRoute } from "./display-fields";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
 
 export { fileFrameSvg, fileNodeSvg, skippedReason };
@@ -403,7 +404,7 @@ export const fileNodeType: NodeType<FileNode> = {
   },
 
   /**
-   * The page of a paged file, the crop insets of an image, then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
+   * The page of a paged file, the crop insets of an image, its Display section (a TIFF or raster picture), then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
    * frame, its paint, width and dashes.
    */
   inspector(node: FileNode, ctx: InspectorContext): Field[] {
@@ -413,6 +414,7 @@ export const fileNodeType: NodeType<FileNode> = {
       // An image panel's crop, as the inset of each side; a panel that shows note content, or that the view shows only
       // a badge for (its link does not resolve), has nothing to crop.
       ...(node.show === "image" && !showsNoImage(node, ctx) ? Object.keys(CROP_SIDES).map(cropField) : []),
+      ...displayFields(node, ctx),
       { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() },
       ...(node.frame ? strokeFields("frame", "Frame") : []),
     ];
@@ -421,7 +423,7 @@ export const fileNodeType: NodeType<FileNode> = {
   /** Its box, rotated: anchors `n e s w`. */
   attachable: boxAttachable,
 
-  fieldRoute: cropRoute,
+  fieldRoute: (key) => cropRoute(key) ?? displayRoute(key),
 
   /** An adjustment without `enabled` is on, and one without `params` has none, as a file's are read. */
   completeUpdate(_before: FileNode, after: FileNode): FileNode {

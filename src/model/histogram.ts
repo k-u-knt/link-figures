@@ -1,3 +1,16 @@
+import { channelSamples, topValue } from "../adjust/display";
+import type { Plane } from "../links/decoders/tiff-convert";
+
+/** What `panel.histogram` returns: the channel's data range, the binned interval, and the counts (§10.2). */
+export interface HistogramResult {
+  dataMin: number;
+  dataMax: number;
+  lo: number;
+  hi: number;
+  bitsPerSample: 8 | 16;
+  counts: number[];
+}
+
 /**
  * Counts `values` in `bins` equal bins over [lo, hi]: a value v falls in bin floor((v − lo) / (hi − lo) · bins), and a
  * value at or beyond either end in the end bin, so every value is counted once. With `invertBits` (8 or 16; 0 for none)
@@ -45,4 +58,30 @@ export function percentiles(values: ArrayLike<number>, sat: number): { min: numb
     return top;
   };
   return { min: at(low), max: at(high) };
+}
+
+/**
+ * The histogram of one channel of `plane` in the values the user sees (inverted for a `whiteIsZero` plane), in `bins`
+ * equal bins over [lo, hi] = [min(dataMin, display min), max(dataMax, display max)], so both of the display's ends are
+ * inside it (§10.2); a flat span is widened to [lo − 0.5, hi + 0.5]. `shown` is the channel's display min and max.
+ */
+export function planeHistogram(plane: Plane, channel: number, shown: { min: number; max: number }, bins: number): HistogramResult {
+  const { values, invert } = channelSamples(plane, channel);
+  const top = topValue(plane);
+  let dataMin = Infinity;
+  let dataMax = -Infinity;
+  for (let i = 0; i < values.length; i++) {
+    const v = invert ? top - values[i] : values[i];
+    if (v < dataMin) dataMin = v;
+    if (v > dataMax) dataMax = v;
+  }
+  if (values.length === 0) dataMin = dataMax = 0;
+  let lo = Math.min(dataMin, shown.min, shown.max);
+  let hi = Math.max(dataMax, shown.min, shown.max);
+  if (!(hi > lo)) {
+    lo -= 0.5;
+    hi += 0.5;
+  }
+  const counts = histogram(values, invert ? plane.bitsPerSample : 0, bins, lo, hi);
+  return { dataMin, dataMax, lo, hi, bitsPerSample: plane.bitsPerSample, counts };
 }

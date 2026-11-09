@@ -510,6 +510,89 @@ describe("samplesNow", () => {
     expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
   });
 
+  test("asked for before a TIFF or raster panel's first resolution lands: null, then the chrome is drawn again when it does", async () => {
+    const t = setup();
+    t.hold(true);
+    const next = t.relink({ [t.a.id]: "f.tif" });
+    t.nodeHost.renderAll(next);
+    const resolving = t.nodeHost.resolveStale();
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await settle();
+    expect(t.view.samplesLanded).not.toHaveBeenCalled();
+    for (const d of t.decodes) d.release();
+    await resolving;
+    expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
+    expect(t.nodeHost.samplesNow(t.a.id)?.bitsPerSample).toBe(16);
+  });
+
+  test("a raster panel's first resolution landing leads on to its samples: the chrome is drawn again for each", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    const seen: (Plane | null)[] = [];
+    t.view.samplesLanded.mockImplementation(() => void seen.push(t.nodeHost.samplesNow(t.a.id)));
+    const resolving = t.nodeHost.resolveStale();
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await resolving;
+    for (let i = 0; i < 5; i++) await settle();
+    // The resolution landed (no samples yet, a decode starts), then the samples did.
+    expect(seen.map((p) => p !== null)).toEqual([false, true]);
+  });
+
+  test("a PDF panel asked for before its resolution is not waited for", async () => {
+    const t = setup();
+    t.nodeHost.renderAll(t.doc);
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await t.nodeHost.resolveStale();
+    expect(t.view.samplesLanded).not.toHaveBeenCalled();
+  });
+
+  test("relinked away and back, a panel whose plane was evicted decodes again when its resolution lands", async () => {
+    const t = setup();
+    const seen: (Plane | null)[] = [];
+    t.view.samplesLanded.mockImplementation(() => void seen.push(t.nodeHost.samplesNow(t.a.id)));
+    const first = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(first);
+    await t.nodeHost.resolveStale();
+    t.nodeHost.samplesNow(t.a.id);
+    for (let i = 0; i < 3; i++) await settle();
+    expect(seen.at(-1)).not.toBeNull();
+    // Evicted by other panels' planes.
+    t.planes.clear();
+
+    const away = t.relink({ [t.a.id]: "e2.png" });
+    t.nodeHost.applyChange(away, new Set([t.a.id]));
+    for (let i = 0; i < 3; i++) await settle();
+    const back = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.applyChange(back, new Set([t.a.id]));
+    seen.length = 0;
+    // Asked for while e2.png's resolution is still the one shown: null, and told when e.png's lands.
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    for (let i = 0; i < 5; i++) await settle();
+    expect(seen.map((p) => p !== null)).toEqual([false, true]);
+    expect(vi.mocked(t.decoders.decodeSamples).mock.calls.map((c) => c[3])).toEqual([expect.stringContaining("e.png"), expect.stringContaining("e.png")]);
+  });
+
+  test("an evicted plane asked for again outside a landed redraw is decoded again, and the chrome is drawn again", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    // The first decode lands inside a landed redraw that asks for it again.
+    t.view.samplesLanded.mockImplementation(() => void t.nodeHost.samplesNow(t.a.id));
+    t.nodeHost.samplesNow(t.a.id);
+    await settle();
+    expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
+    t.planes.clear();
+    t.view.samplesLanded.mockClear();
+
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await settle();
+    expect(t.decoders.decodeSamples).toHaveBeenCalledTimes(2);
+    expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
+    expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
+  });
+
   test("more panels than the cache holds, asked for in one render, do not decode and redraw in a loop", async () => {
     const t = setup();
     t.setCapacity(4);

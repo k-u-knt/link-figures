@@ -65,6 +65,22 @@ export function readChannel(value: unknown, fallback: DisplayChannel): DisplayCh
 }
 
 /**
+ * The channels a panel's display draws with, given its `display` adjustment's `params` (undefined when it has none):
+ * with a plane, one per channel of it — the adjustment's own, each missing or malformed one filled as drawing fills it
+ * (the plane's "auto" seed), or without an adjustment the seed of what the panel shows by its `range` (§10.1). Without a
+ * plane only the adjustment's stored channels are known (each read over a 16-bit grey fallback); none without either.
+ */
+export function displayChannelsOf(params: Record<string, unknown> | undefined, plane: Plane | null, range: Range16 | "auto"): DisplayChannel[] {
+  const given = params && Array.isArray(params.channels) ? (params.channels as unknown[]) : [];
+  if (!plane) {
+    const fallback: DisplayChannel = { min: 0, max: 65535, gamma: 1, lut: "grey", visible: true };
+    return given.map((c) => readChannel(c, fallback));
+  }
+  if (!params) return seedDisplay(plane, range);
+  return seedDisplay(plane, "auto").map((fallback, c) => readChannel(given[c], fallback));
+}
+
+/**
  * Raw sample value (0..2^bits − 1) to the LUT step (0..255) of one channel. A `whiteIsZero` sample is inverted first
  * (u = top − v). Then t = clamp((u − min) / (max − min), 0, 1), t = t^(1/gamma), step = round(255 t); `max ≤ min`
  * gives t = 0.5. As in `planeToRgba`'s table, the product is formed before dividing so exact halves stay exact.

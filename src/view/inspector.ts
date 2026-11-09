@@ -3,6 +3,8 @@ import { mmToPx, pxToMm } from "../model/geometry";
 import type { Node, NodeId, Page, Paint } from "../model/types";
 import { childrenOf } from "../model/groups";
 import { getPreset } from "../model/presets";
+import type { HistogramResult } from "../model/histogram";
+import type { UndoStep } from "../registry/command";
 import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
 import type { Registries } from "../registry";
@@ -53,13 +55,23 @@ function setControlValue(control: Control, field: Field, value: unknown): void {
   else control.value = typeof value === "string" ? value : "";
 }
 
-/** What generated fields need besides their values: the registries (the paint types, for a `paint` field). The inspector passes its node types' context. */
+/**
+ * What generated fields need besides their values: the registries (the paint types, for a `paint` field), and how to
+ * end a run of writes that merge into one undo step (a histogram handle's drag). The inspector passes its node types' context.
+ */
 export interface FieldEnv {
   registries?: Pick<Registries, "paints">;
+  /** Ends the undo step a gesture's writes have been merging into: the next write is a step of its own. */
+  endMerge?(): void;
 }
 
 type Read = (key: string) => unknown;
-type Write = (key: string, value: unknown) => void;
+/**
+ * Writes `value` at `key`. `step` is for a gesture made of many writes (a drag): "start" on its first, which does not
+ * merge into the edit before it, then "continue" (see `UndoStep`), and `FieldEnv.endMerge` when it ends. Without it a
+ * write merges with the writes of the same field just before it, as the store merges commits.
+ */
+type Write = (key: string, value: unknown, step?: UndoStep) => void;
 
 /**
  * A field made of other fields (`paint`, `stops`), drawn into its holder. Which controls it has depends on its value
@@ -182,12 +194,152 @@ function stopsComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   return composite;
 }
 
+/** The histogram canvas in CSS px; a handle's x maps linearly onto the histogram's [lo, hi]. */
+const HISTOGRAM_WIDTH = 220;
+const HISTOGRAM_HEIGHT = 60;
+
+/** `value` if it is a histogram as `panel.histogram` gives it, else null. */
+function asHistogram(value: unknown): HistogramResult | null {
+  if (!isRecord(value) || !Array.isArray(value.counts) || typeof value.lo !== "number" || typeof value.hi !== "number") return null;
+  return value.hi > value.lo ? (value as unknown as HistogramResult) : null;
+}
+
+/** A theme colour of `el` (an Obsidian CSS variable), or `fallback` where styles cannot be read. */
+function themeColor(el: HTMLElement, name: string, fallback: string): string {
+  try {
+    const value = getComputedStyle(el).getPropertyValue(name).trim();
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * A `histogram` field (`<channel>.histogram`): a 220×60 canvas of the channel's counts on a log scale over [lo, hi],
+ * with its min and max (`<channel>.min`, `<channel>.max`) as two vertical handles and the counts outside them dimmed.
+ * A press takes the nearer handle; each move writes it (a "start", then "continue" writes, so the drag is one undo
+ * step), never past the other handle; the release ends the step. While a drag lasts the histogram it started on, and
+ * so the mapping of x to values, stays as it was.
+ */
+function histogramComposite(holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv): Composite {
+  const base = field.key.slice(0, field.key.lastIndexOf("."));
+  const keys = { min: `${base}.min`, max: `${base}.max` };
+  const ratio = Math.max(1, Math.round((globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1));
+  let canvas: HTMLCanvasElement | null = null;
+  let drag: { handle: "min" | "max"; data: HistogramResult; started: boolean } | null = null;
+
+  const data = (): HistogramResult | null => drag?.data ?? asHistogram(read(field.key));
+  const numberAt = (key: string): number => {
+    const v = read(key);
+    return typeof v === "number" && Number.isFinite(v) ? v : NaN;
+  };
+  const xOf = (value: number, d: HistogramResult): number => ((value - d.lo) / (d.hi - d.lo)) * HISTOGRAM_WIDTH;
+  const valueAt = (x: number, d: HistogramResult): number => Math.round(d.lo + (Math.min(HISTOGRAM_WIDTH, Math.max(0, x)) / HISTOGRAM_WIDTH) * (d.hi - d.lo));
+  /** The pointer's x across the canvas in CSS px, whatever size the canvas is drawn at. */
+  const pointerX = (ev: PointerEvent): number => {
+    const rect = typeof canvas?.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
+    return rect && rect.width > 0 ? ((ev.clientX - rect.left) * HISTOGRAM_WIDTH) / rect.width : ev.offsetX;
+  };
+
+  const paint = (): void => {
+    const g = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
+    if (!canvas || !g) return;
+    g.setTransform(ratio, 0, 0, ratio, 0, 0);
+    g.clearRect(0, 0, HISTOGRAM_WIDTH, HISTOGRAM_HEIGHT);
+    const d = data();
+    if (!d) return;
+    const min = numberAt(keys.min);
+    const max = numberAt(keys.max);
+    const xMin = xOf(min, d);
+    const xMax = xOf(max, d);
+    const bins = d.counts.length;
+    const peak = Math.log1p(d.counts.reduce((a, b) => Math.max(a, b), 0)) || 1;
+    g.fillStyle = themeColor(canvas, "--text-muted", "#888888");
+    for (let i = 0; i < bins; i++) {
+      const x0 = (i / bins) * HISTOGRAM_WIDTH;
+      const x1 = ((i + 1) / bins) * HISTOGRAM_WIDTH;
+      const centre = (x0 + x1) / 2;
+      const h = (Math.log1p(d.counts[i]) / peak) * HISTOGRAM_HEIGHT;
+      g.globalAlpha = centre < xMin || centre > xMax ? 0.3 : 1;
+      g.fillRect(x0, HISTOGRAM_HEIGHT - h, x1 - x0, h);
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = themeColor(canvas, "--interactive-accent", "#7f6df2");
+    for (const x of [xMin, xMax]) if (Number.isFinite(x)) g.fillRect(Math.min(HISTOGRAM_WIDTH - 2, Math.max(0, x - 1)), 0, 2, HISTOGRAM_HEIGHT);
+  };
+
+  const end = (ev?: PointerEvent): void => {
+    if (!drag) return;
+    const started = drag.started;
+    drag = null;
+    if (started) env.endMerge?.();
+    try {
+      if (ev && canvas?.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+    } catch {
+      // Already released.
+    }
+    paint();
+  };
+
+  const composite: Composite = {
+    shape: () => "histogram",
+    drawn: "",
+    draw() {
+      composite.drawn = composite.shape();
+      holder.empty();
+      const el = holder.createEl("canvas", {
+        cls: "lf-histogram",
+        attr: { width: HISTOGRAM_WIDTH * ratio, height: HISTOGRAM_HEIGHT * ratio, "aria-label": `${field.label}: drag the min or max handle` },
+      });
+      canvas = el;
+      el.addEventListener("pointerdown", (e: Event) => {
+        const ev = e as PointerEvent;
+        if (ev.button !== undefined && ev.button !== 0) return;
+        const d = asHistogram(read(field.key));
+        const min = numberAt(keys.min);
+        const max = numberAt(keys.max);
+        if (!d || Number.isNaN(min) || Number.isNaN(max)) return;
+        const x = pointerX(ev);
+        const toMin = Math.abs(x - xOf(min, d));
+        const toMax = Math.abs(x - xOf(max, d));
+        // Handles on top of each other: the side pressed on says which.
+        const handle = toMax < toMin || (toMax === toMin && x >= xOf(max, d)) ? "max" : "min";
+        drag = { handle, data: d, started: false };
+        ev.preventDefault?.();
+        try {
+          el.setPointerCapture?.(ev.pointerId);
+        } catch {
+          // A pointer that is gone already: the drag still ends on its release.
+        }
+      });
+      el.addEventListener("pointermove", (e: Event) => {
+        if (!drag) return;
+        const other = numberAt(drag.handle === "min" ? keys.max : keys.min);
+        let value = valueAt(pointerX(e as PointerEvent), drag.data);
+        // A handle never crosses the other.
+        if (!Number.isNaN(other)) value = drag.handle === "min" ? Math.min(value, other) : Math.max(value, other);
+        const step: UndoStep = drag.started ? "continue" : "start";
+        drag.started = true;
+        // The inspector syncs this field (and so paints it again) when the write lands.
+        write(keys[drag.handle], value, step);
+      });
+      for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(type, (e: Event) => end(e as PointerEvent));
+      paint();
+    },
+    sync() {
+      paint();
+    },
+  };
+  return composite;
+}
+
 /** The `<input>` type of each field kind that is one input. */
 const INPUT_TYPES: Partial<Record<Field["kind"], string>> = { number: "number", text: "text", color: "color", toggle: "checkbox" };
 
 const COMPOSITES: Partial<Record<Field["kind"], (holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv) => Composite>> = {
   paint: paintComposite,
   stops: stopsComposite,
+  histogram: histogramComposite,
 };
 
 /**
@@ -199,6 +351,10 @@ const COMPOSITES: Partial<Record<Field["kind"], (holder: HTMLElement, field: Fie
  */
 export function renderFields(container: HTMLElement, fields: Field[], read: Read, write: Write, env: FieldEnv = {}): void {
   for (const field of fields) {
+    if (field.kind === "heading") {
+      container.createDiv({ cls: "lf-field-heading", text: field.label });
+      continue;
+    }
     const makeComposite = COMPOSITES[field.kind];
     if (makeComposite) {
       const row = container.createDiv({ cls: ["lf-field", "lf-field-group"] });
@@ -318,7 +474,7 @@ interface Section {
   signature: string;
   fields: Field[];
   read(key: string): unknown;
-  write(key: string, value: unknown): void;
+  write(key: string, value: unknown, step?: UndoStep): void;
 }
 
 /**
@@ -364,14 +520,14 @@ export class Inspector {
     this.pending = false;
     // The same controls as before (a store change that is none of their business, or the user's own edit): only their values change, so a field being typed in keeps its text and focus.
     if (section.signature === this.signature) {
-      syncFields(this.el, section.fields, section.read, this.context());
+      syncFields(this.el, section.fields, section.read, this.fieldEnv());
       return;
     }
     this.signature = section.signature;
     this.el.empty();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
-    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.context());
+    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv());
   }
 
   /**
@@ -388,6 +544,11 @@ export class Inspector {
     };
   }
 
+  /** The node types' context, and how a gesture's writes end their undo step, for drawing the fields. */
+  private fieldEnv(): FieldEnv & InspectorContext {
+    return { ...this.context(), endMerge: () => this.view.store.endMerge() };
+  }
+
   /** A control in this inspector has the focus and holds text that has not been committed. */
   private isTypingIn(): boolean {
     const active = this.el.ownerDocument?.activeElement;
@@ -396,9 +557,12 @@ export class Inspector {
 
   /**
    * Runs `calls`, a write of the field `key` (one of `fields`, or a part of one), in one commit labelled `inspect:<key>`.
-   * One that is refused leaves the document as it was, and says so in a notice naming the field and why.
+   * One that is refused leaves the document as it was, and says so in a notice naming the field and why. With `step`
+   * the commit is kept in the history as `UndoStep` says ("start" never merges into the edit before it); without it, it
+   * merges with the same field's commits just before it, as any commit does.
    */
-  private runWrite(key: string, fields: readonly Field[], calls: PreparedCall[]): void {
+  private runWrite(key: string, fields: readonly Field[], calls: PreparedCall[], step?: UndoStep): void {
+    if (step === "start" || step === "own") this.view.store.endMerge();
     try {
       runInOneCommit(this.view.store, this.view.commandContext(), calls, `inspect:${key}`);
     } catch (error) {
@@ -406,6 +570,8 @@ export class Inspector {
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`Link Figures: the inspector could not set "${key}"`, error);
       this.onWriteFailed(`Link Figures: could not change ${label}: ${reason}`);
+    } finally {
+      if (step === "own") this.view.store.endMerge();
     }
   }
 
@@ -474,15 +640,16 @@ export class Inspector {
         const value = node ? readValue(node, key) : undefined;
         return mm.has(key) && typeof value === "number" ? pxToMm(value) : value;
       },
-      write: (key, value) => {
+      write: (key, value, step) => {
         const route = type?.fieldRoute?.(key);
         if (route) {
-          // One call of the type's command per selected node of the type, in one commit, as `node.update` writes are.
+          // One call of the type's command per selected node of the type (or the first only), in one commit, as `node.update` writes are.
           const ctx = this.context();
           const routed = this.view.store.doc.nodes
-            .filter((node) => targets.has(node.id) && node.type === first.type && (route.applies?.(node, this.view.store.doc, ctx) ?? true))
+            .filter((node) => (route.firstOnly ? node.id === first.id : targets.has(node.id)) && node.type === first.type)
+            .filter((node) => route.applies?.(node, this.view.store.doc, ctx) ?? true)
             .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value, ctx)));
-          if (routed.length > 0) this.runWrite(key, fields, routed);
+          if (routed.length > 0) this.runWrite(key, fields, routed, step);
           return;
         }
         const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
@@ -504,7 +671,7 @@ export class Inspector {
           calls.push(prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
         }
         if (calls.length === 0) return;
-        this.runWrite(key, fields, calls);
+        this.runWrite(key, fields, calls, step);
       },
     };
   }

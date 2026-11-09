@@ -3,12 +3,16 @@
  * dotted path into the value (`"border.width"`, `"stroke.paint"`). A `paint` field is a paint-type select plus the chosen
  * type's own fields (keys relative to the paint); a `stops` field is a gradient's list of stops, with add and remove.
  *
+ * A `heading` is a line of text that heads the fields after it (a display channel's name); it has no value. A
+ * `histogram` is a display channel's histogram with its min and max handles (keys relative to the channel: its key is
+ * `<channel>.histogram`, and it reads `<channel>.histogram` for the counts and writes `<channel>.min` and `<channel>.max`).
+ *
  * Two options stand for a value that may be null (absent): a `toggle` with an `onValue` is on while the value is not
  * null, and writes a copy of `onValue` when turned on and null when turned off (a shape's border); a `color` that is
  * `nullable` has a checkbox beside it that does the same with the colour last shown (a pattern's background).
  */
 export type Field = {
-  kind: "number" | "text" | "color" | "select" | "toggle" | "paint" | "stops";
+  kind: "number" | "text" | "color" | "select" | "toggle" | "paint" | "stops" | "heading" | "histogram";
   key: string;
   label: string;
   min?: number;

@@ -1,6 +1,7 @@
 import { Keymap } from "obsidian";
 import type { Plane } from "../links/decoders/tiff-convert";
-import { resolveFileNode, samplesKey } from "../links/resolver";
+import { extensionOf } from "../links/intake-classify";
+import { resolveFileNode, samplesKey, sourceKindOf } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
@@ -55,13 +56,20 @@ export class NodeHost {
   private readonly samplesPending = new Set<string>();
   /** Samples keys whose `samplesNow` decode failed: not tried again (a changed file has a new key). */
   private readonly samplesFailed = new Set<string>();
-  /** Samples keys `samplesNow` has decoded: a redraw that their landing caused does not decode them again. */
+  /**
+   * Samples keys `samplesNow` has decoded since the document last changed: a redraw that their landing caused does not
+   * decode them again. Cleared on every change to the document (`renderAll`, `applyChange`, `reset`), so a panel relinked
+   * away and back, whose plane was evicted meanwhile, is decoded again when its resolution lands.
+   */
   private readonly samplesDecoded = new Set<string>();
   /** Whether the view is drawing its chrome because samples or a resolution landed (`notifySamplesLanded`). */
   private inLandedRedraw = false;
   /** The `fileIdentity` each node's resolution in `resolvedCache` was made for. */
   private readonly resolvedIdentity = new Map<NodeId, string>();
-  /** Nodes `samplesNow` said null for because their resolution was for another file: told when theirs lands. */
+  /**
+   * Nodes `samplesNow` said null for because their resolution was for another file, or because they had none yet (a
+   * first resolution under way): told when theirs lands.
+   */
   private readonly awaitingResolution = new Set<NodeId>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
   private readonly warnedUnknown = new Set<string>();
@@ -92,6 +100,7 @@ export class NodeHost {
    * included), so a node drawn again shows its image at once; the rest is forgotten. Resolving what is left is `resolveStale`.
    */
   renderAll(doc: Document): void {
+    this.samplesDecoded.clear();
     for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
     this.entries.clear();
     // The same page ids survive an external reload, so what the old nodes left in their hosts is cleared explicitly.
@@ -107,6 +116,7 @@ export class NodeHost {
 
   /** Forgets every resolution: for a document that has nothing to do with the one before it. Draws nothing. */
   reset(): void {
+    this.samplesDecoded.clear();
     for (const id of this.knownIds()) this.forgetResolution(id);
   }
 
@@ -121,6 +131,7 @@ export class NodeHost {
    * node that is drawn from one of them (see `NodeType.dependsOn`). Pages are already rendered.
    */
   applyChange(doc: Document, changed: Set<NodeId>): void {
+    this.samplesDecoded.clear();
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     const stale: NodeId[] = [];
     for (const id of changed) {
@@ -197,6 +208,12 @@ export class NodeHost {
     const node = this.view.store.doc.nodes.find((n) => n.id === id);
     const resolved = this.view.resolvedCache.get(id);
     if (node?.type !== "file") return null;
+    // Not resolved yet (its first resolution is under way): told when it lands, unless it is a vector panel, which has no samples.
+    if (!resolved) {
+      const kind = sourceKindOf(extensionOf(node.file));
+      if (kind !== "svg" && kind !== "pdf") this.awaitingResolution.add(id);
+      return null;
+    }
     // A resolution kept on screen while the node's new link resolves is for another file: its samples are not this node's.
     if (resolved && this.resolvedIdentity.get(id) !== fileIdentity(node)) {
       this.awaitingResolution.add(id);

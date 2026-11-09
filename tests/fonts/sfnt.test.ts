@@ -3,16 +3,20 @@ import {
   cmapCovers,
   collectionFace,
   collectionFaceNames,
+  collectionFaceTables,
   collectionFaces,
   collectionSize,
   faceNames,
+  hasTable,
   hasVariations,
   missingChars,
   sfntFlavour,
+  sfntTables,
 } from "../../src/fonts/sfnt";
 import { buildCollection, buildFont } from "./build-font";
 
 const regular = () => buildFont({ family: "Test Sans", style: "Regular", chars: "abc" });
+const sfntTablesOf = (bytes: Uint8Array) => sfntTables(bytes).map((t) => t.tag).sort();
 const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
 describe("sfntFlavour", () => {
@@ -202,5 +206,22 @@ describe("malformed input", () => {
     const sub = cmap + v.getUint32(cmap + 8); // the first encoding record's offset
     v.setUint16(sub + 6, 0xfffe); // segCountX2 far beyond the table
     expect(() => cmapCovers(bytes)).toThrow(/cmap/);
+  });
+});
+
+describe("collectionFaceTables and hasTable", () => {
+  test("collectionFaceTables lists one face's tables without copying, and checks the face's version tag", () => {
+    const inputs = [regular(), buildFont({ family: "Test Sans", style: "Bold", chars: "abcd" })];
+    const ttc = buildCollection(inputs);
+    expect(collectionFaceTables(ttc, 1).map((t) => t.tag).sort()).toEqual(sfntTablesOf(inputs[1]));
+    const v = new DataView(ttc.buffer, ttc.byteOffset, ttc.byteLength);
+    v.setUint32(12 + 4, 0); // face 1 now points at the "ttcf" header
+    expect(() => collectionFaceTables(ttc, 1)).toThrow(/not an sfnt face/);
+    expect(() => collectionFace(ttc, 1)).toThrow(/not an sfnt face/);
+  });
+
+  test("hasTable finds a table by tag", () => {
+    expect(hasTable(regular(), "cmap")).toBe(true);
+    expect(hasTable(regular(), "sbix")).toBe(false);
   });
 });

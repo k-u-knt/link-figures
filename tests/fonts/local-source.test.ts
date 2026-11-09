@@ -26,6 +26,32 @@ const built = (family: string, style: BuildStyle, extra: Partial<Parameters<type
 /** Installed faces for a family, one per style given. */
 const family = (name: string, styles: BuildStyle[]) => styles.map((style) => fontData(name, style, built(name, style)));
 
+/** A `name` table (Windows, US English) whose subfamily is any style name, e.g. "Light" or "Condensed Medium". */
+const nameTable = (fam: string, style: string) => {
+  const records: [number, string][] = [[1, fam], [2, style], [4, `${fam} ${style}`], [6, `${fam.replace(/\s/g, "")}-${style.replace(/\s/g, "")}`]];
+  const utf16 = (t: string) => Uint8Array.from([...t].flatMap((c) => [c.charCodeAt(0) >> 8, c.charCodeAt(0) & 0xff]));
+  const strings = records.map(([id, t]) => [id, utf16(t)] as const);
+  const head = new DataView(new ArrayBuffer(6 + 12 * strings.length));
+  head.setUint16(2, strings.length);
+  head.setUint16(4, 6 + 12 * strings.length);
+  let offset = 0;
+  strings.forEach(([id, data], i) => {
+    const at = 6 + 12 * i;
+    head.setUint16(at, 3);
+    head.setUint16(at + 2, 1);
+    head.setUint16(at + 4, 0x409);
+    head.setUint16(at + 6, id);
+    head.setUint16(at + 8, data.length);
+    head.setUint16(at + 10, offset);
+    offset += data.length;
+  });
+  const out = new Uint8Array(head.byteLength + offset);
+  out.set(new Uint8Array(head.buffer));
+  let at = head.byteLength;
+  for (const [, data] of strings) (out.set(data, at), (at += data.length));
+  return out;
+};
+
 const source = (fonts: LocalFontData[]) => localFontSource(async () => fonts);
 
 describe("localFontSource.find", () => {
@@ -129,6 +155,76 @@ describe("localFontSource.find", () => {
   test("a blob that cannot be read gives unreadable", async () => {
     const broken: LocalFontData = { ...fontData("Test Sans", "Regular", built("Test Sans", "Regular")), blob: async () => Promise.reject(new Error("gone")) };
     await expect(source([broken]).find("Test Sans", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+  });
+});
+
+describe("localFontSource.find, fix round 1", () => {
+  /** A face whose bytes say which installed face it is (its subfamily is the FontData style). */
+  const face = (fam: string, style: string, psName?: string) => {
+    const bytes = buildFont({ family: fam, style: "Regular", chars: "abc" });
+    const tables = sfntTables(bytes).map((t) => (t.tag === "name" ? { tag: "name", data: nameTable(fam, style) } : t));
+    return fontData(fam, style, writeSfnt(bytes.subarray(0, 4), tables), psName ? { postscriptName: psName } : {});
+  };
+  const subfamily = (f: LoadedFace | null) => (f ? faceNames(f.bytes).subfamily : null);
+
+  test("a named face whose style is not one of the four is that face, not the family's Regular", async () => {
+    const fonts = [face("Myriad Pro", "Regular", "MyriadPro-Regular"), face("Myriad Pro", "Light", "MyriadPro-Light"), face("Myriad Pro", "Italic", "MyriadPro-It")];
+    const local = source(fonts);
+    const light = await local.find("MyriadPro-Light", "normal");
+    expect(light).toMatchObject({ exact: true, style: "normal" });
+    expect(subfamily(light)).toBe("Light");
+    expect(subfamily(await local.find("myriad pro light", "normal"))).toBe("Light"); // the full name
+    const italic = await local.find("MyriadPro-Light", "italic");
+    expect(italic).toMatchObject({ exact: false });
+    expect(subfamily(italic)).toBe("Light");
+  });
+
+  test("with no Regular face, the stand-in is the most suitable face, not the first listed", async () => {
+    const futura = ["Condensed ExtraBold", "Medium Italic", "Bold", "Condensed Medium", "Medium"].map((st) => face("Futura", st));
+    const local = source(futura);
+    expect(subfamily(await local.find("Futura", "normal"))).toBe("Medium");
+    expect(subfamily(await local.find("Futura", "italic"))).toBe("Medium Italic");
+    expect(await local.find("Futura", "bold")).toMatchObject({ exact: true });
+    expect(subfamily(await local.find("Futura", "bolditalic"))).toBe("Bold");
+  });
+
+  test("a bad candidate does not stop the lookup; the error is thrown only when no face works", async () => {
+    const otto = buildFont({ family: "Test Sans", style: "Regular", chars: "abc", flavour: "OTTO" });
+    const local = source([fontData("Test Sans", "Regular", otto), fontData("Test Sans", "Book", built("Test Sans", "Regular"))]);
+    expect(await local.find("Test Sans", "normal")).toMatchObject({ exact: true });
+    await expect(source([fontData("Test Sans", "Regular", otto)]).find("Test Sans", "bold")).rejects.toMatchObject({ reason: "cff" });
+  });
+
+  test("Book, Roman and Regular Italic are italic; Semibold beats Condensed and Extra bold names", async () => {
+    for (const st of ["Book Italic", "Roman Italic", "Regular Italic"]) {
+      expect(await source([face("Test Sans", "Regular"), face("Test Sans", st)]).find("Test Sans", "italic")).toMatchObject({ exact: true });
+    }
+    const fonts = ["Regular", "Bold Condensed", "ExtraBold", "Semibold"].map((st) => face("Test Sans", st));
+    expect(subfamily(await source(fonts).find("Test Sans", "bold"))).toBe("Semibold");
+  });
+
+  test("a collection face with a bad version tag, a colour-bitmap face and an oversized face are unreadable", async () => {
+    const regularFace = built("Test Sans", "Regular");
+    const bad = buildCollection([regularFace, built("Test Sans", "Bold")]);
+    new DataView(bad.buffer).setUint32(12 + 4, 0);
+    await expect(source([fontData("Test Sans", "Bold", bad)]).find("Test Sans", "bold")).rejects.toMatchObject({ reason: "unreadable" });
+
+    const emoji = writeSfnt(regularFace.subarray(0, 4), [...sfntTables(built("Emoji", "Regular")), { tag: "sbix", data: new Uint8Array(8) }]);
+    await expect(source([fontData("Emoji", "Regular", emoji)]).find("Emoji", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+    const cbdtTtc = buildCollection([writeSfnt(regularFace.subarray(0, 4), [...sfntTables(built("Emoji", "Regular")), { tag: "CBDT", data: new Uint8Array(8) }])]);
+    await expect(source([fontData("Emoji", "Regular", cbdtTtc)]).find("Emoji", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+
+    const small = { maxFaceBytes: regularFace.length - 1 };
+    await expect(localFontSource(async () => [fontData("Test Sans", "Regular", regularFace)], small).find("Test Sans", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+    const ttc = buildCollection([regularFace]);
+    const faceTableBytes = sfntTables(regularFace).reduce((sum, t) => sum + t.data.length, 0);
+    const smallFace = { maxFaceBytes: faceTableBytes - 1 };
+    await expect(localFontSource(async () => [fontData("Test Sans", "Regular", ttc)], smallFace).find("Test Sans", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+    // A collection larger than the limit is still read when its face fits.
+    expect(await localFontSource(async () => [fontData("Test Sans", "Regular", ttc)], { maxFaceBytes: faceTableBytes }).find("Test Sans", "normal")).toMatchObject({ exact: true });
+    // The default limit is 50 MB, checked on the blob's size before it is read.
+    const huge: LocalFontData = { ...fontData("Big", "Regular", regularFace), blob: async () => ({ size: 51 * 1024 * 1024, slice: () => new Blob([regularFace.slice(0, 4)]), arrayBuffer: () => Promise.reject(new Error("read")) }) as unknown as Blob };
+    await expect(source([huge]).find("Big", "normal")).rejects.toMatchObject({ reason: "unreadable" });
   });
 });
 

@@ -94,11 +94,23 @@ export function collectionSize(bytes: Uint8Array): number {
   return sfntFlavour(bytes) === "collection" ? view(bytes).getUint32(8) : 0;
 }
 
-/** Face `index` of a TrueType Collection as a standalone sfnt, copying only that face's tables. */
-export function collectionFace(bytes: Uint8Array, index: number): Uint8Array {
+const faceOffset = (bytes: Uint8Array, index: number) => {
   if (sfntFlavour(bytes) !== "collection") throw new Error("not a collection");
   if (index < 0 || index >= collectionSize(bytes)) throw new Error(`the collection has no face ${index}`);
   const offset = view(bytes).getUint32(12 + 4 * index);
+  const flavour = offset + 4 <= bytes.length ? sfntFlavour(bytes.subarray(offset, offset + 4)) : "unknown";
+  if (flavour !== "truetype" && flavour !== "cff") throw new Error(`collection face ${index} is not an sfnt face`);
+  return offset;
+};
+
+/** The tables of a collection's face `index`, as views into `bytes` (nothing is copied). Checks the face's version tag. */
+export function collectionFaceTables(bytes: Uint8Array, index: number): SfntTable[] {
+  return sfntTables(bytes, faceOffset(bytes, index));
+}
+
+/** Face `index` of a TrueType Collection as a standalone sfnt, copying only that face's tables. */
+export function collectionFace(bytes: Uint8Array, index: number): Uint8Array {
+  const offset = faceOffset(bytes, index);
   return writeSfnt(bytes.subarray(offset, offset + 4), sfntTables(bytes, offset));
 }
 
@@ -185,10 +197,15 @@ function readNames(data: Uint8Array | undefined): FaceNames {
   return { family: name(16, 1), subfamily: name(17, 2), fullName: name(4), postscriptName: name(6) };
 }
 
+/** True when a standalone font (or a collection's first face) has a table `tag`. Only that table is bounds-checked. */
+export function hasTable(bytes: Uint8Array, tag: string): boolean {
+  return table(bytes, tag) !== undefined;
+}
+
 /** True when the font is variable (has an `fvar` table). */
 export function hasVariations(bytes: Uint8Array): boolean {
   if (sfntFlavour(bytes) === "unknown") return false;
-  return table(bytes, "fvar") !== undefined;
+  return hasTable(bytes, "fvar");
 }
 
 /**

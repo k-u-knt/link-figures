@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { createApi, type LinkFiguresApi } from "./api";
+import { displayAdjustment } from "./adjust/display";
 import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
 import { builtinSnapSources } from "./model/snap";
@@ -70,6 +71,9 @@ export default class LinkFiguresPlugin extends Plugin {
     for (const cap of builtinCapKinds) this.registries.caps.register(cap);
     for (const source of builtinSnapSources) this.registries.snaps.register(source);
     for (const lut of builtinLuts) this.registries.luts.register(lut);
+    this.registries.adjustments.register(
+      displayAdjustment(this.registries.luts, (id) => console.warn(`Link Figures: no LUT "${id}" is registered, so the channel is drawn in grey`)),
+    );
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
     for (const command of drawingCommands()) this.registries.commands.register(command);

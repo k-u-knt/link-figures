@@ -19,6 +19,7 @@ import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
 import type { Registries } from "./registry";
+import { settlesWithin } from "./util/event-loop";
 import { CommandError, type CommandContext } from "./registry/command";
 import type { ParamSpec } from "./registry/params";
 
@@ -130,17 +131,6 @@ export interface ApiHost {
 /** How long an API call waits at most for a view of its figure that is still loading (see `ApiHost.loadingFigure`). */
 export const LOADING_WAIT_MS = 5000;
 
-/** Whether `promise` settles within `ms`. */
-function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), ms);
-    const done = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    promise.then(done, done);
-  });
-}
 
 export function createApi(host: ApiHost): LinkFiguresApi {
   const { app, registries, files } = host;
@@ -159,7 +149,7 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       const deadline = Date.now() + LOADING_WAIT_MS;
       for (let loading = host.loadingFigure?.(path); loading; loading = host.loadingFigure?.(path)) {
         const left = deadline - Date.now();
-        if (left <= 0 || !(await within(loading, left))) break;
+        if (left <= 0 || !(await settlesWithin(loading, left))) break;
       }
       return work(path, host.openFigure(path));
     };

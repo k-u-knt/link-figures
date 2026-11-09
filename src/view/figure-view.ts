@@ -1,6 +1,7 @@
 import { Notice, TextFileView, TFile, type Menu, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
+import { LOADING_WAIT_MS } from "../api";
 import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
@@ -24,6 +25,7 @@ import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { Command, CommandContext, DragTargets, MenuPlace, ToolPreview, UndoStep } from "../registry/command";
 import type { ImageState } from "../registry/node-type";
 import { DEFAULT_SETTINGS } from "../settings/settings";
+import { settlesWithin } from "../util/event-loop";
 import { showContextMenu } from "./context-menu";
 import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
@@ -206,23 +208,32 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return !this.closed && this.file !== null && this.loadedFile !== this.file;
   }
 
-  /** An `onLoadFile` is running: the loading ends when it does, not at a `setViewData` that comes in during it. */
-  private loadingFile = 0;
+  /**
+   * The `onLoadFile` that is running, or null: the loading ends when it does, not at a `setViewData` that comes in
+   * during it. A newer one (the leaf switched to another file) takes over, and the older ends nothing.
+   */
+  private currentLoad: object | null = null;
 
   /**
    * As Obsidian's (it reads the file and calls `setViewData`), once the plugin's own writes of the file that are in flight
-   * have landed (an API call that went to the file just before this view opened): read before one lands, the view would
-   * hold the text it replaces, and its next edit would be saved over it. The loading ends whatever happens, a failed read
-   * too, and only then, so no API call runs in the view before the text it keeps is loaded.
+   * have landed (an API call that went to the file just before this view opened), or `LOADING_WAIT_MS` has passed: read
+   * before one lands, the view would hold the text it replaces, and its next edit would be saved over it. A load that a
+   * newer one has overtaken (the leaf switched files meanwhile) reads nothing. The loading ends whatever happens, a failed
+   * read too, and only then, so no API call runs in the view before the text it keeps is loaded.
    */
   async onLoadFile(file: TFile): Promise<void> {
-    this.loadingFile++;
+    const load = {};
+    this.currentLoad = load;
     try {
-      await this.plugin.figureWrites.settled(file.path);
+      const writes = this.plugin.figureWrites.settled(file.path);
+      if (writes) await settlesWithin(writes, LOADING_WAIT_MS);
+      if (this.currentLoad !== load || this.file !== file) return;
       await super.onLoadFile(file);
     } finally {
-      this.loadingFile--;
-      if (this.loadingFile === 0) this.settleLoad();
+      if (this.currentLoad === load) {
+        this.currentLoad = null;
+        this.settleLoad();
+      }
     }
   }
 
@@ -261,21 +272,54 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   async save(clear?: boolean): Promise<void> {
     if (this.readOnly) return;
-    if (this.loaded) {
-      const problem = unreadableReason(this.getViewData(), this.plugin.registries);
-      if (problem !== null) {
-        const message = `Link Figures: ${this.file?.path ?? "the figure"} was not saved: what would be written could not be read back as a figure (${problem}). The file is kept as it was.`;
-        console.error(message);
-        new Notice(message);
-        return;
-      }
+    if (!this.loaded) return super.save(clear);
+    const text = this.getViewData();
+    const problem = unreadableReason(text, this.plugin.registries);
+    if (problem !== null) {
+      const message = `Link Figures: ${this.file?.path ?? "the figure"} was not saved: what would be written could not be read back as a figure (${problem}). The file is kept as it was.`;
+      console.error(message);
+      new Notice(message);
+      return;
     }
     // What is saved from here is no longer unsaved (an edit made while the write is under way sets it again).
     this.unsaved = false;
-    return super.save(clear);
+    const file = this.file;
+    // Obsidian's save asks for the text again: it gets this one, serialised once.
+    this.savingText = text;
+    try {
+      await super.save(clear);
+    } finally {
+      this.savingText = null;
+    }
+    if (!clear && file) await this.checkAfterSave(file, text);
   }
 
+  /**
+   * Obsidian does not hand the view a change that lands while its own write is under way (a sync): the file is read
+   * again after the save, and a text other than the one saved is taken up as a change from outside, the user told.
+   */
+  private async checkAfterSave(file: TFile, saved: string): Promise<void> {
+    let disk: string;
+    try {
+      disk = await this.app.vault.read(file);
+    } catch {
+      return;
+    }
+    if (this.file !== file || !this.loaded || this.readOnly || disk === saved || disk === this.data) return;
+    // Obsidian's record of the file is brought in line too, so its next save and reload compare against this text.
+    const internals = this as unknown as { lastSavedData?: string | null };
+    if ("lastSavedData" in internals) internals.lastSavedData = disk;
+    this.data = disk;
+    // The saved edits are what this text replaces.
+    this.unsaved = true;
+    this.setViewData(disk, false);
+  }
+
+  /** The text `save` is writing, which `getViewData` gives while it does (see `save`). */
+  private savingText: string | null = null;
+
   getViewData(): string {
+    if (this.savingText !== null) return this.savingText;
     if (this.readOnly) return this.rawText;
     // Nothing of ours is loaded: hand back what Obsidian holds rather than the stand-in document.
     if (!this.loaded) return this.data;
@@ -290,7 +334,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     try {
       this.takeUpViewData(data, clear);
     } finally {
-      if (this.loadingFile === 0) this.settleLoad();
+      if (this.currentLoad === null) this.settleLoad();
     }
   }
 
@@ -310,9 +354,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
     const reload = !clear && this.loaded && !this.readOnly;
     if (reload && this.adoptReload(data, loaded)) return;
-    // The file's version replaces the open figure: edits not yet saved are gone, which the user is told of unless the
-    // plugin itself wrote it (an API call, see `FigureWrites`).
-    if (reload && this.unsaved && this.file && !this.plugin.figureWrites.wroteLast(this.file.path, data)) {
+    // The file's version replaces the open figure: edits not yet saved are gone, and the user is told, whoever wrote it
+    // (the plugin's own calls go to the view, so its write landing here is unexpected too).
+    if (reload && this.unsaved && this.file) {
       const message = `Link Figures: "${this.file.path}" was changed outside this view; your unsaved edits were replaced by the file's version.`;
       console.warn(message);
       new Notice(message);

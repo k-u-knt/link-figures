@@ -6,6 +6,7 @@ import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { loadDocument } from "../../src/format/load";
 import { serializeFigureFile } from "../../src/format/serialize";
 import { newFigureText } from "../../src/format/new-figure";
+import { shapeNodeDefaults } from "../../src/model/defaults";
 import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { createRegistries } from "../../src/registry";
@@ -124,6 +125,10 @@ vi.mock("obsidian", () => {
     normalizePath: (p: string) => p,
   };
 });
+vi.mock("../../src/format/serialize", async (original) => {
+  const actual = await original<typeof import("../../src/format/serialize")>();
+  return { ...actual, serializeFigureFile: vi.fn(actual.serializeFigureFile) };
+});
 vi.mock("../../src/view/context-menu", () => ({ showContextMenu: vi.fn() }));
 vi.mock("../../src/export/export-modal", () => ({ ExportModal: class {} }));
 vi.mock("../../src/links/intake", () => ({ Intake: class {} }));
@@ -153,37 +158,69 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
   for (const cap of builtinCapKinds) registries.caps.register(cap);
   for (const command of drawingCommands()) registries.commands.register(command);
 
-  const file = { path: PATH, name: "M2i OpenN.lnkfig.md", saving: false };
-  const disk = { text: initialText };
-  /** Every text written to the file, by whom. */
-  const writes: { by: string; text: string }[] = [];
+  type FakeFile = { path: string; name: string; saving: boolean };
+  const texts = new Map<string, string>();
+  const fileObjs = new Map<string, FakeFile>();
+  /** A figure file in the vault (made on first use, with `text`). */
+  const fileAt = (path: string, text = newFigureText("a4-portrait", 1)): FakeFile => {
+    let f = fileObjs.get(path);
+    if (!f) {
+      f = { path, name: path.split("/").pop()!, saving: false };
+      fileObjs.set(path, f);
+      texts.set(path, text);
+    }
+    return f;
+  };
+  const file = fileAt(PATH, initialText);
+  /** The figure file's text (PATH's). */
+  const disk = {
+    get text() {
+      return texts.get(PATH)!;
+    },
+    set text(t: string) {
+      texts.set(PATH, t);
+    },
+  };
+  /** Every text written to a file, by whom. */
+  const writes: { by: string; path: string; text: string }[] = [];
   const handlers: ((f: unknown) => void)[] = [];
-  const modified = () => handlers.forEach((h) => h(file));
+  const modified = (f: FakeFile) => handlers.forEach((h) => h(f));
+  const hooks = {
+    /** Runs while the view's `vault.modify` is under way, after its write (a sync landing then). */
+    duringModify: null as null | ((f: FakeFile) => void),
+    /** While set, `process` never finishes. */
+    stuck: false,
+  };
   const vault = {
     on: (name: string, cb: (f: unknown) => void) => {
       if (name === "modify") handlers.push(cb);
       return {};
     },
     offref: () => {},
-    read: vi.fn(async () => {
+    read: vi.fn(async (f: FakeFile) => {
       await new Promise((r) => setTimeout(r, 1));
-      return disk.text;
+      return texts.get(f.path)!;
     }),
-    cachedRead: vi.fn(async () => disk.text),
-    modify: vi.fn(async (_f: unknown, text: string) => {
-      disk.text = text;
-      writes.push({ by: "view", text });
-      modified();
+    cachedRead: vi.fn(async (f: FakeFile) => texts.get(f.path)!),
+    modify: vi.fn(async (f: FakeFile, text: string) => {
+      texts.set(f.path, text);
+      writes.push({ by: "view", path: f.path, text });
+      modified(f);
+      await new Promise((r) => setTimeout(r, 5));
+      const hook = hooks.duringModify;
+      hooks.duringModify = null;
+      hook?.(f);
     }),
     /** Reads, then (some time later) writes what `edit` gives, as one step of its own; the modify event comes with the write. */
-    process: vi.fn(async (_f: unknown, edit: (t: string) => string) => {
-      const before = disk.text;
+    process: vi.fn(async (f: FakeFile, edit: (t: string) => string) => {
+      const before = texts.get(f.path)!;
+      if (hooks.stuck) await new Promise(() => {});
       await new Promise((r) => setTimeout(r, 150));
       const after = edit(before);
       if (after !== before) {
-        disk.text = after;
-        writes.push({ by: "process", text: after });
-        modified();
+        texts.set(f.path, after);
+        writes.push({ by: "process", path: f.path, text: after });
+        modified(f);
       }
       return after;
     }),
@@ -221,25 +258,39 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     view.file = file as never;
     return view.onLoadFile(file as never);
   };
+  /** What Obsidian's FileView.loadFile does when the leaf switches the open view to `next`: unload, set the file, load. */
+  const switchTo = async (next: FakeFile) => {
+    const v = view!;
+    await v.onUnloadFile(v.file!);
+    v.file = next as never;
+    await v.onLoadFile(next as never);
+  };
 
   const files = figureWrites.wrap({
-    read: () => vault.read(),
-    process: async (_p, edit) => void (await vault.process(file, edit)),
+    read: (p) => vault.read(fileAt(p)),
+    process: async (p, edit) => void (await vault.process(fileAt(p), edit)),
   });
+  const viewOf = (p: string) => (view && view.file?.path === p ? view : null);
   const api = createApi({
     app: app as never,
     registries,
     files,
     normalizePath: (p) => p,
-    openFigure: () => (view && view.hasDocument() ? view : null),
-    loadingFigure: () => (view && view.isLoading() ? view.whenLoaded() : null),
+    openFigure: (p) => {
+      const v = viewOf(p);
+      return v && v.hasDocument() ? v : null;
+    },
+    loadingFigure: (p) => {
+      const v = viewOf(p);
+      return v && v.isLoading() ? v.whenLoaded() : null;
+    },
   });
-  const shape = (id: string, x: number) => ({ kind: "rect", page: loadDocument(initialText).doc.pages[0].id, x, y: 10, width: 20, height: 20, id });
-  /** Someone else (a sync, another plugin) writes the file. */
-  const externalWrite = (text: string) => {
-    disk.text = text;
-    writes.push({ by: "external", text });
-    modified();
+  const shape = (id: string, x: number, text = initialText) => ({ kind: "rect", page: loadDocument(text).doc.pages[0].id, x, y: 10, width: 20, height: 20, id });
+  /** Someone else (a sync, another plugin) writes the file at `path`. */
+  const externalWrite = (text: string, path = PATH) => {
+    texts.set(path, text);
+    writes.push({ by: "external", path, text });
+    modified(fileAt(path));
   };
   /** Opens the figure in a view and waits for it to load. */
   const opened = async () => {
@@ -248,7 +299,7 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     await opening;
     return view!;
   };
-  return { api, files, registries, disk, writes, vault, openFile, opened, externalWrite, shape, get view() { return view!; } };
+  return { api, files, figureWrites, registries, disk, texts, fileAt, writes, vault, hooks, openFile, switchTo, opened, externalWrite, shape, get view() { return view!; } };
 }
 
 beforeEach(() => {
@@ -376,7 +427,7 @@ describe("unsaved edits replaced by the file's version", () => {
   /** The figure's text with one more shape, `id`, copied from the view's first node. */
   const withShape = (t: ReturnType<typeof setup>, id: string) => {
     const { doc, parsed } = loadDocument(t.disk.text);
-    doc.nodes.push({ ...t.view.store.doc.nodes[0], id });
+    doc.nodes.push(shapeNodeDefaults(doc.pages[0], { id, kind: "rect", x: 0, y: 0, width: 10, height: 10 }, doc.nodes.map((n) => n.id)));
     return serializeFigureFile(doc, parsed);
   };
 
@@ -403,7 +454,7 @@ describe("unsaved edits replaced by the file's version", () => {
     expect(notices).not.toContain(DROPPED);
   });
 
-  test("a write by the plugin itself (FigureWrites) that replaces unsaved edits says nothing", async () => {
+  test("a write by the plugin itself that replaces unsaved edits says so too (it should not happen: calls go to the view)", async () => {
     const t = setup();
     await t.opened();
     await t.api.run(PATH, "shape.create", t.shape("mine", 10));
@@ -412,6 +463,119 @@ describe("unsaved edits replaced by the file's version", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await write;
     expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["plugin"]);
+    expect(notices).toContain(DROPPED);
+  });
+
+  test("a write by the plugin itself on a view with nothing unsaved says nothing", async () => {
+    const t = setup();
+    await t.opened();
+    const write = t.files.process(PATH, () => withShape(t, "plugin"));
+    await vi.advanceTimersByTimeAsync(500);
+    await write;
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["plugin"]);
     expect(notices).not.toContain(DROPPED);
+  });
+
+  test("a text the plugin wrote before, arriving again later over unsaved edits (a sync, a revert), says so", async () => {
+    const t = setup();
+    await t.opened();
+    const pluginText = withShape(t, "plugin");
+    const write = t.files.process(PATH, () => pluginText);
+    await vi.advanceTimersByTimeAsync(500);
+    await write;
+    expect(notices).not.toContain(DROPPED);
+    await t.api.run(PATH, "shape.create", t.shape("mine", 40));
+    await vi.advanceTimersByTimeAsync(5000); // saved
+    await t.api.run(PATH, "shape.create", t.shape("mine2", 70));
+    t.externalWrite(pluginText); // the same text as the plugin's write, back again
+    await vi.advanceTimersByTimeAsync(100);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["plugin"]);
+    expect(notices).toContain(DROPPED);
+  });
+
+  test("the plugin keeps nothing per file once its writes have landed", async () => {
+    const t = setup();
+    for (let i = 0; i < 5; i++) {
+      const path = `Notes/M2i Many ${i}.lnkfig.md`;
+      t.fileAt(path);
+      const w = t.files.process(path, (text) => text.replace('"nodes": []', '"nodes": [ ]'));
+      await vi.advanceTimersByTimeAsync(200);
+      await w;
+    }
+    expect(t.figureWrites.size()).toBe(0);
+  });
+
+  test("a sync that lands while the view's own save is being written is taken up, and the user told", async () => {
+    const t = setup();
+    await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("mine", 10));
+    let theirs = "";
+    t.hooks.duringModify = () => {
+      const { doc, parsed } = loadDocument(newFigureText("a4-portrait", 1));
+      doc.nodes.push(shapeNodeDefaults(doc.pages[0], { id: "theirs", kind: "rect", x: 0, y: 0, width: 10, height: 10 }, []));
+      theirs = serializeFigureFile(doc, parsed);
+      t.externalWrite(theirs);
+    };
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.disk.text).toBe(theirs);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["theirs"]);
+    expect(notices).toContain(DROPPED);
+  });
+});
+
+describe("loading, switching and saving", () => {
+  const B = "Notes/M2i Other.lnkfig.md";
+
+  test("a leaf switched to another figure while it waits for a write of the first shows and saves only the second", async () => {
+    const t = setup();
+    const { doc, parsed } = loadDocument(newFigureText("a4-portrait", 1));
+    const bText0 = serializeFigureFile(doc, parsed);
+    const bFile = t.fileAt(B, bText0);
+    const a1 = t.api.run(PATH, "shape.create", t.shape("a1", 10));
+    await vi.advanceTimersByTimeAsync(0); // a1 is being written to A
+    const opening = t.openFile(); // waits for a1's write
+    await vi.advanceTimersByTimeAsync(1);
+    const switching = t.switchTo(bFile);
+    await vi.advanceTimersByTimeAsync(10);
+    await switching;
+    expect(t.view.isLoading()).toBe(false); // A's wait does not hold B up
+    await vi.advanceTimersByTimeAsync(400);
+    await Promise.all([a1, opening]);
+    expect(t.view.file!.path).toBe(B);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual([]);
+    await t.api.run(B, "shape.create", t.shape("b1", 10, bText0));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["b1"]);
+    expect(t.writes.filter((w) => w.by === "view").map((w) => w.path)).toEqual([B]);
+    expect(ids(t.texts.get(B)!)).toEqual(["b1"]);
+    expect(ids(t.disk.text)).toEqual(["a1"]);
+  });
+
+  test("a view waits at most 5 s for a write of its file that never finishes", async () => {
+    const t = setup();
+    t.hooks.stuck = true;
+    void t.api.run(PATH, "shape.create", t.shape("a1", 10)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    const opening = t.openFile();
+    await vi.advanceTimersByTimeAsync(4900);
+    expect(t.view.hasDocument()).toBe(false);
+    expect(t.view.isLoading()).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    await opening;
+    expect(t.view.hasDocument()).toBe(true);
+    expect(t.view.isLoading()).toBe(false);
+  });
+
+  test("a save serialises the figure once", async () => {
+    const t = setup();
+    const view = await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("a1", 10));
+    const serialize = vi.mocked(serializeFigureFile);
+    serialize.mockClear();
+    const saving = view.save();
+    await vi.advanceTimersByTimeAsync(50);
+    await saving;
+    expect(serialize).toHaveBeenCalledTimes(1);
+    expect(ids(t.disk.text)).toEqual(["a1"]);
   });
 });

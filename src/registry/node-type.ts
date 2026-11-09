@@ -61,6 +61,8 @@ export interface InspectorContext {
    * null starts their decode, and the inspector is drawn again when they land).
    */
   samplesNow?(id: NodeId): Plane | null;
+  /** The installed font families (sorted, de-duplicated), or null while the list is not available; absent without a view. */
+  fontFamilies?(): string[] | null;
 }
 
 /** What a node type's part in `node.update` may depend on besides the node. */

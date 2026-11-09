@@ -578,12 +578,13 @@ export class Inspector {
    * node's image now (whether it shows one, and its size), which the crop fields depend on.
    */
   private context(): InspectorContext {
-    const view = this.view as Partial<Pick<LinkFiguresView, "imageSizeNow" | "imageStateNow" | "samplesNow">>;
+    const view = this.view as Partial<Pick<LinkFiguresView, "imageSizeNow" | "imageStateNow" | "samplesNow" | "fontFamilies">>;
     return {
       registries: this.view.plugin.registries,
       imageSizeNow: (id) => view.imageSizeNow?.(id) ?? null,
       imageStateNow: (id) => view.imageStateNow?.(id) ?? null,
       samplesNow: (id) => view.samplesNow?.(id) ?? null,
+      fontFamilies: () => view.fontFamilies?.() ?? null,
     };
   }
 

@@ -3,6 +3,7 @@ import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
 import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
+import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
 import { applyLinkEntries, classifyReload } from "../format/links-reload";
 import { loadDocument } from "../format/load";
@@ -495,6 +496,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   samplesNow(id: NodeId): Plane | null {
     return this.nodeHost.samplesNow(id);
+  }
+
+  private fontList: FontFamilyList | null = null;
+
+  /** The installed font families for the Font menu; null until the list has arrived (it is asked for now, and the chrome is drawn once when it lands). */
+  fontFamilies(): string[] | null {
+    this.fontList ??= new FontFamilyList(this.plugin.registries, () => this.renderChrome());
+    return this.fontList.get();
   }
 
   /** Samples asked for by `samplesNow` have been decoded: what asked for them (the inspector, a command's state) asks again. */

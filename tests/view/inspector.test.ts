@@ -536,6 +536,20 @@ describe("node section", () => {
     expect(store.doc.nodes.map((n) => (n as FileNode).crop)).toEqual([crop, crop]);
   });
 
+  test("the view's installed font families reach the node types through the inspector's context", () => {
+    const seen: unknown[] = [];
+    const { el, selection, view } = setup((d) => { addNode(d, { id: "p-img" }); });
+    Object.assign(view, { fontFamilies: () => ["Fira Sans"] });
+    (view.plugin as any).registries.nodeTypes.register({
+      ...fileType,
+      inspector: (_n: unknown, ctx: any) => (seen.push(ctx.fontFamilies?.()), []),
+    });
+    selection.set(["p-img"]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((v) => Array.isArray(v) && v[0] === "Fira Sans")).toBe(true);
+    expect(titleOf(el)).toBe("Node");
+  });
+
   test("an emptied name is removed, not kept as an empty string", () => {
     const { el, store, selection } = setup((d) => { addNode(d, { id: "p-img", name: "Plot" }); });
     selection.set(["p-img"]);

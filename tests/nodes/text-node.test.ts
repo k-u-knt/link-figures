@@ -140,6 +140,16 @@ describe("the type", () => {
     ]);
   });
 
+  test("the Font menu lists the installed families, the curated six while there are none, and always the current family", () => {
+    const options = (families: string[] | null, family = "Arial") =>
+      textNodeType.inspector({ ...base(), font: { ...base().font, family } }, { registries: createRegistries(), fontFamilies: () => families })[0].options!.map((o) => o.value);
+    expect(options(["Fira Sans", "Arial"])).toEqual(["Fira Sans", "Arial"]);
+    expect(options(null)).toEqual(CURATED_FONT_OPTIONS.map((o) => o.value));
+    expect(options([])).toEqual(CURATED_FONT_OPTIONS.map((o) => o.value));
+    expect(options(["Fira Sans"], "Gone Sans")).toEqual(["Fira Sans", "Gone Sans"]);
+    expect(options(null, "Gone Sans")).toEqual([...CURATED_FONT_OPTIONS.map((o) => o.value), "Gone Sans"]);
+  });
+
   test("the inspector offers the seven font fields, in order, and each key reads a value off a text node", () => {
     const fields = textNodeType.inspector(base(), { registries: createRegistries() });
     expect(fields.map((f) => `${f.kind}:${f.key}`)).toEqual([

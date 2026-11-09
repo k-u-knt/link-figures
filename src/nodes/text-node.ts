@@ -4,13 +4,19 @@ import type { Rect } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
 import type { TextNode } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { COLOR_PATTERN, fieldError, type ParamSpec } from "../registry/params";
 import { textNodeSvg } from "./text-node-svg";
 
 export { textNodeSvg };
 
 export const CURATED_FONT_OPTIONS: { value: string; label: string }[] = CURATED_FONTS.map((family) => ({ value: family, label: family }));
+
+/** The Font menu: the installed families, or the curated six while there are none; the node's own family is always in it. */
+function fontOptions(families: string[] | null, current: string): { value: string; label: string }[] {
+  const base = families && families.length > 0 ? families.map((family) => ({ value: family, label: family })) : CURATED_FONT_OPTIONS;
+  return base.some((o) => o.value === current) ? base : [...base, { value: current, label: current }];
+}
 
 const WEIGHT_OPTIONS = [
   { value: "normal", label: "Normal" },
@@ -208,9 +214,9 @@ export const textNodeType: NodeType<TextNode> = {
     return { x: node.x, y: node.y, width: node.width, height: node.height };
   },
 
-  inspector(_node: TextNode): Field[] {
+  inspector(node: TextNode, ctx?: InspectorContext): Field[] {
     return [
-      { kind: "select", key: "font.family", label: "Font", options: CURATED_FONT_OPTIONS },
+      { kind: "select", key: "font.family", label: "Font", options: fontOptions(ctx?.fontFamilies?.() ?? null, node.font.family) },
       { kind: "number", key: "font.size", label: "Size", unit: "pt", min: 1, step: 0.5 },
       { kind: "select", key: "font.weight", label: "Weight", options: WEIGHT_OPTIONS },
       { kind: "toggle", key: "font.italic", label: "Italic" },

@@ -11,6 +11,7 @@ import {
   type Call,
   type FigureFiles,
 } from "./commands/headless";
+import type { ExportOutcome, ExportRequest } from "./export/export-run";
 import type { BlockIdResult } from "./links/note-block-id";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
@@ -52,6 +53,14 @@ export interface LinkFiguresApi {
    * note that is not there. Not a figure command: it acts on a note, and finishes later.
    */
   blockId(notePath: string, line: number): Promise<BlockIdResult>;
+  /**
+   * Exports the figure as the export modal does, to the export folder: `format` is an exporter's id (`svg`, `pdf`, `png`,
+   * `tiff`), `pages` the page in focus (`"current"`, the default), `"all"` or a list of page ids, `dpi` the resolution
+   * (the settings' when left out), `options` the exporter's own (each left out has its default). A figure that is not
+   * open is opened in the background for it, and closed again. Resolves to the vault paths written and the export
+   * report. Not a figure command: it finishes later. Waits for the calls queued on the figure before it.
+   */
+  export(figurePath: string, request: ExportRequest): Promise<ExportOutcome>;
   registries: Registries;
 }
 
@@ -72,6 +81,8 @@ export interface ApiHost {
   openFigure(path: string): OpenFigure | null;
   /** Finds or writes the block id at `line` of the note at `path` (normalised): see `noteBlockId`. Without it, `blockId` rejects. */
   noteBlockId?(path: string, line: number): Promise<BlockIdResult>;
+  /** Exports the figure at `path` (normalised), opening it in the background when it is not open: see `exportFigure`. Without it, `export` rejects. */
+  exportFigure?(path: string, request: ExportRequest): Promise<ExportOutcome>;
 }
 
 export function createApi(host: ApiHost): LinkFiguresApi {
@@ -130,6 +141,15 @@ export function createApi(host: ApiHost): LinkFiguresApi {
     async blockId(notePath, line) {
       if (!host.noteBlockId) throw new Error("blockId: notes cannot be written here");
       return host.noteBlockId(host.normalizePath(notePath), line);
+    },
+
+    async export(figurePath, request) {
+      if (typeof request !== "object" || request === null || typeof request.format !== "string" || request.format === "") {
+        throw new Error("export: format must be the id of an export format");
+      }
+      const exportFigure = host.exportFigure;
+      if (!exportFigure) throw new Error("export: figures cannot be exported here");
+      return queued(figurePath, (path) => exportFigure(path, request));
     },
 
     async read(figurePath) {

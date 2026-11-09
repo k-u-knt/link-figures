@@ -32,7 +32,7 @@ export function uniqueFileNames(names: string[]): string[] {
 }
 
 /** The folder exports go to: the setting, or else the figure's own folder (`""` for the vault root). */
-export function exportFolderFor(settings: LinkFiguresSettings, figurePath: string): string {
+export function exportFolderFor(settings: Pick<LinkFiguresSettings, "exportFolder">, figurePath: string): string {
   if (settings.exportFolder) return settings.exportFolder;
   const slash = figurePath.lastIndexOf("/");
   return slash === -1 ? "" : figurePath.slice(0, slash);

@@ -168,7 +168,7 @@ test("a figure with an empty page exports a sheet of paper", async () => {
     { exporter: svgExporter, doc, pages: doc.pages, baseName: "Blank", folder: "", dpi: 300, maxPageSizeMm: 2000 },
     { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false },
   );
-  expect(out).toEqual({ files: 1, warnings: [] });
+  expect(out).toEqual({ files: 1, paths: ["Blank - Page 1.svg"], warnings: [] });
   expect(text(vault.content.get("Blank - Page 1.svg"))).toContain('<rect width="793.7007874015749" height="1122.5196850393702" fill="#ffffff"/>');
 });
 
@@ -271,7 +271,7 @@ describe("an export never writes over a source of the figure", () => {
     const deps = { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: guard("Figures/plot.svg") };
     await runExport(run, deps);
     const again = await runExport(run, deps);
-    expect(again).toEqual({ files: 1, warnings: [] });
+    expect(again).toEqual({ files: 1, paths: ["Figures/Figure 2 - Page 1.svg"], warnings: [] });
     expect(vault.calls).toEqual(["createFolder Figures", "createBinary Figures/Figure 2 - Page 1.svg", "modifyBinary Figures/Figure 2 - Page 1.svg"]);
   });
 });
@@ -389,4 +389,16 @@ test("a panel over the decode limit is reported with that reason, once, and not 
     `${nodeLabel(doc, png)}: could not be decoded (over the 50 MP limit), skipped`,
     `${nodeLabel(doc, gone)}: heading or block not found, skipped`,
   ]);
+});
+
+test("the exporter is run with the options given, and with none when none are", async () => {
+  const doc = createDocument("a4-portrait");
+  const { app } = world();
+  const seen: Record<string, unknown>[] = [];
+  const spy: Exporter = { ...svgExporter, run: async (input, opts) => (seen.push(opts), { files: [], warnings: input.warnings }) };
+  const run = { exporter: spy, doc, pages: doc.pages, baseName: "B", folder: "", dpi: 300, maxPageSizeMm: 2000 };
+  const deps = { app, registries: registries(), resolved: () => undefined, elementFor: () => undefined, decoders, trim, isProtected: () => false };
+  await runExport({ ...run, options: { compression: "none" } }, deps);
+  await runExport(run, deps);
+  expect(seen).toEqual([{ compression: "none" }, {}]);
 });

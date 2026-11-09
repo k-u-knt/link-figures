@@ -1,123 +1,17 @@
-import { Modal, Notice, Setting, type App, type ButtonComponent } from "obsidian";
+import { Modal, Notice, Setting, type ButtonComponent, type TextComponent } from "obsidian";
 import { MAX_DPI, MIN_DPI } from "../constants";
-import type { Decoders, Resolved } from "../links/types";
-import type { Document, NodeId, Page, PageId } from "../model/types";
-import type { Registries } from "../registry";
+import type { Page, PageId } from "../model/types";
 import type { Exporter } from "../registry/exporter";
 import type { LinkFiguresView } from "../view/figure-view";
-import type { AssetMap } from "./asset-types";
-import { collectAssets } from "./assets";
-import { buildPageSvg } from "./svg-builder";
-import { browserTrimDeps, isTrimFallback, trimAssets, type TrimDeps } from "./trim";
-import { exportDir, exportFolderFor, exportPathFor, isFigureSource, safeFileName, uniqueFileNames, writeExportFile } from "./write";
+import { DPI_PRESETS, exportFigure, exportSummary, optionDefaults, type FigureExportTarget } from "./export-run";
+import { browserTrimDeps } from "./trim";
+import { isFigureSource } from "./write";
+
+export { exportSummary, runExport, type ExportDeps, type ExportRun } from "./export-run";
 
 /** More report lines than this are summarised in the notice; all of them go to the console. */
 const MAX_WARNINGS_SHOWN = 12;
 const WARNING_NOTICE_MS = 15_000;
-
-export interface ExportRun {
-  exporter: Exporter;
-  doc: Document;
-  pages: Page[];
-  /** The figure's file name without `.lnkfig.md`. */
-  baseName: string;
-  /** Vault folder the files are written to; `""` is the vault root. */
-  folder: string;
-  dpi: number;
-  /** Pages larger than this (mm, either side) are still exported, with a warning. */
-  maxPageSizeMm: number;
-}
-
-export interface ExportDeps {
-  app: App;
-  registries: Registries;
-  resolved: (id: NodeId) => Resolved | undefined;
-  elementFor: (id: NodeId) => HTMLElement | undefined;
-  /** The stage's decoders, so panels are drawn in the export as they are on the stage. */
-  decoders: Decoders;
-  /** How each panel's source is trimmed to the part of it that shows (see `trimAssets`). */
-  trim: TrimDeps;
-  /** True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). */
-  isProtected: (path: string) => boolean;
-}
-
-/**
- * Collects each page's assets, trims each panel's source to the part of it that shows, builds the page's SVG, lets the
- * exporter turn them into files and writes those to the vault. The warnings returned are everything that could not be
- * done faithfully (assets that failed, nodes skipped, nodes rasterised, and files not written because their path is
- * protected: `deps.isProtected`), and what trimming did to each cropped panel. They come in that order of urgency: the
- * panels that could not be trimmed first, then the other warnings, then the rest of the trim report, so that the
- * notice, which shows only the first few, never leaves out a panel embedded whole for a line saying all went well.
- * `files` counts the files actually written.
- */
-export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ files: number; warnings: string[] }> {
-  const { app } = deps;
-  const warnings: string[] = [];
-  const trimReport: string[] = [];
-  const svgs = new Map<PageId, string>();
-  const assets = new Map<PageId, AssetMap>();
-
-  const fileAt = (path: string) => {
-    const file = app.vault.getFileByPath(path);
-    if (!file) throw new Error(`File not found in vault: ${path}`);
-    return file;
-  };
-
-  for (const page of run.pages) {
-    if (page.width > run.maxPageSizeMm || page.height > run.maxPageSizeMm) {
-      warnings.push(`Page "${page.name}" is ${page.width} × ${page.height} mm, over the ${run.maxPageSizeMm} mm page limit`);
-    }
-    const collected = await collectAssets(run.doc, page, {
-      app,
-      resolved: deps.resolved,
-      elementFor: deps.elementFor,
-      readBinary: (path) => app.vault.readBinary(fileAt(path)),
-      readText: (path) => app.vault.cachedRead(fileAt(path)),
-      decoders: deps.decoders,
-      dpi: run.dpi,
-      warnings,
-    });
-    const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, trimReport, run.exporter.pdfPanels);
-    const built = buildPageSvg(run.doc, page, deps.registries, pageAssets);
-    warnings.push(...built.warnings);
-    assets.set(page.id, pageAssets);
-    svgs.set(page.id, built.svg);
-  }
-
-  const result = await run.exporter.run(
-    { doc: run.doc, pages: run.pages, svgs, assets, registries: deps.registries, warnings, baseName: run.baseName, dpi: run.dpi },
-    {},
-  );
-
-  // Two files of one run with the same name (two pages called "Page 2", or "A/B" and "A:B") would be one file on disk,
-  // the second written over the first: they are told apart here, whichever exporter made them.
-  const names = uniqueFileNames(result.files.map((file) => file.name));
-  const reported = [...result.warnings];
-  result.files.forEach((file, i) => {
-    if (names[i] !== safeFileName(file.name)) reported.push(`Page name '${file.name}' is used more than once; wrote '${names[i]}'`);
-  });
-  let written = 0;
-  for (const [i, file] of result.files.entries()) {
-    // An export named like one of the figure's sources ("Figure 2.pdf" beside a plot of that name) must not replace it;
-    // writing over an earlier export is routine and stays silent.
-    const path = exportPathFor(run.folder, names[i]);
-    if (deps.isProtected(path)) {
-      reported.push(`Refused to overwrite ${path}: it is a source of this figure`);
-      continue;
-    }
-    await writeExportFile(app, run.folder, names[i], file.blob);
-    written++;
-  }
-  return {
-    files: written,
-    warnings: [...trimReport.filter(isTrimFallback), ...reported, ...trimReport.filter((line) => !isTrimFallback(line))],
-  };
-}
-
-/** The success message: how many files were written, and to which folder. */
-export function exportSummary(files: number, folder: string): string {
-  return `Exported ${files} file(s) to ${exportDir(folder) || "the vault root"}`;
-}
 
 function warningsNotice(warnings: string[]): Notice {
   const shown = warnings.slice(0, MAX_WARNINGS_SHOWN);
@@ -129,12 +23,39 @@ function warningsNotice(warnings: string[]): Notice {
   return new Notice(fragment, WARNING_NOTICE_MS);
 }
 
-/** Export options for a figure: the format, which pages, and the resolution of what has to be rasterised. */
+/**
+ * What the export of a figure open in `view` needs: its document, the page in focus (`current`, else the view's own),
+ * and the plugin's settings, decoders and trimming. No file may replace the figure or one of its sources.
+ */
+export function viewExportTarget(view: LinkFiguresView, file: { path: string }, current?: Page): FigureExportTarget {
+  const plugin = view.plugin;
+  return {
+    figurePath: file.path,
+    baseName: view.getDisplayText(),
+    doc: view.store.doc,
+    currentPage: current ?? view.focusPage(),
+    settings: plugin.settings,
+    deps: {
+      app: view.app,
+      registries: plugin.registries,
+      resolved: (id) => view.resolvedCache.get(id),
+      elementFor: (id) => view.nodeHost.elementFor(id),
+      decoders: plugin.decoders,
+      trim: browserTrimDeps,
+      isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
+    },
+  };
+}
+
+/** Export options for a figure: the format and its own options, which pages, and the resolution of what has to be rasterised. */
 export class ExportModal extends Modal {
   private readonly pageId: PageId;
   private formatId: string;
   private pageChoice: "current" | "all" = "current";
   private dpiText: string;
+  /** The chosen format's options, as its fields show them (each starts at its default: see `optionDefaults`). */
+  private optionValues: Record<string, unknown> = {};
+  private optionsEl: HTMLElement | null = null;
   private busy = false;
 
   constructor(private readonly view: LinkFiguresView) {
@@ -161,8 +82,11 @@ export class ExportModal extends Modal {
       dropdown.setValue(this.formatId);
       dropdown.onChange((value) => {
         this.formatId = value;
+        this.renderOptions();
       });
     });
+    this.optionsEl = contentEl.createDiv({ cls: "lf-export-options" });
+    this.renderOptions();
 
     const pages = new Setting(contentEl).setName("Pages").setDesc(`The current page is "${this.currentPage()?.name ?? ""}".`);
     const group = "lf-export-pages";
@@ -179,10 +103,12 @@ export class ExportModal extends Modal {
       row.createSpan({ text: ` ${label}` });
     }
 
-    new Setting(contentEl)
+    let dpiInput: TextComponent | null = null;
+    const resolution = new Setting(contentEl)
       .setName("Resolution (dpi)")
-      .setDesc("For what is drawn as pixels: PDF pages and note content.")
+      .setDesc("For what is drawn as pixels: PDF pages and note content, and the whole page in PNG and TIFF.")
       .addText((text) => {
+        dpiInput = text;
         text.inputEl.type = "number";
         text.inputEl.min = String(MIN_DPI);
         text.inputEl.max = String(MAX_DPI);
@@ -191,6 +117,14 @@ export class ExportModal extends Modal {
           this.dpiText = value;
         });
       });
+    for (const preset of DPI_PRESETS) {
+      resolution.addButton((button) =>
+        button.setButtonText(String(preset)).onClick(() => {
+          this.dpiText = String(preset);
+          dpiInput?.setValue(this.dpiText);
+        }),
+      );
+    }
 
     new Setting(contentEl).addButton((button) =>
       button
@@ -202,6 +136,43 @@ export class ExportModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    this.optionsEl = null;
+  }
+
+  /** The chosen format's options, under the Format menu, each at its default. */
+  private renderOptions(): void {
+    const el = this.optionsEl;
+    if (!el) return;
+    el.empty();
+    const exporter: Exporter | undefined = this.view.plugin.registries.exporters.get(this.formatId);
+    const fields = exporter?.options() ?? [];
+    this.optionValues = optionDefaults(fields);
+    for (const field of fields) {
+      if (!(field.key in this.optionValues)) continue;
+      const setting = new Setting(el).setName(field.label);
+      const set = (value: unknown) => {
+        this.optionValues[field.key] = value;
+      };
+      const value = this.optionValues[field.key];
+      if (field.kind === "select") {
+        setting.addDropdown((dropdown) => {
+          for (const option of field.options ?? []) dropdown.addOption(option.value, option.label);
+          dropdown.setValue(String(value)).onChange(set);
+        });
+      } else if (field.kind === "toggle") {
+        setting.addToggle((toggle) => toggle.setValue(value === true).onChange(set));
+      } else if (field.kind === "number") {
+        setting.addText((text) => {
+          text.inputEl.type = "number";
+          if (field.min !== undefined) text.inputEl.min = String(field.min);
+          if (field.max !== undefined) text.inputEl.max = String(field.max);
+          if (field.step !== undefined) text.inputEl.step = String(field.step);
+          text.setValue(String(value)).onChange((typed) => set(Number(typed)));
+        });
+      } else {
+        setting.addText((text) => text.setValue(String(value)).onChange(set));
+      }
+    }
   }
 
   private currentPage(): Page | undefined {
@@ -212,8 +183,7 @@ export class ExportModal extends Modal {
   private async exportNow(button: ButtonComponent): Promise<void> {
     if (this.busy) return;
     const { view } = this;
-    const plugin = view.plugin;
-    const exporter = plugin.registries.exporters.get(this.formatId);
+    const exporter = view.plugin.registries.exporters.get(this.formatId);
     const file = view.file;
     const dpi = Number(this.dpiText);
     if (!exporter || !file) {
@@ -228,23 +198,13 @@ export class ExportModal extends Modal {
     this.busy = true;
     button.setDisabled(true).setButtonText("Exporting…");
     try {
-      const doc = view.store.doc;
-      const current = this.currentPage();
-      const pages = this.pageChoice === "all" ? doc.pages : current ? [current] : [];
-      const folder = exportFolderFor(plugin.settings, file.path);
-      const { files, warnings } = await runExport(
-        { exporter, doc, pages, baseName: view.getDisplayText(), folder, dpi: Math.round(dpi), maxPageSizeMm: plugin.settings.maxPageSizeMm },
-        {
-          app: view.app,
-          registries: plugin.registries,
-          resolved: (id) => view.resolvedCache.get(id),
-          elementFor: (id) => view.nodeHost.elementFor(id),
-          decoders: plugin.decoders,
-          trim: browserTrimDeps,
-          isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
-        },
-      );
-      new Notice(exportSummary(files, folder));
+      const { files, warnings, folder } = await exportFigure(viewExportTarget(view, file, this.currentPage()), {
+        format: exporter.id,
+        pages: this.pageChoice,
+        dpi,
+        options: this.optionValues,
+      });
+      new Notice(exportSummary(files.length, folder));
       if (warnings.length > 0) {
         console.warn("Link Figures: export report", warnings);
         warningsNotice(warnings);

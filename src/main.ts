@@ -16,6 +16,8 @@ import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "./
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
+import { viewExportTarget } from "./export/export-modal";
+import { exportFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
 import { pngExporter, tiffExporter } from "./export/exporters/raster";
 import { svgExporter } from "./export/exporters/svg";
@@ -58,6 +60,7 @@ export default class LinkFiguresPlugin extends Plugin {
     normalizePath,
     openFigure: (path) => this.openFigureView(path),
     noteBlockId: (path, line) => noteBlockId(this.noteHost(), path, line, blockIdPrefix(this.settings.blockIdPrefix)),
+    exportFigure: (path, request) => this.exportFigureAt(path, request),
   });
   /** The Markdown view a drag started in (its editor), for a drop of text on a figure to match against: see `EditorDragTracker`. */
   readonly editorDrag = new EditorDragTracker(() => this.app.workspace.getLeavesOfType("markdown"));
@@ -231,6 +234,32 @@ export default class LinkFiguresPlugin extends Plugin {
   }
 
   /** The file at vault path `path`; a `CommandError` when there is none. */
+  /**
+   * Exports the figure at `path` as `api.export` asks: from its most recently active view, or, with none, from a view
+   * opened in a background tab for it (its links resolved first), which is closed again afterwards.
+   */
+  private async exportFigureAt(path: string, request: ExportRequest): Promise<ExportOutcome> {
+    const open = this.openFigureView(path);
+    if (open?.file) {
+      const { files, warnings } = await exportFigure(viewExportTarget(open, open.file), request);
+      return { files, warnings };
+    }
+    const file = this.vaultFile(path);
+    const leaf = this.app.workspace.getLeaf("tab");
+    try {
+      await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path }, active: false });
+      await leaf.loadIfDeferred();
+      const view = leaf.view;
+      if (!(view instanceof LinkFiguresView) || !view.hasDocument() || !view.file) throw new Error(`export: "${path}" could not be opened as a figure`);
+      // The view started resolving its links when it loaded; resolving them again here is what can be waited for.
+      await view.nodeHost.resolve(view.store.doc.nodes.filter((n) => n.type === "file").map((n) => n.id));
+      const { files, warnings } = await exportFigure(viewExportTarget(view, view.file), request);
+      return { files, warnings };
+    } finally {
+      leaf.detach();
+    }
+  }
+
   private vaultFile(path: string): TFile {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
     if (!(file instanceof TFile)) throw new CommandError(`there is no file "${path}"`);

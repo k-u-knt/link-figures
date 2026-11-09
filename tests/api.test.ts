@@ -406,3 +406,61 @@ describe("blockId", () => {
     await expect(api.blockId("Notes/a.md", 3)).rejects.toThrow(/blockId/);
   });
 });
+
+describe("export", () => {
+  const request = { format: "png", pages: "all" as const, dpi: 600, options: { compression: "none" } };
+
+  test("exports through the host, with the path normalised and the request as given", async () => {
+    const calls: unknown[] = [];
+    const api = createApi({
+      app: {} as never,
+      registries: createRegistries(),
+      files: { read: async () => "", process: async () => {} },
+      normalizePath,
+      openFigure: () => null,
+      exportFigure: async (path, req) => {
+        calls.push([path, req]);
+        return { files: ["a.png"], warnings: ["w"] };
+      },
+    });
+    await expect(api.export(`/${PATH}`, request)).resolves.toEqual({ files: ["a.png"], warnings: ["w"] });
+    expect(calls).toEqual([[PATH, request]]);
+  });
+
+  test("an export waits for the edits queued on the figure before it", async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const api = createApi({
+      app: {} as never,
+      registries: createRegistries(),
+      files: {
+        read: async () => {
+          order.push("read");
+          await new Promise<void>((r) => (release = r));
+          throw new Error("gone");
+        },
+        process: async () => {},
+      },
+      normalizePath,
+      openFigure: () => null,
+      exportFigure: async () => {
+        order.push("export");
+        return { files: [], warnings: [] };
+      },
+    });
+    const read = api.read(PATH).catch(() => undefined);
+    const exported = api.export(PATH, { format: "png" });
+    await Promise.resolve();
+    expect(order).toEqual(["read"]);
+    release();
+    await read;
+    await exported;
+    expect(order).toEqual(["read", "export"]);
+  });
+
+  test("a request without a format is refused, and without a host that exports, export rejects", async () => {
+    const { api } = setup();
+    await expect(api.export(PATH, {} as never)).rejects.toThrow("export: format must be the id of an export format");
+    await expect(api.export(PATH, { format: "png" })).rejects.toThrow("export: figures cannot be exported here");
+  });
+});

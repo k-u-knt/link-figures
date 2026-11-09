@@ -32,7 +32,16 @@ Obsidian hides `.tif`/`.tiff` files in the file explorer unless Settings → Fil
 
 **Trimmed export.** What a crop hides is left out of the exported file, so the data you cropped away is not sent along with the figure. Every export removes from each panel's source what lies wholly outside the part that shows (the crop, and what the panel's rectangle cuts off when it is filled): a PNG, JPEG, GIF, WebP, AVIF, BMP or TIFF panel is cut to the visible pixels (rounded outward to whole pixels), and so is a PDF panel's image in an SVG export. An item that crosses the crop's edge (a line, an axis, a long label, or an image embedded in an SVG or PDF plot, such as a heat map) is kept whole, and its hidden part is still in the file under the clip. A trimmed raster is written as a PNG in sRGB, as the stage shows it: an embedded colour profile is not carried over, a JPEG can grow several times in size, and an animated GIF keeps its first frame. The export's notice has a line for each cropped panel saying what was removed, or why it could not be trimmed. The figure itself keeps the full sources, so a crop can always be widened again.
 
-PDF export sets text in the built-in Helvetica for Arial and Helvetica, and in Times for Times New Roman; every other family (Calibri, Georgia, Courier New) falls back to Times, with a warning, until TrueType embedding lands in M2.
+**Fonts in the PDF.** PDF export embeds the fonts a label or a linked SVG panel uses, as a subset holding only the characters drawn, so one word costs a few kilobytes. The fonts come from the ones installed on your computer (Obsidian lists them; the inspector's Font menu shows the same list), and only TrueType outlines can be embedded. When a font cannot be, the text is set in a standard font (Helvetica for sans-serif and unknown families, Times for serif, Courier for monospace) and the export's notice says so, naming the font actually used. Arial, Helvetica and Times New Roman that are not embedded are drawn as the standard Helvetica and Times, which match their metrics, with no warning. The warnings are:
+
+- `font "X" not installed — Helvetica used in PDF`
+- `font "X" has PostScript outlines (OTF/CFF) — Helvetica used in PDF` (an `.otf` family, or a collection of such faces, as Hiragino Sans)
+- `font "X" could not be read — Helvetica used in PDF`
+- `font "X" has no bold face — regular used` (likewise italic and bold italic)
+- `font "X" lacks "µ" — "label" set in Helvetica in PDF` (a character the font has no glyph for; the whole label is set in the standard font rather than cut short)
+- `installed fonts could not be read (Obsidian was not visible) — fonts substituted` (Obsidian refuses the font list while its window is hidden; export with the window showing)
+
+A warning that comes from a label or an SVG panel starts with its name. A linked SVG's fonts are read from its `font-family`, its `font` shorthand (as matplotlib writes with `svg.fonttype: none`) and its style rules, and a list such as `Calibri, sans-serif` tries each name in turn; Arial, Helvetica or Times New Roman in a list is used as the standard font and ends the search. Embedded fonts are named as the family is written, without the six-letter subset prefix, so a preflight tool may not list them as subsets. A SVG export is not changed by any of this: it keeps the family names and embeds nothing.
 
 ## Shapes and connectors
 

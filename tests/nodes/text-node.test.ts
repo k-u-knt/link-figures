@@ -147,6 +147,7 @@ describe("the type", () => {
     expect(options(null)).toEqual(CURATED_FONT_OPTIONS.map((o) => o.value));
     expect(options([])).toEqual(CURATED_FONT_OPTIONS.map((o) => o.value));
     expect(options(["Fira Sans"], "Gone Sans")).toEqual(["Fira Sans", "Gone Sans"]);
+    expect(options(["Fira Sans", "Zed"], "Gone Sans")).toEqual(["Fira Sans", "Gone Sans", "Zed"]);
     expect(options(null, "Gone Sans")).toEqual([...CURATED_FONT_OPTIONS.map((o) => o.value), "Gone Sans"]);
   });
 

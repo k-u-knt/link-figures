@@ -1,4 +1,5 @@
 import { CURATED_FONTS, DEFAULT_FONT } from "../constants";
+import { compareFamilies } from "../fonts/family-list";
 import { boxAttachable } from "../model/attach";
 import type { Rect } from "../model/geometry";
 import type { DocumentStore } from "../model/store";
@@ -15,7 +16,10 @@ export const CURATED_FONT_OPTIONS: { value: string; label: string }[] = CURATED_
 /** The Font menu: the installed families, or the curated six while there are none; the node's own family is always in it. */
 function fontOptions(families: string[] | null, current: string): { value: string; label: string }[] {
   const base = families && families.length > 0 ? families.map((family) => ({ value: family, label: family })) : CURATED_FONT_OPTIONS;
-  return base.some((o) => o.value === current) ? base : [...base, { value: current, label: current }];
+  if (base.some((o) => o.value === current)) return base;
+  // Installed families are sorted; the node's own is put where it sorts. The curated six keep their order, with it last.
+  const withCurrent = [...base, { value: current, label: current }];
+  return families && families.length > 0 ? withCurrent.sort((a, b) => compareFamilies(a.value, b.value)) : withCurrent;
 }
 
 const WEIGHT_OPTIONS = [

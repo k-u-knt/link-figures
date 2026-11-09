@@ -26,7 +26,8 @@ export const straightRoute: Route = {
  * One cubic from end to end. Its control points sit a third and two thirds of the way along the line, pushed sideways
  * by `bend` × the line's length (to the right of the direction of travel as the page shows it; a negative bend goes
  * left). An end attached to an anchor instead puts its control point the same distance (at least its `lead`) out along
- * the anchor's normal, so the curve leaves the item square to its edge.
+ * the anchor's normal and then the same push sideways, so the curve leaves the item square to its edge and still bows
+ * to the side `bend`'s sign picks.
  */
 export const curvedRoute: Route = {
   id: "curved",
@@ -44,7 +45,7 @@ export const curvedRoute: Route = {
     const control = (end: EndPoint, other: EndPoint, along: number): Pt => {
       if (!end.dir) return { x: a.pt.x + dx * along + side.x, y: a.pt.y + dy * along + side.y };
       const out = Math.max(reach, Math.min(end.lead, maxLead(end, other)));
-      return { x: end.pt.x + end.dir.x * out, y: end.pt.y + end.dir.y * out };
+      return { x: end.pt.x + end.dir.x * out + side.x, y: end.pt.y + end.dir.y * out + side.y };
     };
     const c1 = control(a, b, 1 / 3);
     const c2 = control(b, a, 2 / 3);
@@ -62,18 +63,35 @@ export const curvedRoute: Route = {
     return [{ id: "bend", pt }];
   },
   /**
-   * The bend that puts the curve's middle (between two free ends) at `to`'s distance to the side of the line: that
-   * middle lies 3/4 of the control points' push off the line, so the bend is that distance over 3/4 of the length,
-   * within the field's −1 to 1. A line with no length keeps its bend.
+   * The bend that puts the curve's middle (its handle) at `to`'s distance to the side of the line, within the field's
+   * −1 to 1. Between two free ends that middle lies 3/4 of the control points' push off the line, so the bend is that
+   * distance over 3/4 of the length. With an end attached, the anchor's normal moves the middle too, so the bend is
+   * found by bisection on where `handles` puts it: its distance to the side only grows with the bend (the normal's part
+   * is the same for a bend and its negative, and never grows faster than the push). A line with no length keeps its
+   * bend.
    */
   dragHandle(id, to, a, b, params) {
     const dx = b.pt.x - a.pt.x;
     const dy = b.pt.y - a.pt.y;
     const len2 = dx * dx + dy * dy;
     if (id !== "bend" || len2 === 0) return { bend: numberParam(params, "bend", 0.25) };
-    const mid = { x: (a.pt.x + b.pt.x) / 2, y: (a.pt.y + b.pt.y) / 2 };
-    const side = (to.x - mid.x) * -dy + (to.y - mid.y) * dx;
-    return { bend: Math.round(Math.max(-1, Math.min(1, side / (0.75 * len2))) * 1000) / 1000 };
+    // Distance to the side of the line, times its length.
+    const sideOf = (pt: Pt): number => (pt.x - a.pt.x) * -dy + (pt.y - a.pt.y) * dx;
+    const target = sideOf(to);
+    let bend: number;
+    if (!a.dir && !b.dir) bend = Math.max(-1, Math.min(1, target / (0.75 * len2)));
+    else {
+      let lo = -1;
+      let hi = 1;
+      for (let i = 0; i < 30; i++) {
+        const mid = (lo + hi) / 2;
+        const pt = curvedRoute.handles?.(a, b, { ...params, bend: mid })[0]?.pt;
+        if (pt && sideOf(pt) < target) lo = mid;
+        else hi = mid;
+      }
+      bend = (lo + hi) / 2;
+    }
+    return { bend: Math.round(bend * 1000) / 1000 };
   },
 };
 

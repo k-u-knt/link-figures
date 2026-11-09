@@ -681,3 +681,31 @@ test("a cubic that passes quickly through the end's inset circle is cut there, n
   expect(stop.x).toBeLessThan(299);
   for (const line of flattenPath(r.path, 0.01)) for (const pt of line) expect(Math.hypot(pt.x - 300, pt.y)).toBeGreaterThanOrEqual(inset - 1e-3);
 });
+
+describe("a curve's bend with attached ends", () => {
+  const curved = route("curved");
+  const a: EndPoint = { pt: { x: 0, y: 0 }, dir: { x: 1, y: 0 }, lead: 0 };
+  const b: EndPoint = { pt: { x: 200, y: 100 }, dir: { x: -1, y: 0 }, lead: 0 };
+  const handleAt = (x: EndPoint, y: EndPoint, bend: number): Pt => curved.handles!(x, y, { bend })[0].pt;
+  // Signed distance to the right of the chord a→b as the page shows it.
+  const sideOf = (pt: Pt): number => ((pt.x - a.pt.x) * -(b.pt.y - a.pt.y) + (pt.y - a.pt.y) * (b.pt.x - a.pt.x)) / Math.hypot(200, 100);
+
+  test("bends of 0.3 and −0.3 put the curve's middle more than 10 px apart, on opposite sides of the chord", () => {
+    const plus = handleAt(a, b, 0.3);
+    const minus = handleAt(a, b, -0.3);
+    expect(Math.hypot(plus.x - minus.x, plus.y - minus.y)).toBeGreaterThan(10);
+    expect(Math.sign(sideOf(plus))).toBe(-Math.sign(sideOf(minus)));
+    expect(sideOf(plus)).toBeGreaterThan(0);
+  });
+
+  test.each([0.4, -0.6])("dragging the handle to where bend %s puts it gives that bend back", (bend) => {
+    const got = curved.dragHandle!("bend", handleAt(a, b, bend), a, b, {}) as { bend: number };
+    expect(Math.abs(got.bend - bend)).toBeLessThanOrEqual(0.002);
+  });
+
+  test.each([0.4, -0.6])("with one end free, dragging to where bend %s puts the handle gives that bend back", (bend) => {
+    const free: EndPoint = { ...b, dir: null };
+    const got = curved.dragHandle!("bend", handleAt(a, free, bend), a, free, {}) as { bend: number };
+    expect(Math.abs(got.bend - bend)).toBeLessThanOrEqual(0.002);
+  });
+});

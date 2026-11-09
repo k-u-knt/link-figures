@@ -166,8 +166,8 @@ export default class LinkFiguresPlugin extends Plugin {
     return best;
   }
 
-  /** Notes as `noteBlockId` reads and writes them: by path, through the cache, an open Markdown editor, and `vault.process`. */
-  private noteHost(): NoteHost {
+  /** Notes as `noteBlockId` and a drop out of a note read and write them: by path, through the cache, an open Markdown editor, and `vault.process`. */
+  noteHost(): NoteHost {
     const { vault, metadataCache, workspace } = this.app;
     const note = (path: string): TFile | null => {
       const file = vault.getAbstractFileByPath(path);

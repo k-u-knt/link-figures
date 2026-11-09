@@ -20,6 +20,7 @@ vi.mock("obsidian", () => ({
   normalizePath: (p: string) => p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "") || "/",
 }));
 const { Intake } = await import("../../src/links/intake");
+const { parseNote } = await import("../../src/links/note-drop");
 const { DecodeLimitError } = await import("../../src/links/decoders/budget");
 type IntakeInstance = InstanceType<typeof Intake>;
 type ViewArg = ConstructorParameters<typeof Intake>[0];
@@ -54,7 +55,24 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
     "app://Notes/plot.png": { width: 400, height: 200 },
     "app://Notes/chart.svg": { width: 0, height: 0 },
   };
-  const settings = { attachmentFolder: "" };
+  const settings = { attachmentFolder: "", dropFromNote: "block-id" as "block-id" | "heading" | "direct" };
+  const vault = { files } as FakeVault;
+  /** Notes as the note host sees them: text, and whether an editor has them open. */
+  const notes: Record<string, string> = {};
+  const leaves: { activeTime?: number; view: unknown }[] = [];
+  const blockId = vi.fn(async (_path: string, _line: number) => ({ id: "fig-0001", subpath: "#^fig-0001" }));
+  const editorOf = (path: string) => (leaves.find((l) => (l.view as { file?: { path: string } }).file?.path === path)?.view as { editor?: unknown } | undefined)?.editor ?? null;
+  const noteHost = () => ({
+    resolve: (path: string) => (path in notes ? path : null),
+    cache: (path: string) => (path in notes ? parseNote(notes[path]) : null),
+    read: async (path: string) => {
+      if (!(path in notes)) throw new Error(`no note ${path}`);
+      return notes[path];
+    },
+    editor: editorOf,
+    saveAndReindex: vi.fn(async () => true),
+    process: vi.fn(),
+  });
   const pdf = vi.fn(async () => ({ dataUrl: "data:pdf-page", width: 300, height: 600, pageCount: 1 }));
   const tiff = vi.fn();
   const exists = (path: string) => path in files || folders.has(path);
@@ -71,6 +89,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
     readOnly: false,
     app: {
       dragManager: undefined as { draggable?: unknown } | undefined,
+      workspace: { getLeavesOfType: (type: string) => (type === "markdown" ? leaves : []) },
       vault: {
         getAbstractFileByPath: (path: string) => (exists(path) ? { path } : null),
         createFolder: vi.fn(async (path: string) => {
@@ -93,9 +112,11 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
     },
     plugin: {
       settings,
-      access: new FakeAccess({ files } as FakeVault),
+      access: new FakeAccess(vault),
       decoders: { pdf, tiff, adjusts: () => false },
       registries,
+      noteHost,
+      api: { blockId },
     },
     store,
     commandContext(): CommandContext {
@@ -133,7 +154,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
 
   const intake = new Intake(view as unknown as ViewArg);
   intake.attach({} as HTMLElement);
-  return { intake, store, written, files, images, settings, folders, commits, view, pdf, tiff, panelCreate, handlers: view.handlers };
+  return { intake, store, written, files, images, settings, folders, commits, view, pdf, tiff, panelCreate, handlers: view.handlers, vault, notes, leaves, blockId };
 }
 
 /** Puts a node of the given z on page `index` (0 or 1), as if it had been there already. */
@@ -790,5 +811,195 @@ describe("execute", () => {
     const ids = await s.intake.execute([{ kind: "link-file", path: "Notes/plot.png" }], { page: s.store.doc.pages[0], x: 0, y: 0 }, []);
     expect(ids).toHaveLength(1);
     expect(fileNodes(s)[0].height).toBeGreaterThanOrEqual(MM_TO_PX);
+  });
+});
+
+describe("dragged out of a note's editor", () => {
+  const NOTE = "Notes/analysis.md";
+  const TEXT = ["Intro.", "", "# Results", "", "The cells divide.", "", "Then they grow.", "", "![[chart.svg]] ![[plot.png]]"].join("\n");
+
+  /** The note is open in an editor (active at `activeTime`) with `selected` selected on lines `from`..`to`. */
+  function openNote(s: Setup, selected: string, from: number, to: number, opts: { path?: string; text?: string; activeTime?: number; mode?: string } = {}) {
+    const path = opts.path ?? NOTE;
+    const text = opts.text ?? TEXT;
+    s.notes[path] = text;
+    s.files[path] = text;
+    s.leaves.push({
+      activeTime: opts.activeTime ?? 1,
+      view: {
+        file: { path },
+        getMode: () => opts.mode ?? "source",
+        editor: {
+          getValue: () => text,
+          getSelection: () => selected,
+          listSelections: () => [{ anchor: { line: from, ch: 0 }, head: { line: to, ch: selected.length } }],
+        },
+      },
+    });
+  }
+
+  const dropText = (s: Setup, text: string) => s.handlers.drop(dropEvent({ x: 60, y: 80, text }));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("block-id: selected text becomes one content panel on the block, given an id through api.blockId, in one commit", async () => {
+    const s = setup();
+    openNote(s, "The cells divide.", 4, 4);
+    dropText(s, "The cells divide.");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show, node.x, node.y]).toEqual(["Notes/analysis", "#^fig-0001", "content", 60, 80]);
+    expect(node.height).toBeCloseTo(DEFAULT_HEIGHT_PX, 6);
+    expect(s.blockId).toHaveBeenCalledWith(NOTE, 4);
+    expect(s.commits).toEqual(["insert"]);
+    expect(notices).toEqual([]);
+  });
+
+  test("heading: the nearest heading, and nothing is written", async () => {
+    const s = setup();
+    s.settings.dropFromNote = "heading";
+    openNote(s, "The cells divide.", 4, 4);
+    dropText(s, "The cells divide.");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath]).toEqual(["Notes/analysis", "#Results"]);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("direct: selected text is read as before (here: nothing to link), and nothing is written", async () => {
+    const s = setup();
+    s.settings.dropFromNote = "direct";
+    openNote(s, "The cells divide.", 4, 4);
+    dropText(s, "The cells divide.");
+    await settle();
+    expect(fileNodes(s)).toHaveLength(0);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("several blocks under one heading link that heading's section", async () => {
+    const s = setup();
+    openNote(s, "The cells divide.\n\nThen they grow.", 4, 6);
+    dropText(s, "The cells divide.\n\nThen they grow.");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].subpath).toBe("#Results");
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("several blocks under no one heading: the first block, and a Notice says so", async () => {
+    const s = setup();
+    openNote(s, "Intro.\n\n# Results", 0, 2);
+    dropText(s, "Intro.\n\n# Results");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].subpath).toBe("#^fig-0001");
+    expect(s.blockId).toHaveBeenCalledWith(NOTE, 0);
+    expect(notices).toEqual([expect.stringMatching(/spans several blocks of analysis .* links its first block/)]);
+  });
+
+  test("a selection of links only keeps one panel per link, each read from the note", async () => {
+    const s = setup();
+    openNote(s, "![[chart.svg]] ![[plot.png]]", 8, 8);
+    dropText(s, "![[chart.svg]] ![[plot.png]]");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(2));
+    expect(fileNodes(s).map((n) => [n.file, n.subpath, n.show])).toEqual([
+      ["Notes/chart.svg", "", "image"],
+      ["Notes/plot.png", "", "image"],
+    ]);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("the most recently active editor with that selection is the one used; Reading view is not looked at", async () => {
+    const s = setup({ files: { "Notes/other.md": "x" } });
+    openNote(s, "The cells divide.", 0, 0, { path: "Notes/reading.md", text: "The cells divide.", activeTime: 9, mode: "preview" });
+    openNote(s, "The cells divide.", 0, 0, { path: "Notes/other.md", text: "The cells divide.", activeTime: 2 });
+    openNote(s, "The cells divide.", 4, 4, { activeTime: 5 });
+    dropText(s, "The cells divide.");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].file).toBe("Notes/analysis");
+    expect(s.blockId).toHaveBeenCalledWith(NOTE, 4);
+  });
+
+  test("text no open editor has selected is read as before", async () => {
+    const s = setup();
+    openNote(s, "The cells divide.", 4, 4);
+    dropText(s, "Then they grow.");
+    await settle();
+    expect(fileNodes(s)).toHaveLength(0);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("when the block id cannot be written, a Notice says why and nothing is added", async () => {
+    const s = setup();
+    s.blockId.mockRejectedValueOnce(new Error('blockId: the note "Notes/analysis.md" has changed; try again'));
+    openNote(s, "The cells divide.", 4, 4);
+    dropText(s, "The cells divide.");
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toMatch(/could not link the text from analysis\. .*has changed; try again/);
+    expect(fileNodes(s)).toHaveLength(0);
+    expect(s.commits).toEqual([]);
+  });
+
+  const dragImage = (s: Setup, linktext = "plot.png") => {
+    s.view.app.dragManager = { draggable: { type: "link", linktext, sourcePath: NOTE } };
+    s.handlers.drop(dropEvent({ x: 60, y: 80 }));
+  };
+
+  test("block-id: an image dragged out of a note shows that image from the note's block, by its index there, measured", async () => {
+    const s = setup();
+    s.notes[NOTE] = TEXT;
+    s.files[NOTE] = TEXT;
+    const at = TEXT.indexOf("![[chart.svg]]");
+    s.vault.blocks = { [NOTE]: { "fig-0001": { start: at, end: null } } };
+    s.vault.embeds = { [NOTE]: [{ link: "chart.svg", offset: at }, { link: "plot.png", offset: TEXT.indexOf("![[plot.png]]") }] };
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show, node.imageIndex]).toEqual(["Notes/analysis", "#^fig-0001", "image", 1]);
+    expect(s.blockId).toHaveBeenCalledWith(NOTE, 8);
+    expect(s.panelCreate.mock.calls[0][0]).toMatchObject({ imageIndex: 1 });
+    // Measured from plot.png, the second image of the block.
+    expect(node.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+  });
+
+  test("heading: an image links the nearest heading, counted within its section; nothing is written", async () => {
+    const s = setup();
+    s.settings.dropFromNote = "heading";
+    s.notes[NOTE] = TEXT;
+    s.files[NOTE] = TEXT;
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show, node.imageIndex]).toEqual(["Notes/analysis", "#Results", "image", 1]);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("direct: an image dragged out of a note links the image file, as before", async () => {
+    const s = setup();
+    s.settings.dropFromNote = "direct";
+    s.notes[NOTE] = TEXT;
+    s.files[NOTE] = TEXT;
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath, fileNodes(s)[0].imageIndex]).toEqual(["Notes/plot.png", "", 0]);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("an image the note does not embed (or a note that cannot be read) links the image file", async () => {
+    const s = setup();
+    s.notes[NOTE] = "No images here.";
+    s.files[NOTE] = "No images here.";
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect(fileNodes(s)[0].file).toBe("Notes/plot.png");
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("an image embedded twice: the first, and a Notice says which", async () => {
+    const s = setup();
+    const text = "# R\n\n![[plot.png]]\n\n![[plot.png]]";
+    s.notes[NOTE] = text;
+    s.files[NOTE] = text;
+    s.settings.dropFromNote = "heading";
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].subpath, fileNodes(s)[0].imageIndex]).toEqual(["#R", 0]);
+    expect(notices).toContainEqual(expect.stringMatching(/plot\.png is embedded 2 times in analysis; the panel shows the first \(line 3\)/));
   });
 });

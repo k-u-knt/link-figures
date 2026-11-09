@@ -22,11 +22,13 @@ const refOf = (path: string): FileRef => {
 export class FakeAccess implements VaultAccess {
   constructor(private readonly vault: FakeVault) {}
 
-  /** Exact path first, then file name with or without its extension. */
+  /** Exact path first (a note's also without `.md`), then file name with or without its extension. */
   resolveLink(path: string, _fromPath: string): FileRef | null {
     const paths = Object.keys(this.vault.files);
     const hit =
       paths.find((p) => p === path) ??
+      // A note by its full path without `.md`, as a panel of a note links it.
+      paths.find((p) => p.endsWith(".md") && p.slice(0, -3) === path) ??
       paths.find((p) => basename(p) === path) ??
       paths.find((p) => stripExtension(basename(p)) === path);
     return hit === undefined ? null : refOf(hit);

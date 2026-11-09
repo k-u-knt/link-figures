@@ -1,5 +1,14 @@
+import { FILE_SUFFIX } from "../constants";
 import { splitLinktext } from "../format/links-section";
+import type { DropFromNote } from "../settings/settings";
 import { isPanelExtension, sourceKindOf } from "./resolver";
+
+/** An open note whose editor has the dropped text selected: its path, and the selection's first and last lines (0-based). */
+export interface SelectionMatch {
+  path: string;
+  from: number;
+  to: number;
+}
 
 /** What a drop carried, read down to the fields that decide what to do with it. */
 export interface DropData {
@@ -9,6 +18,13 @@ export interface DropData {
   osFiles?: { name: string; type: string }[];
   /** The drag's `text/plain`. */
   text?: string;
+  /**
+   * The `dropFromNote` setting. Without it, a drop out of a note is read as it was before the setting (`"direct"`):
+   * text by its links or as a path, an image link as the image's file.
+   */
+  fromNote?: DropFromNote;
+  /** The open note whose editor has `text` selected (the most recently active first), or null; asked only when `fromNote` is not `"direct"`. */
+  selection?: (text: string) => SelectionMatch | null;
 }
 
 export type IntakeAction =
@@ -23,6 +39,13 @@ export type IntakeAction =
   | { kind: "save-file"; index: number; name: string }
   /** The clipboard image at item `index`, to be saved under `name`. */
   | { kind: "save-image-blob"; index: number; name: string }
+  /**
+   * Text dragged out of a note's editor (its selection, lines `from`..`to`, 0-based): one panel linking the block that
+   * holds it, or the heading section over the blocks it spans (`note-drop.ts`).
+   */
+  | { kind: "link-block"; notePath: string; from: number; to: number }
+  /** An image link dragged out of the note `sourcePath` (an embed in it): a panel of the note's block or section that shows that image. */
+  | { kind: "link-note-image"; linktext: string; sourcePath: string }
   /**
    * One line of dropped text with no wikilink in it: a vault file if it resolves as a path, else nothing. Without
    * Obsidian's drag object (`app.dragManager` is unofficial) a file dragged from the vault arrives as such text.
@@ -55,7 +78,16 @@ function wikilinksIn(text: string): string[] {
   return out;
 }
 
-function fromDraggable(draggable: NonNullable<DropData["draggable"]>): IntakeAction[] {
+/** Whether `text` is wikilinks and embeds only, with nothing but white space between them. */
+function onlyWikilinks(text: string): boolean {
+  // `match`, not `test`: the expression is global, and `test` would keep its place for the next call.
+  return text.match(WIKILINK) !== null && text.replace(WIKILINK, "").trim() === "";
+}
+
+/** Whether a drop out of a note is to be linked to the note (its block or section), by the setting. */
+const linksToNote = (fromNote: DropFromNote | undefined) => fromNote === "block-id" || fromNote === "heading";
+
+function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: DropFromNote | undefined): IntakeAction[] {
   switch (draggable.type) {
     case "file":
     case "files":
@@ -65,6 +97,11 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>): IntakeAct
       const linktext = draggable.linktext?.trim() ?? "";
       if (splitLinktext(linktext).file.trim() === "") return [];
       const { sourcePath } = draggable;
+      // An image dragged out of a note (an embed in it) links the place in the note, by the setting; a figure is not a note.
+      const fromANote = sourcePath !== undefined && /\.md$/i.test(sourcePath) && !sourcePath.endsWith(FILE_SUFFIX);
+      if (fromANote && linksToNote(fromNote) && isPanelExtension(extensionOf(splitLinktext(linktext).file))) {
+        return [{ kind: "link-note-image", linktext, sourcePath }];
+      }
       return [sourcePath === undefined ? { kind: "link-text", linktext } : { kind: "link-text", linktext, sourcePath }];
     }
     default:
@@ -78,7 +115,7 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>): IntakeAct
  * their extension is one a panel can show; the caller names the ones left out.
  */
 export function classifyDrop(d: DropData): IntakeAction[] {
-  if (d.draggable) return fromDraggable(d.draggable);
+  if (d.draggable) return fromDraggable(d.draggable, d.fromNote);
   if (d.osFiles && d.osFiles.length > 0) {
     const out: IntakeAction[] = [];
     d.osFiles.forEach((file, index) => {
@@ -87,6 +124,12 @@ export function classifyDrop(d: DropData): IntakeAction[] {
     return out;
   }
   const text = d.text ?? "";
+  // Text selected in an open note's editor links the place it came from, unless it is links only (each is linked, from that note).
+  const match = linksToNote(d.fromNote) && d.selection && text.trim() !== "" ? d.selection(text) : null;
+  if (match) {
+    if (onlyWikilinks(text)) return wikilinksIn(text).map((linktext) => ({ kind: "link-text", linktext, sourcePath: match.path }));
+    return [{ kind: "link-block", notePath: match.path, from: match.from, to: match.to }];
+  }
   // Text with a wikilink in it is read for its links only, even when none of them names a file.
   if (text.match(WIKILINK)) return wikilinksIn(text).map((linktext) => ({ kind: "link-text", linktext }));
   const line = text.trim();

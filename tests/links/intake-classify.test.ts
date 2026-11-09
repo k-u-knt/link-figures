@@ -176,3 +176,68 @@ describe("linkSafeName", () => {
   test("a name with nothing to replace, a pasted image's, is left alone", () =>
     expect(linkSafeName("Pasted image 20261027140509.png")).toBe("Pasted image 20261027140509.png"));
 });
+
+describe("classifyDrop: text and images dragged out of a note's editor", () => {
+  const match = { path: "Notes/a.md", from: 2, to: 4 };
+  const finds = (expected: string) => vi.fn((text: string) => (text === expected ? match : null));
+
+  test("text that is an open note's selection becomes one link-block action, with the note and the lines", () => {
+    const selection = finds("The cells divide.\nThen they [[grow]].");
+    const out = classifyDrop({ text: "The cells divide.\nThen they [[grow]].", fromNote: "block-id", selection });
+    expect(out).toEqual([{ kind: "link-block", notePath: "Notes/a.md", from: 2, to: 4 }]);
+    expect(classifyDrop({ text: "The cells divide.\nThen they [[grow]].", fromNote: "heading", selection })).toEqual(out);
+  });
+
+  test("a selection made only of wikilinks and embeds keeps one panel per link, read relative to its note", () => {
+    const text = "![[plot.png]]\n  [[analysis#Fig 2|see]] ";
+    const out = classifyDrop({ text, fromNote: "block-id", selection: finds(text) });
+    expect(out).toEqual([
+      { kind: "link-text", linktext: "plot.png", sourcePath: "Notes/a.md" },
+      { kind: "link-text", linktext: "analysis#Fig 2", sourcePath: "Notes/a.md" },
+    ]);
+  });
+
+  test("text that is no open note's selection is read as before", () => {
+    const selection = vi.fn(() => null);
+    expect(classifyDrop({ text: "see [[a.png]] here", fromNote: "block-id", selection })).toEqual([{ kind: "link-text", linktext: "a.png" }]);
+    expect(classifyDrop({ text: "Notes/plot.png", fromNote: "block-id", selection })).toEqual([{ kind: "maybe-path", text: "Notes/plot.png" }]);
+    expect(classifyDrop({ text: "two\nlines", fromNote: "block-id", selection })).toEqual([]);
+    expect(selection).toHaveBeenCalledTimes(3);
+  });
+
+  test("with dropFromNote 'direct' (or not given) the editors are not looked at, and text is read as before", () => {
+    const selection = vi.fn(() => match);
+    expect(classifyDrop({ text: "see [[a.png]] here", fromNote: "direct", selection })).toEqual([{ kind: "link-text", linktext: "a.png" }]);
+    expect(classifyDrop({ text: "some words", selection })).toEqual([{ kind: "maybe-path", text: "some words" }]);
+    expect(selection).not.toHaveBeenCalled();
+  });
+
+  test("blank text is never matched", () => {
+    const selection = vi.fn(() => match);
+    expect(classifyDrop({ text: " \n ", fromNote: "block-id", selection })).toEqual([]);
+    expect(selection).not.toHaveBeenCalled();
+  });
+
+  test("an image link dragged out of a note is a link-note-image, in 'block-id' and 'heading' modes", () => {
+    const draggable = { type: "link" as const, linktext: "img/plot.png", sourcePath: "Notes/a.md" };
+    for (const fromNote of ["block-id", "heading"] as const) {
+      expect(classifyDrop({ draggable, fromNote })).toEqual([{ kind: "link-note-image", linktext: "img/plot.png", sourcePath: "Notes/a.md" }]);
+    }
+  });
+
+  test("an image link stays a link-text in 'direct' mode, without a mode, without a source note, or from a figure; so does a link to a note", () => {
+    const image = { type: "link" as const, linktext: "plot.png", sourcePath: "Notes/a.md" };
+    expect(classifyDrop({ draggable: image, fromNote: "direct" })).toEqual([{ kind: "link-text", linktext: "plot.png", sourcePath: "Notes/a.md" }]);
+    expect(classifyDrop({ draggable: image })).toEqual([{ kind: "link-text", linktext: "plot.png", sourcePath: "Notes/a.md" }]);
+    expect(classifyDrop({ draggable: { type: "link", linktext: "plot.png" }, fromNote: "block-id" })).toEqual([{ kind: "link-text", linktext: "plot.png" }]);
+    expect(classifyDrop({ draggable: { ...image, sourcePath: "F/fig.lnkfig.md" }, fromNote: "block-id" })[0].kind).toBe("link-text");
+    expect(classifyDrop({ draggable: { ...image, linktext: "analysis#Results" }, fromNote: "block-id" })[0].kind).toBe("link-text");
+  });
+
+  test("an Obsidian drag still wins over a matched selection", () => {
+    const selection = vi.fn(() => match);
+    const out = classifyDrop({ draggable: { type: "file", paths: ["p.png"] }, text: "words", fromNote: "block-id", selection });
+    expect(out).toEqual([{ kind: "link-file", path: "p.png" }]);
+    expect(selection).not.toHaveBeenCalled();
+  });
+});

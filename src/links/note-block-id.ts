@@ -11,6 +11,7 @@ import {
   type Block,
   type BlockLike,
   type BlocksCache,
+  type LinePos,
 } from "./block-id";
 
 /** What `api.blockId` resolves to: the block's id and the subpath that links it (`#^id`). */
@@ -44,7 +45,12 @@ export interface NoteHost {
   process(path: string, edit: (text: string) => string): Promise<void>;
 }
 
-type NoteCache = BlocksCache & { blocks?: Record<string, BlockLike> };
+/** What is read of a note's metadata cache (`CachedMetadata`): its blocks, block ids, headings and embeds. */
+export type NoteCache = BlocksCache & {
+  blocks?: Record<string, BlockLike>;
+  headings?: { heading: string; level: number; position: LinePos }[];
+  embeds?: { link: string; position: LinePos }[];
+};
 
 /** How long to wait for the metadata cache to index an open note that has just been saved. */
 export const REINDEX_TIMEOUT_MS = 2000;

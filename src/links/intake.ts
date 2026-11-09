@@ -9,7 +9,9 @@ import type { LinkFiguresView } from "../view/figure-view";
 import { isEditable } from "../view/pointer";
 import { roundPx } from "../view/pointer-math";
 import { pagePointAt, pageWorldRect } from "../view/viewport";
+import { FILE_SUFFIX } from "../constants";
 import { classifyDrop, classifyPaste, dedupeName, extensionOf, linkSafeName, type DropData, type IntakeAction } from "./intake-classify";
+import { linkForImage, linkForText, matchSelection, type NoteDropHost, type OpenNoteSelection } from "./note-drop";
 import { isPanelExtension, resolveFileNode } from "./resolver";
 import type { Resolved } from "./types";
 
@@ -23,8 +25,8 @@ type Size = { width: number; height: number };
 /** Where new nodes go: a page, and a position on it in that page's pixels. */
 export type IntakeTarget = PlacePoint;
 
-/** What a node is to link to, and how it is to show it. */
-type Planned = Pick<FileNode, "file" | "subpath" | "show">;
+/** What a node is to link to, and how it is to show it (and, for an image shown from a note, which of the note's images). */
+type Planned = Pick<FileNode, "file" | "subpath" | "show"> & { imageIndex?: number };
 /** A planned node and the natural size of the image it will show, or null when it shows none, the image has no size, or it could not be decoded (the node is then made at its default size). */
 type Measured = Planned & { size: Size | null };
 
@@ -67,6 +69,36 @@ function readDraggable(app: App): DropData["draggable"] {
       return undefined;
   }
 }
+
+/** The slice of an open Markdown view the drop reads: its note, its mode, and its editor's selection. Unofficial fields are checked. */
+interface MarkdownViewLike {
+  file?: { path?: unknown } | null;
+  getMode?: () => string;
+  editor?: { getSelection?: () => string; listSelections?: () => OpenNoteSelection["ranges"] };
+}
+
+/**
+ * The selections of the open Markdown editors, the most recently active first (by the leaf's unofficial `activeTime`).
+ * A view in Reading mode has no selection to match, and a figure opened as Markdown is not a note.
+ */
+function openNoteSelections(app: App): OpenNoteSelection[] {
+  const workspace = (app as unknown as { workspace?: { getLeavesOfType?: (type: string) => { view?: unknown; activeTime?: unknown }[] } }).workspace;
+  const leaves = workspace?.getLeavesOfType?.("markdown") ?? [];
+  const time = (leaf: { activeTime?: unknown }) => (typeof leaf.activeTime === "number" ? leaf.activeTime : 0);
+  const out: OpenNoteSelection[] = [];
+  for (const leaf of [...leaves].sort((a, b) => time(b) - time(a))) {
+    const view = leaf.view as MarkdownViewLike | undefined;
+    const path = view?.file?.path;
+    const editor = view?.editor;
+    if (typeof path !== "string" || path.endsWith(FILE_SUFFIX) || view?.getMode?.() === "preview") continue;
+    if (typeof editor?.getSelection !== "function" || typeof editor.listSelections !== "function") continue;
+    out.push({ path, selection: editor.getSelection(), ranges: editor.listSelections() });
+  }
+  return out;
+}
+
+/** A note's path as a panel links it: without `.md`, as Obsidian writes a link to a note. */
+const noteLinkFile = (path: string) => path.replace(/\.md$/i, "");
 
 function basename(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -161,6 +193,9 @@ export class Intake {
       draggable,
       osFiles: files.map((f) => ({ name: f.name, type: f.type })),
       text: transfer?.getData("text/plain") ?? "",
+      fromNote: view.plugin.settings.dropFromNote,
+      // Asked only for text, and only when the setting links drops to their note: the editors' selections as they are now.
+      selection: (text) => matchSelection(openNoteSelections(view.app), text),
     });
     // Files that are all of a kind not wanted still go to `execute`, which says so.
     if (actions.length === 0 && files.length === 0) return;
@@ -259,6 +294,49 @@ export class Intake {
         }
         return { file, subpath, show };
       }
+      case "link-block": {
+        const mode = this.view.plugin.settings.dropFromNote;
+        if (mode === "direct") return null;
+        try {
+          const link = await linkForText(this.noteDropHost(), mode, action.notePath, action.from, action.to);
+          if (!link) return null;
+          for (const notice of link.notices) new Notice(notice);
+          return { file: noteLinkFile(action.notePath), subpath: link.subpath, show: "content" };
+        } catch (error) {
+          console.error(`Link Figures: could not link the text from ${action.notePath}`, error);
+          new Notice(`Link Figures: could not link the text from ${basename(noteLinkFile(action.notePath))}. ${errorText(error)}`);
+          return null;
+        }
+      }
+      case "link-note-image": {
+        const asLink = () => this.plan({ kind: "link-text", linktext: action.linktext, sourcePath: action.sourcePath }, figurePath, files, skipped);
+        const mode = this.view.plugin.settings.dropFromNote;
+        const { access } = this.view.plugin;
+        const resolve = (link: string) => access.resolveLink(splitLinktext(link).file, action.sourcePath);
+        const image = resolve(action.linktext);
+        // Only an image that resolves is looked for in the note; anything else is linked as it was dragged.
+        if (mode === "direct" || !image || !isPanelExtension(image.extension)) return asLink();
+        try {
+          const link = await linkForImage(
+            this.noteDropHost(),
+            mode,
+            action.sourcePath,
+            (embed) => resolve(embed)?.path === image.path,
+            (embed) => {
+              const target = resolve(embed);
+              return target !== null && isPanelExtension(target.extension);
+            },
+          );
+          // The note does not embed it (or cannot be read): the image itself, as before.
+          if (!link) return asLink();
+          for (const notice of link.notices) new Notice(notice);
+          return { file: noteLinkFile(action.sourcePath), subpath: link.subpath, show: "image", imageIndex: link.imageIndex };
+        } catch (error) {
+          console.error(`Link Figures: could not link ${action.linktext} in ${action.sourcePath}`, error);
+          new Notice(`Link Figures: could not link ${action.linktext} in ${basename(noteLinkFile(action.sourcePath))}. ${errorText(error)}`);
+          return null;
+        }
+      }
       case "maybe-path": {
         // Text that names a vault file stands for that file; any other text is not for the figure and is let go quietly.
         const target = this.view.plugin.access.resolveLink(action.text, figurePath);
@@ -281,6 +359,12 @@ export class Intake {
         }
       }
     }
+  }
+
+  /** The notes as a drop out of one reads them, and the block-id writer every id goes through (`api.blockId`). */
+  private noteDropHost(): NoteDropHost {
+    const { plugin } = this.view;
+    return { ...plugin.noteHost(), blockId: (path, line) => plugin.api.blockId(path, line) };
   }
 
   /**
@@ -375,6 +459,7 @@ export class Intake {
           file: item.file,
           subpath: item.subpath,
           show: item.show,
+          ...(item.imageIndex !== undefined ? { imageIndex: item.imageIndex } : {}),
           x: roundPx(at.x),
           y: roundPx(at.y + i * mmToPx(STAGGER_MM)),
           ...(item.size ? { height: Math.max(MIN_NODE_PX, roundPx((width * item.size.height) / item.size.width)) } : {}),

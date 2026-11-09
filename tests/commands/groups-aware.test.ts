@@ -118,6 +118,30 @@ describe("node.move on groups", () => {
   });
 });
 
+describe("a member moved alone across the page boundary", () => {
+  const twoMembers = () => [shape("a", 0, 0, 0, { parent: "g" }), shape("b", 40, 0, 1, { parent: "g" }), grp("g")];
+  const offset = (doc: Document) => {
+    const origins = pageOriginsPx(doc);
+    const round = (v: number) => Math.round(v * 100) / 100;
+    return { x: round(origins.get(other.id)!.x - origins.get(page.id)!.x), y: round(origins.get(other.id)!.y - origins.get(page.id)!.y) };
+  };
+  test("stays on its group's page at the canvas place it was dropped", async () => {
+    const { store, call } = setup(twoMembers());
+    const d = offset(store.doc);
+    await call("node.move", { ids: ["b"], dx: d.x, dy: d.y + 5 });
+    expect(at(store.doc, "b")).toMatchObject({ page: page.id, x: 40 + d.x, y: d.y + 5 });
+    expect(at(store.doc, "g").page).toBe(page.id);
+  });
+  test("the member that decides the group's page leaves the others and the group where they are", async () => {
+    const { store, call } = setup(twoMembers());
+    const d = offset(store.doc);
+    await call("node.move", { ids: ["a"], dx: d.x, dy: d.y + 5 });
+    expect(at(store.doc, "a")).toMatchObject({ page: page.id, y: d.y + 5 });
+    expect(at(store.doc, "b")).toMatchObject({ page: page.id, x: 40, y: 0 });
+    expect(at(store.doc, "g").page).toBe(page.id);
+  });
+});
+
 describe("delete, duplicate and restack on groups", () => {
   test("deleting a group deletes its descendants in one undo step", async () => {
     const { store, call } = setup(nested({ aLocked: true }));
@@ -203,6 +227,10 @@ describe("node.update on a group", () => {
     await call("node.update", { id: "g", patch: { x: 100, y: 7 } });
     expect(["a", "b", "c", "d"].map((id) => [at(store.doc, id).x, at(store.doc, id).y])).toEqual([[100, 7], [120, 7], [140, 7], [160, 7]]);
     expect(at(store.doc, "g")).toMatchObject({ x: 100, y: 7 });
+    // A move by less than roundPx keeps is no move at all.
+    const steps = store.doc;
+    await call("node.update", { id: "g", patch: { x: 100.001 } });
+    expect(store.doc).toBe(steps);
   });
   test("width scales the members' x and width about the group's left", async () => {
     const { store, call } = setup([shape("a", 10, 0, 0, { parent: "g" }), shape("b", 30, 0, 1, { parent: "g", height: 20 }), grp("g")]);

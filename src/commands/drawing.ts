@@ -279,8 +279,8 @@ function updateGroup(ctx: CommandContext, node: Node, patch: Record<string, unkn
   const height = "height" in patch ? nodeSizePx(num("height")) : node.height;
   const sx = node.width > 0 ? width / node.width : 1;
   const sy = node.height > 0 ? height / node.height : 1;
-  const dx = num("x") - node.x;
-  const dy = num("y") - node.y;
+  const dx = roundPx(num("x") - node.x);
+  const dy = roundPx(num("y") - node.y);
   const name = "name" in patch && patch.name !== (node.name ?? "") ? (patch.name as string) : undefined;
   const locked = "locked" in patch && patch.locked !== node.locked ? (patch.locked as boolean) : undefined;
   if (sx === 1 && sy === 1 && dx === 0 && dy === 0 && name === undefined && locked === undefined) return { id: node.id };
@@ -466,7 +466,8 @@ function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
 /**
  * Each of `ids` to the page its move ends on, as `moveNodes` says. The page is decided per outermost unit of the move (a
  * node whose group is not moving with it): the page under the centre of its box, unless its type says otherwise
- * (`NodeType.pageAfterMove`); everything in a unit goes where the unit goes. Units whose type has no such hook are
+ * (`NodeType.pageAfterMove`); everything in a unit goes where the unit goes. A unit inside a group that is not moving
+ * (a member moved alone) stays on its group's page, at the canvas place it was dropped, so a group never spans pages. Units whose type has no such hook are
  * placed first, so a hook can read where they go (a connector follows its items).
  */
 function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<NodeId>): void {
@@ -490,11 +491,14 @@ function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<Nod
     destination.set(unit.id, page);
     for (const id of descendantsOf(doc, unit.id)) if (ids.has(id)) destination.set(id, page);
   };
-  for (const unit of units) if (!hookOf(unit)) place(unit, centrePage(unit));
+  // A unit whose group is not moving with it (a member moved alone, in an entered group) stays on its group's page, so
+  // a group never spans pages: its page-relative position is already where it was dropped on the canvas.
+  for (const unit of units) if (unit.parent !== undefined) place(unit, unit.page);
+  for (const unit of units) if (unit.parent === undefined && !hookOf(unit)) place(unit, centrePage(unit));
   const pageOf = (id: NodeId): PageId | undefined => destination.get(id) ?? doc.nodes.find((n) => n.id === id)?.page;
   for (const unit of units) {
     const hook = hookOf(unit);
-    if (hook) place(unit, hook(unit, { moving: ids, pageOf, centrePage: centrePage(unit) }));
+    if (hook && unit.parent === undefined) place(unit, hook(unit, { moving: ids, pageOf, centrePage: centrePage(unit) }));
   }
   const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
   for (const node of moving) {

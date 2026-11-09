@@ -1,3 +1,5 @@
+import type { Pt, Rect } from "../../model/geometry";
+import type { PathData } from "../../model/path";
 import type { Paint, Stroke } from "../../model/types";
 import type { PaintPptxContext } from "../../registry/paint";
 import type { PptxContext } from "../../registry/node-type";
@@ -152,10 +154,11 @@ export function lnXml(stroke: Stroke | null, alpha: number, box: { width: number
   return `<a:ln w="${w}"${cap}>${fillXml(stroke.paint, alpha, box, ctx)}<a:prstDash val="${dash}"/>${join}${extra}</a:ln>`;
 }
 
-/** An `a:xfrm` of a box in EMU, turned `rotation` degrees clockwise about its centre. */
+/** An `a:xfrm` of a box in EMU (whole numbers; an extent below 0 is 0), turned `rotation` degrees clockwise about its centre. */
 export function xfrmXml(box: { x: number; y: number; cx: number; cy: number }, rotation: number): string {
   const rot = angle60k(rotation);
-  return `<a:xfrm${rot === 0 ? "" : ` rot="${rot}"`}><a:off x="${box.x}" y="${box.y}"/><a:ext cx="${box.cx}" cy="${box.cy}"/></a:xfrm>`;
+  const [x, y, cx, cy] = [Math.round(box.x), Math.round(box.y), Math.max(0, Math.round(box.cx)), Math.max(0, Math.round(box.cy))];
+  return `<a:xfrm${rot === 0 ? "" : ` rot="${rot}"`}><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
 }
 
 /** `s` without the characters XML 1.0 cannot hold (control characters other than tab and line breaks, U+FFFE, U+FFFF). */
@@ -173,4 +176,47 @@ const EXPORT_WIDE = new Set([PATTERN_WARNING]);
 /** `ctx` with its warnings prefixed with `label` (the item's, from `nodeLabel`), except the export-wide ones. */
 export function labelled<C extends Pick<PptxContext, "warn">>(ctx: C, label: string): C {
   return { ...ctx, warn: (message: string) => ctx.warn(EXPORT_WIDE.has(message) ? message : `${label}: ${message}`) };
+}
+
+/**
+ * An `a:xfrm` of `rect` (page px) turned `rotation` degrees about `pivot` (page px), as the node it belongs to is: the
+ * rect keeps its size, its centre goes where the turn takes it, and it is turned by the same angle about that centre.
+ */
+export function turnedXfrmXml(rect: Rect, pivot: Pt, rotation: number, ctx: Pick<PptxContext, "px">): string {
+  const rad = (rotation * Math.PI) / 180;
+  const dx = rect.x + rect.width / 2 - pivot.x;
+  const dy = rect.y + rect.height / 2 - pivot.y;
+  const cx = pivot.x + dx * Math.cos(rad) - dy * Math.sin(rad);
+  const cy = pivot.y + dx * Math.sin(rad) + dy * Math.cos(rad);
+  return xfrmXml({ x: ctx.px(cx - rect.width / 2), y: ctx.px(cy - rect.height / 2), cx: ctx.px(rect.width), cy: ctx.px(rect.height) }, rotation);
+}
+
+/**
+ * An `a:custGeom` of `path` (page px) in a shape whose box is `origin` (page px), with no fill of its own (a line):
+ * moves, lines, cubic curves and closes, in the shape's EMU.
+ */
+export function custGeomXml(path: PathData, origin: Rect, ctx: Pick<PptxContext, "px">, fill = false): string {
+  const x = (v: number): number => ctx.px(v - origin.x);
+  const y = (v: number): number => ctx.px(v - origin.y);
+  const pt = (px: number, py: number): string => `<a:pt x="${x(px)}" y="${y(py)}"/>`;
+  const body = path
+    .map((s) => {
+      switch (s.op) {
+        case "M":
+          return `<a:moveTo>${pt(s.x, s.y)}</a:moveTo>`;
+        case "L":
+          return `<a:lnTo>${pt(s.x, s.y)}</a:lnTo>`;
+        case "C":
+          return `<a:cubicBezTo>${pt(s.x1, s.y1)}${pt(s.x2, s.y2)}${pt(s.x, s.y)}</a:cubicBezTo>`;
+        case "Z":
+          return "<a:close/>";
+      }
+    })
+    .join("");
+  const w = Math.max(1, ctx.px(origin.width));
+  const h = Math.max(1, ctx.px(origin.height));
+  return (
+    '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/>' +
+    `<a:pathLst><a:path w="${w}" h="${h}"${fill ? "" : ' fill="none"'}>${body}</a:path></a:pathLst></a:custGeom>`
+  );
 }

@@ -52,6 +52,8 @@ export interface PptxContext {
   doc: Document;
   /** The page the slide is made of. */
   page: Page;
+  /** The page's assets, trimmed (see `collectAssets`, `trimAssets`): what a panel draws. */
+  assets: AssetMap;
   /** How much the slide is scaled from the page: 1, unless the page is outside PowerPoint's slide sizes. */
   scale: number;
   /** `value` page px as EMU on the slide (scaled), rounded to a whole EMU. */
@@ -62,7 +64,10 @@ export interface PptxContext {
   addMedia(bytes: Uint8Array, ext: "png" | "jpeg"): string;
   /** A shape id not yet used on the slide (`p:cNvPr id`). */
   nextId(): number;
-  /** `svgFragment` (page px, as `toSvg` writes) drawn over `box` (page px) as PNG bytes at `dpi`. */
+  /**
+   * `svgFragment` (page px, as `toSvg` writes, with any `<defs>` it needs inline) drawn over `box` (page px) on a clear
+   * background, as PNG bytes at `dpi` (lower when that is over the canvas limits). Rejects when it cannot be drawn.
+   */
   rasterise(svgFragment: string, box: Rect): Promise<Uint8Array>;
   /** Says what the slide could not keep; the same message is reported once per export. Say which item it is about. */
   warn(message: string): void;

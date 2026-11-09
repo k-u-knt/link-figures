@@ -271,6 +271,7 @@ export const noCap: CapKind = {
   name: "None",
   path: () => [],
   inset: () => 0,
+  pptxEnd: "none",
 };
 
 /** The smallest arrow: two thirds as wide as long, it is then 1 line width wide at its base. */
@@ -291,6 +292,7 @@ export const arrowCap: CapKind = {
     ];
   },
   inset: (size, w) => capLength(size, w, ARROW_MIN_SIZE),
+  pptxEnd: "triangle",
 };
 
 /**
@@ -328,6 +330,7 @@ export const openArrowCap: CapKind = {
     // Half the inner corner's depth (w·m/h with h = l/2): there the chevron's solid tip is at least the line's width across.
     return l === 0 ? 0 : (w * Math.hypot(l, l / 2)) / l;
   },
+  pptxEnd: "arrow",
 };
 
 /** A filled disc whose diameter is the cap's size (at least the line's width), touching the end; the line stops at its centre. */
@@ -339,6 +342,7 @@ export const circleCap: CapKind = {
     return l === 0 ? [] : ellipsePath({ x: -l, y: -l / 2, width: l, height: l });
   },
   inset: (size, w) => capLength(size, w, 1) / 2,
+  pptxEnd: "oval",
 };
 
 /** A bar across the end, as long as the cap's size (at least the line's width) and as thick as the line, its outer edge on the end; the line stops inside it. */

@@ -1,6 +1,7 @@
 import {
   angle60k,
   colorXml,
+  custGeomXml,
   EMU_PER_MM,
   EMU_PER_PT,
   EMU_PER_PX,
@@ -9,6 +10,7 @@ import {
   lnXml,
   nvPrXml,
   PATTERN_WARNING,
+  turnedXfrmXml,
   xfrmXml,
   xmlSafe,
 } from "../../../src/export/pptx/drawingml";
@@ -204,6 +206,48 @@ describe("lnXml", () => {
     expect(Array.from(line.children).map((c) => c.tagName)).toEqual(["a:gradFill", "a:prstDash", "a:bevel"]);
     expect(one(ln(stroke({ cap: "square", join: "miter" })), "a:ln").getAttribute("cap")).toBe("sq");
     expect(one(ln(stroke({ cap: "butt", join: "round" })), "a:round")).toBeTruthy();
+  });
+});
+
+describe("custGeomXml and turnedXfrmXml", () => {
+  const { ctx } = pptxContext();
+
+  it("writes a path in its box's EMU, a line with no fill", () => {
+    const doc = parseFragment(
+      custGeomXml(
+        [
+          { op: "M", x: 10, y: 20 },
+          { op: "L", x: 30, y: 20 },
+          { op: "C", x1: 30, y1: 30, x2: 20, y2: 40, x: 10, y: 40 },
+          { op: "Z" },
+        ],
+        { x: 10, y: 20, width: 20, height: 20 },
+        ctx,
+      ),
+    );
+    const path = one(doc, "a:path");
+    expect([path.getAttribute("w"), path.getAttribute("h"), path.getAttribute("fill")]).toEqual(["190500", "190500", "none"]);
+    expect(Array.from(path.children).map((c) => c.tagName)).toEqual(["a:moveTo", "a:lnTo", "a:cubicBezTo", "a:close"]);
+    expect(all(one(path, "a:cubicBezTo"), "a:pt").map((p) => p.getAttribute("x"))).toEqual(["190500", "95250", "0"]);
+  });
+
+  it("gives a flat path a box of at least 1 EMU", () => {
+    const path = one(parseFragment(custGeomXml([{ op: "M", x: 0, y: 5 }, { op: "L", x: 10, y: 5 }], { x: 0, y: 5, width: 10, height: 0 }, ctx)), "a:path");
+    expect(path.getAttribute("h")).toBe("1");
+  });
+
+  it("turns a part of a box about the box's centre", () => {
+    // A 10 × 10 square at the right end of a box centred on (50, 50), turned a quarter: it goes below the centre.
+    const x = one(parseFragment(turnedXfrmXml({ x: 90, y: 45, width: 10, height: 10 }, { x: 50, y: 50 }, 90, ctx)), "a:xfrm");
+    expect(x.getAttribute("rot")).toBe("5400000");
+    expect([one(x, "a:off").getAttribute("x"), one(x, "a:off").getAttribute("y")]).toEqual([String(45 * 9525), String(90 * 9525)]);
+  });
+
+  it("never writes a negative extent", () => {
+    const x = one(parseFragment(xfrmXml({ x: -5, y: 0, cx: -3, cy: 2.6 }, 0)), "a:xfrm");
+    expect(one(x, "a:ext").getAttribute("cx")).toBe("0");
+    expect(one(x, "a:ext").getAttribute("cy")).toBe("3");
+    expect(one(x, "a:off").getAttribute("x")).toBe("-5");
   });
 });
 

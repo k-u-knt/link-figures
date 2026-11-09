@@ -13,6 +13,8 @@ export interface ResolvedConnector {
   ends: [EndPoint, EndPoint];
   /** The line, shortened at each end by its cap's inset. */
   path: PathData;
+  /** The whole line, end to end, not shortened for its caps (what a PowerPoint line with line ends draws). */
+  full: PathData;
   /** Each end's cap as a closed area filled with the stroke's paint, or null when the end has none. */
   caps: [PathData | null, PathData | null];
   /**
@@ -366,7 +368,7 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
   const reach = half * Math.max(c.stroke.cap === "square" ? Math.SQRT2 : 1, mitred ? miterReach(path) : 1);
   const bounds = grow(unionRect([pathBounds(path), ...caps.filter((p): p is PathData => p !== null).map(pathBounds)]), reach);
   const paintBox = atLeast(pathBounds(full), 2 * half);
-  return { ends, path, caps, bounds, paintBox, detached: [placed[0] === null, placed[1] === null] };
+  return { ends, path, full, caps, bounds, paintBox, detached: [placed[0] === null, placed[1] === null] };
 }
 
 /** Whether `node` is a connector: a line drawn from its two ends, whose box is worked out from them. */

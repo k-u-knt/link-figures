@@ -21,6 +21,7 @@ import type {
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
 import { fieldError, isCap, isEnd, type ParamSpec } from "../registry/params";
 import { roundPx } from "../view/pointer-math";
+import { connectorNodePptx } from "./connector-node-pptx";
 
 /**
  * What drawing a connector needs: the registries (its route, caps and paint) and the SVG it goes into. Warnings are said
@@ -332,4 +333,6 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
     return svg;
   },
+
+  toPptx: connectorNodePptx,
 };

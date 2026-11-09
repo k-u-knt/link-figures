@@ -14,6 +14,9 @@ export type Rasterise = (svg: string, widthPx: number, heightPx: number, backgro
 /** Draws a page's SVG as `Rasterise` does, and answers with the canvas encoded as a PNG file's bytes. */
 export type RenderPng = (svg: string, widthPx: number, heightPx: number, background: string) => Promise<Uint8Array>;
 
+/** Draws an SVG at `widthPx` × `heightPx` on a clear canvas (its alpha kept), and answers with it as a PNG file's bytes. */
+export type RenderClearPng = (svg: string, widthPx: number, heightPx: number) => Promise<Uint8Array>;
+
 /**
  * What the raster exporters draw with: the browser's canvas, or a fake in tests. TIFF needs the pixels (`rasterise`);
  * PNG takes the canvas's own encoding (`renderPng`), so the pixels are never copied out of the canvas.
@@ -80,8 +83,9 @@ function checkDrawn(context: Context2d, width: number, height: number): void {
  * The page drawn on a canvas, handed to `use`: the SVG loaded from a Blob URL into an `Image`, decoded, and drawn onto a
  * canvas filled with white and then the background. The page's SVG is self-contained (its images are data URIs), so
  * nothing else is fetched. The URL is revoked and the canvas's memory let go (its size set to 0) whatever happens.
+ * A null background leaves the canvas clear, with its alpha.
  */
-async function drawPage<T>(svg: string, width: number, height: number, background: string, use: (canvas: AnyCanvas, context: Context2d) => Promise<T>): Promise<T> {
+async function drawPage<T>(svg: string, width: number, height: number, background: string | null, use: (canvas: AnyCanvas, context: Context2d) => Promise<T>): Promise<T> {
   const url = URL.createObjectURL(new Blob([sizedSvg(svg, width, height)], { type: "image/svg+xml" }));
   let canvas: AnyCanvas | undefined;
   try {
@@ -93,12 +97,14 @@ async function drawPage<T>(svg: string, width: number, height: number, backgroun
       throw new Error(`the page's SVG could not be loaded as an image: ${message(error)}`);
     }
     canvas = makeCanvas(width, height);
-    const context = canvas.getContext("2d", { alpha: false }) as Context2d | null;
+    const context = canvas.getContext("2d", { alpha: background === null }) as Context2d | null;
     if (!context) throw new Error(`the canvas could not be drawn at ${width} × ${height} px`);
-    context.fillStyle = WHITE;
-    context.fillRect(0, 0, width, height);
-    context.fillStyle = background;
-    context.fillRect(0, 0, width, height);
+    if (background !== null) {
+      context.fillStyle = WHITE;
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = background;
+      context.fillRect(0, 0, width, height);
+    }
     context.drawImage(image, 0, 0, width, height);
     return await use(canvas, context);
   } finally {
@@ -131,5 +137,22 @@ export const renderPngOnCanvas: RenderPng = (svg, widthPx, heightPx, background)
     if (!blob) throw new Error(`a ${widthPx} × ${heightPx} px image is too large to encode as a PNG`);
     return new Uint8Array(await blob.arrayBuffer());
   });
+
+/** The PNG of a canvas, encoded straight from it. */
+async function encodePng(canvas: AnyCanvas, widthPx: number, heightPx: number): Promise<Uint8Array> {
+  const blob =
+    "convertToBlob" in canvas
+      ? await canvas.convertToBlob({ type: "image/png" })
+      : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error(`a ${widthPx} × ${heightPx} px image is too large to encode as a PNG`);
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+/**
+ * The browser's clear PNG: the SVG drawn on a canvas left transparent, so what it does not cover stays clear (an item
+ * written as a picture over others). A canvas the browser could not allocate is not caught here, as it is for a page.
+ */
+export const renderClearPngOnCanvas: RenderClearPng = (svg, widthPx, heightPx) =>
+  drawPage(svg, widthPx, heightPx, null, async (canvas) => encodePng(canvas, widthPx, heightPx));
 
 export const browserRaster: RasterBackend = { rasterise: rasteriseSvg, renderPng: renderPngOnCanvas };

@@ -20,6 +20,7 @@ import { VIEW_TYPE } from "./constants";
 import { viewExportTarget } from "./export/export-modal";
 import { exportFigure, exportInBackground, type BackgroundFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
+import { pptxExporter } from "./export/exporters/pptx";
 import { pngExporter, tiffExporter } from "./export/exporters/raster";
 import { svgExporter } from "./export/exporters/svg";
 import { localFontSource } from "./fonts/local-source";
@@ -88,6 +89,7 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.exporters.register(pdfExporter);
     this.registries.exporters.register(pngExporter);
     this.registries.exporters.register(tiffExporter);
+    this.registries.exporters.register(pptxExporter);
     for (const paint of builtinPaintTypes) this.registries.paints.register(paint);
     for (const kind of builtinShapeKinds) this.registries.shapes.register(kind);
     for (const route of builtinRoutes) this.registries.routes.register(route);

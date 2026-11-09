@@ -180,7 +180,7 @@ export function exportOptions(exporter: Exporter, given: Record<string, unknown>
 
 /** What to export, as the modal and `api.export` ask for it. */
 export interface ExportRequest {
-  /** An exporter's id: `svg`, `pdf`, `png`, `tiff`, or one another plugin registered. */
+  /** An exporter's id: `svg`, `pdf`, `png`, `tiff`, `pptx`, or one another plugin registered. */
   format: string;
   /** The page in focus (`current`, the default), every page, or these pages in this order. */
   pages?: "current" | "all" | PageId[];

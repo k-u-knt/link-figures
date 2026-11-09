@@ -15,6 +15,11 @@ export interface CapKind {
   name: string;
   path(size: number, strokeWidthPx: number): PathData;
   inset(size: number, strokeWidthPx: number): number;
+  /**
+   * The DrawingML line end (`a:headEnd`/`a:tailEnd` `type`: `none`, `triangle`, `arrow`, `oval`, `stealth`, `diamond`)
+   * nearest the cap, for an editable PowerPoint export. A kind without it is written as no line end, with a warning.
+   */
+  pptxEnd?: "none" | "triangle" | "arrow" | "oval" | "stealth" | "diamond";
 }
 
 export class CapKindRegistry {

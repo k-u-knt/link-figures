@@ -13,6 +13,7 @@ import type { FieldRoute, ImageState, InspectorContext, NodeRenderer, NodeType, 
 import { strokeFields } from "../registry/paint";
 import { fieldError, paramError, type ParamSpec } from "../registry/params";
 import { displayFields, displayRoute } from "./display-fields";
+import { fileNodePptx } from "./file-node-pptx";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
 
 export { fileFrameSvg, fileNodeSvg, skippedReason };
@@ -472,4 +473,6 @@ export const fileNodeType: NodeType<FileNode> = {
     for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
     return fragment;
   },
+
+  toPptx: fileNodePptx,
 };

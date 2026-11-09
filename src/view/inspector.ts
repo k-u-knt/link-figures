@@ -307,7 +307,8 @@ interface Section {
  * selected node. A node's write runs the `node.update` command for each node it changes, all in one commit labelled
  * `inspect:<key>`, so a run of edits to one field is one undo step, and the inspector makes the same documents as a
  * script that sends the same patches; a write the command refuses is shown as a notice and changes nothing. A page's
- * write runs `page.update` the same way (which cuts a size down to the page limit and says so).
+ * write runs `page.update` the same way (which cuts a size down to the page limit and says so), and a field that its
+ * node type routes to a command of its own (`NodeType.fieldRoute`, a file panel's crop insets) runs that command.
  * Values are shown as the user thinks of them: a node's position and size in millimetres, though it stores pixels.
  */
 export class Inspector {
@@ -438,10 +439,22 @@ export class Inspector {
       fields,
       read: (key) => {
         const node = live();
+        // A field its type writes through a command of its own (a crop inset) is read the type's way too.
+        const route = type?.fieldRoute?.(key);
+        if (route) return node ? route.read(node) : undefined;
         const value = node ? readValue(node, key) : undefined;
         return mm.has(key) && typeof value === "number" ? pxToMm(value) : value;
       },
       write: (key, value) => {
+        const route = type?.fieldRoute?.(key);
+        if (route) {
+          // One call of the type's command per selected node of the type, in one commit, as `node.update` writes are.
+          const routed = this.view.store.doc.nodes
+            .filter((node) => targets.has(node.id) && node.type === first.type)
+            .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value)));
+          if (routed.length > 0) this.runWrite(key, fields, routed);
+          return;
+        }
         const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
         // A locked node is written too: asking for it in the inspector is explicit.
         const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;

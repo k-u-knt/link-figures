@@ -29,19 +29,28 @@ test("the type is registered as 'file', named, with the image icon", () => {
 test("bounds are the node's rectangle", () => expect(fileNodeType.bounds(node())).toEqual({ x: 10, y: 20, width: 100, height: 50 }));
 
 const FRAME_TOGGLE = { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() };
+const CROP = (["left", "top", "right", "bottom"] as const).map((side) => ({ kind: "number", key: `crop.${side}`, label: `Crop ${side} (%)`, min: 0, max: 100, step: 1 }));
 
 test("the inspector offers a Page field for pdf and tiff targets only", () => {
-  const page = [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }, FRAME_TOGGLE];
+  const page = [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }, ...CROP, FRAME_TOGGLE];
   expect(fileNodeType.inspector(node({ file: "plot.pdf" }), noCtx)).toEqual(page);
   expect(fileNodeType.inspector(node({ file: "figs/cells.TIF" }), noCtx)).toEqual(page);
   expect(fileNodeType.inspector(node({ file: "cells.tiff" }), noCtx)).toEqual(page);
-  expect(fileNodeType.inspector(node({ file: "plot.png" }), noCtx)).toEqual([FRAME_TOGGLE]);
-  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2" }), noCtx)).toEqual([FRAME_TOGGLE]);
-  expect(fileNodeType.inspector(node({ file: "v1.2/analysis" }), noCtx)).toEqual([FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), noCtx)).toEqual([...CROP, FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "analysis", subpath: "#Figure 2", show: "content" }), noCtx)).toEqual([FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "v1.2/analysis", show: "content" }), noCtx)).toEqual([FRAME_TOGGLE]);
+});
+
+test("an image panel's crop insets are read from its crop and written by panel.crop, keeping the image", () => {
+  const n = node({ crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
+  const read = (key: string) => fileNodeType.fieldRoute!(key)!.read(n) as number;
+  expect([read("crop.left"), read("crop.top"), read("crop.right"), read("crop.bottom")].map((v) => Math.round(v * 1e6) / 1e6)).toEqual([10, 20, 40, 20]);
+  expect(fileNodeType.fieldRoute!("crop.left")!.call(node({ id: "p-1" }), 25)).toEqual({ id: "panel.crop", args: { id: "p-1", crop: { x: 0.25, y: 0, w: 0.75, h: 1 }, keep: "image" } });
+  expect(fileNodeType.fieldRoute!("frame")).toBeUndefined();
 });
 
 test("the inspector's Frame toggle is off for no frame; with a frame, its paint, width and dashes follow", () => {
-  expect(fileNodeType.inspector(node({ frame: defaultBorder() }), noCtx)).toEqual([FRAME_TOGGLE, ...strokeFields("frame", "Frame")]);
+  expect(fileNodeType.inspector(node({ frame: defaultBorder() }), noCtx)).toEqual([...CROP, FRAME_TOGGLE, ...strokeFields("frame", "Frame")]);
   expect(fileNodeType.checkField?.("frame", null, updateCtx, node({}))).toBeNull();
   expect(fileNodeType.checkField?.("frame", defaultBorder(), updateCtx, node({}))).toBeNull();
 });

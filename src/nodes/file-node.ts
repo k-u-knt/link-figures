@@ -4,11 +4,11 @@ import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
 import { boxAttachable } from "../model/attach";
 import { defaultBorder } from "../model/defaults";
-import { cropPlacement, type Rect } from "../model/geometry";
+import { cropInset, cropPlacement, cropWithInset, type CropSide, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import type { FieldRoute, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { strokeFields } from "../registry/paint";
 import { fieldError, paramError, type ParamSpec } from "../registry/params";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
@@ -112,6 +112,12 @@ class FileNodeRenderer implements NodeRenderer {
     if (this.natural) return Promise.resolve(this.measured(this.natural));
     if (this.bodyKind === "content" || this.bodyKind === "missing") return Promise.reject(new Error("The node shows no image"));
     return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
+  }
+
+  /** The size of the image shown if it has loaded with one; null while it has not (and for an image without a size). */
+  naturalSizeNow(): Size | null {
+    const n = this.natural;
+    return n && n.width > 0 && n.height > 0 ? { ...n } : null;
   }
 
   private applyBox(): void {
@@ -328,6 +334,31 @@ function fileFieldError(key: string, value: unknown): string | null {
   return paramError(key, { type: "object", properties: RANGE }, value) === null ? null : '"range" must be "auto" or { min, max } (finite numbers)';
 }
 
+/** The crop's inset fields, by key: each is how far in (in %) that side of the image the crop starts. */
+const CROP_SIDES: Record<string, CropSide> = { "crop.left": "left", "crop.top": "top", "crop.right": "right", "crop.bottom": "bottom" };
+
+/** An inspector field for the inset of one side of the crop, 0–100 %. */
+const cropField = (key: string): Field => {
+  const side = CROP_SIDES[key];
+  return { kind: "number", key, label: `Crop ${side} (%)`, min: 0, max: 100, step: 1 };
+};
+
+/**
+ * A crop inset field reads the inset from the crop and is written by `panel.crop` with keep "image": the image stays
+ * where it is and the box follows the side that changed.
+ */
+function cropRoute(key: string): FieldRoute<FileNode> | undefined {
+  const side = CROP_SIDES[key];
+  if (!side) return undefined;
+  return {
+    read: (node) => cropInset(node.crop, side) * 100,
+    call: (node, value) => ({
+      id: "panel.crop",
+      args: { id: node.id, crop: cropWithInset(node.crop, side, Number(value) / 100), keep: "image" },
+    }),
+  };
+}
+
 /** A note section or image linked from the vault, drawn live from its source. */
 export const fileNodeType: NodeType<FileNode> = {
   type: "file",
@@ -343,13 +374,15 @@ export const fileNodeType: NodeType<FileNode> = {
   },
 
   /**
-   * The page of a paged file, then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
+   * The page of a paged file, the crop insets of an image, then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
    * frame, its paint, width and dashes.
    */
   inspector(node: FileNode): Field[] {
     const page: Field[] = PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
     return [
       ...page,
+      // An image panel's crop, as the inset of each side; a panel that shows note content has nothing to crop.
+      ...(node.show === "image" ? Object.keys(CROP_SIDES).map(cropField) : []),
       { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() },
       ...(node.frame ? strokeFields("frame", "Frame") : []),
     ];
@@ -357,6 +390,8 @@ export const fileNodeType: NodeType<FileNode> = {
 
   /** Its box, rotated: anchors `n e s w`. */
   attachable: boxAttachable,
+
+  fieldRoute: cropRoute,
 
   /** An adjustment without `enabled` is on, and one without `params` has none, as a file's are read. */
   completeUpdate(_before: FileNode, after: FileNode): FileNode {

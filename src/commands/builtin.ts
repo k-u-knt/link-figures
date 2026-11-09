@@ -25,6 +25,8 @@ export interface EditorView extends FigureViewLike {
   openLink(linktext: string, newLeaf?: boolean): void;
   /** The natural size of the image a node shows, once it has loaded; rejects for a node that shows no image. */
   imageSize(id: NodeId): Promise<{ width: number; height: number }>;
+  /** The natural size of the image a node shows if it has loaded, else null (a command that cannot wait asks this). */
+  imageSizeNow(id: NodeId): { width: number; height: number } | null;
   /** Tells a node what a double-click on it tells it (a text node starts editing). */
   activateNode(id: NodeId): void;
   /** The largest width or height a page may have, in millimetres (the Maximum page size setting). */
@@ -468,18 +470,21 @@ function builtinCommands(): Command[] {
  * Shift+Cmd+Z and Delete, and the same keys on a palette command would act twice.
  */
 export function registerBuiltinCommands(plugin: LinkFiguresPlugin): void {
-  for (const command of builtinCommands()) {
-    plugin.registries.commands.register(command);
-    plugin.addCommand({
-      id: `lf-${command.id}`,
-      // Obsidian puts the plugin's name in front of this in the palette ("Link Figures: Fit page"), and its id in front of the id.
-      name: command.name,
-      checkCallback: (checking) => {
-        const view = plugin.activeFigureView();
-        if (!view || view.readOnly || !command.applies(view.commandContext())) return false;
-        if (!checking) view.runCommand(command);
-        return true;
-      },
-    });
-  }
+  for (const command of builtinCommands()) registerPaletteCommand(plugin, command);
+}
+
+/** Registers `command` and puts it in the palette as `lf-<id>`, offered while it applies to the active figure view. */
+export function registerPaletteCommand(plugin: LinkFiguresPlugin, command: Command): void {
+  plugin.registries.commands.register(command);
+  plugin.addCommand({
+    id: `lf-${command.id}`,
+    // Obsidian puts the plugin's name in front of this in the palette ("Link Figures: Fit page"), and its id in front of the id.
+    name: command.name,
+    checkCallback: (checking) => {
+      const view = plugin.activeFigureView();
+      if (!view || view.readOnly || !command.applies(view.commandContext())) return false;
+      if (!checking) view.runCommand(command);
+      return true;
+    },
+  });
 }

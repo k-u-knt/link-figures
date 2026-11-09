@@ -34,6 +34,7 @@ class FakeView implements EditorView {
   zoomTo(z: number): void { this.calls.push(`zoom:${z}`); }
   requestExport(): void { this.calls.push("export"); }
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
+  imageSizeNow = (id: NodeId) => this.sizes[id] ?? null;
   imageSize = (id: NodeId) => (this.sizes[id] ? Promise.resolve(this.sizes[id]) : Promise.reject(new Error("no image")));
   armedTool: Command | null = null;
   /** What the real view does: arming the armed tool again disarms it. */

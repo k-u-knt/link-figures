@@ -165,6 +165,19 @@ export interface NodeType<N extends Node = Node> {
    * to know whether a node contains others asks this hook (`isGroup` in model/groups.ts), never the node's type.
    */
   members?(node: N, doc: Document): NodeId[];
+  /**
+   * For an inspector field that is not stored at its key but written by a command of its own (a file panel's crop
+   * insets, which run `panel.crop`): how the inspector reads the field's value from a node, and the call that writes a
+   * value to one. Undefined for a key that is a path into the node, which `node.update` writes.
+   */
+  fieldRoute?(key: string): FieldRoute<N> | undefined;
+}
+
+/** How the inspector reads and writes a field that a command writes (see `NodeType.fieldRoute`). */
+export interface FieldRoute<N extends Node = Node> {
+  read(node: N): unknown;
+  /** The command call (its id and JSON arguments) that sets the field of `node` to `value`. */
+  call(node: N, value: unknown): { id: string; args: Record<string, unknown> };
 }
 
 /** What a node type's `pageAfterMove` may depend on besides the node. */

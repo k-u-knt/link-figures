@@ -10,6 +10,8 @@ import type { PageLayer } from "./page-layer";
 /** A renderer that shows an image can say how big that image is by itself. */
 interface MeasuringRenderer extends NodeRenderer {
   naturalSize(): Promise<{ width: number; height: number }>;
+  /** The image's size if it has loaded with one, else null. */
+  naturalSizeNow(): { width: number; height: number } | null;
 }
 
 function isMeasuring(renderer: NodeRenderer): renderer is MeasuringRenderer {
@@ -140,6 +142,12 @@ export class NodeHost {
     const renderer = this.entries.get(id)?.renderer;
     if (!renderer || !isMeasuring(renderer)) return Promise.reject(new Error(`Link Figures: node ${id} shows no image`));
     return renderer.naturalSize();
+  }
+
+  /** The natural size of the image a node shows if it has loaded with one; null otherwise (not loaded, no image, not drawn). */
+  naturalSizeNow(id: NodeId): { width: number; height: number } | null {
+    const renderer = this.entries.get(id)?.renderer;
+    return renderer && isMeasuring(renderer) ? renderer.naturalSizeNow() : null;
   }
 
   /**

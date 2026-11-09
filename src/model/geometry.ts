@@ -1,5 +1,5 @@
 import { MM_TO_PX, PAGE_GAP_MM } from "../constants";
-import type { Crop, Document, Node, Page, PageId } from "./types";
+import type { Crop, Document, FileNode, Node, Page, PageId } from "./types";
 
 export interface Pt {
   x: number;
@@ -120,6 +120,66 @@ export function cropPlacement(
   // `contain` scales it down until it is inside the box, so all of it shows. Saying so avoids rounding noise from cutting.
   const region: Rect = fit === "cover" ? { x: 0, y: 0, width: box.width, height: box.height } : { ...fitted };
   return { image, fitted, region };
+}
+
+/** The least share of the image's width or height a crop keeps. */
+export const MIN_CROP = 0.01;
+
+/** `crop` kept within the image: `x` and `y` within 0 to 1 − `MIN_CROP`, `w` and `h` at least `MIN_CROP` and not past the far edge. */
+export function clampCrop(crop: Crop): Crop {
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const x = clamp(crop.x, 0, 1 - MIN_CROP);
+  const y = clamp(crop.y, 0, 1 - MIN_CROP);
+  return { x, y, w: clamp(crop.w, MIN_CROP, 1 - x), h: clamp(crop.h, MIN_CROP, 1 - y) };
+}
+
+/** The side of a crop that an inspector inset field names. */
+export type CropSide = "left" | "top" | "right" | "bottom";
+
+/** How far in from `side` of the image `crop` starts, as a share (0–1) of the image's width or height. */
+export function cropInset(crop: Crop | null, side: CropSide): number {
+  const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
+  if (side === "left") return c.x;
+  if (side === "top") return c.y;
+  if (side === "right") return 1 - c.x - c.w;
+  return 1 - c.y - c.h;
+}
+
+/** `crop` with the inset of `side` set to `inset` (a share, 0–1) and the other three sides where they were. */
+export function cropWithInset(crop: Crop | null, side: CropSide, inset: number): Crop {
+  const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
+  if (side === "left") return { ...c, x: inset, w: c.x + c.w - inset };
+  if (side === "top") return { ...c, y: inset, h: c.y + c.h - inset };
+  if (side === "right") return { ...c, w: 1 - c.x - inset };
+  return { ...c, h: 1 - c.y - inset };
+}
+
+/**
+ * The box (and crop) that shows `crop` of `node`'s image (the whole image when null, clamped by `clampCrop` otherwise)
+ * with the image where it is on the page now and at the same scale: the box becomes the part of the image's page rect
+ * that the crop selects. `natural` is the image's natural size. The node's fit is kept: with the crop's aspect equal to
+ * the box's, cover and contain show the same. A rotated node keeps its image too: the box is worked out in the node's
+ * unrotated frame, and its centre is turned about the old centre by the rotation.
+ */
+export function cropKeepingImage(
+  node: FileNode,
+  natural: { width: number; height: number },
+  crop: Crop | null,
+): { x: number; y: number; width: number; height: number; crop: Crop | null } {
+  const next = crop ? clampCrop(crop) : null;
+  const { image } = cropPlacement(node, natural, node.crop, node.fit);
+  const c = next ?? { x: 0, y: 0, w: 1, h: 1 };
+  const width = c.w * image.width;
+  const height = c.h * image.height;
+  // The new box's centre, unrotated, relative to the old box's centre; then turned by the node's rotation.
+  const dx = image.x + c.x * image.width + width / 2 - node.width / 2;
+  const dy = image.y + c.y * image.height + height / 2 - node.height / 2;
+  const a = (node.rotation * Math.PI) / 180;
+  const cx = node.x + node.width / 2 + dx * Math.cos(a) - dy * Math.sin(a);
+  const cy = node.y + node.height / 2 + dx * Math.sin(a) + dy * Math.cos(a);
+  // To hundredths of a pixel, as `roundPx` (view/pointer-math, which imports this module) rounds a drag.
+  const round = (v: number) => Math.round(v * 100) / 100;
+  return { x: round(cx - width / 2), y: round(cy - height / 2), width: round(width), height: round(height), crop: next };
 }
 
 /**

@@ -469,6 +469,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return this.nodeHost.naturalSize(id);
   }
 
+  /** The natural size of the image a node shows if it has loaded; null while it has not, and for a node that shows none. */
+  imageSizeNow(id: NodeId): { width: number; height: number } | null {
+    return this.nodeHost.naturalSizeNow(id);
+  }
+
   /** The Maximum page size setting, in millimetres. */
   pageLimitMm(): number {
     return this.plugin.settings?.maxPageSizeMm ?? DEFAULT_PAGE_LIMIT_MM;

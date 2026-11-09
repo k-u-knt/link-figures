@@ -2,7 +2,8 @@ import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf 
 import { createApi, type LinkFiguresApi } from "./api";
 import { arrangeCommands } from "./commands/arrange";
 import { builtinSnapSources } from "./model/snap";
-import { registerBuiltinCommands } from "./commands/builtin";
+import { registerBuiltinCommands, registerPaletteCommand } from "./commands/builtin";
+import { cropCommands } from "./commands/crop";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
 import { groupCommands } from "./commands/groups";
@@ -72,6 +73,11 @@ export default class LinkFiguresPlugin extends Plugin {
     for (const command of drawingCommands()) this.registries.commands.register(command);
     for (const command of groupCommands()) this.registries.commands.register(command);
     for (const command of arrangeCommands()) this.registries.commands.register(command);
+    // panel.crop takes arguments (the inspector and crop mode give them); Reset crop is also in the palette.
+    for (const command of cropCommands()) {
+      if (command.hidden) this.registries.commands.register(command);
+      else registerPaletteCommand(this, command);
+    }
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     this.registerEvent(

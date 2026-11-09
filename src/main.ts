@@ -18,7 +18,7 @@ import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
 import { viewExportTarget } from "./export/export-modal";
-import { exportFigure, exportInBackground, type BackgroundFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
+import { closeBackgroundTab, exportFigure, exportInBackground, type BackgroundFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
 import { pptxExporter } from "./export/exporters/pptx";
 import { pngExporter, tiffExporter } from "./export/exporters/raster";
@@ -305,13 +305,8 @@ export default class LinkFiguresPlugin extends Plugin {
       void view.nodeHost.resolveStale();
       // Closing saves what the view would write (nothing, for a figure it only read): done first, and waited on, so the
       // next call on the figure, which the API queues after this export, does not race that write.
-      const close = async () => {
-        try {
-          await view.save();
-        } finally {
-          leaf.detach();
-        }
-      };
+      const close = () =>
+        closeBackgroundTab({ save: () => view.save(), detach: () => leaf.detach(), isActive: () => this.app.workspace.getActiveViewOfType(LinkFiguresView) === view });
       return { target: viewExportTarget(view, view.file), drawn: () => view.nodeHost.drawn(), close };
     } catch (error) {
       leaf.detach();

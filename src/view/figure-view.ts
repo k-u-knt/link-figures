@@ -112,6 +112,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** The file whose text the last `setViewData` took up (or could not read): while `file` is another, the view is loading. */
   private loadedFile: unknown = null;
+  /** The view has closed: it is never loading again (`isLoading`), though Obsidian may not have cleared its file yet. */
+  private closed = false;
   /** What `whenLoaded` waits on: resolved when `setViewData` has run, or the view closes. */
   private loadWaiters: (() => void)[] = [];
 
@@ -183,7 +185,16 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    * waits for it (`whenLoaded`) before it decides between the view and the file.
    */
   isLoading(): boolean {
-    return this.file !== null && this.loadedFile !== this.file;
+    return !this.closed && this.file !== null && this.loadedFile !== this.file;
+  }
+
+  /** As Obsidian's (it reads the file and calls `setViewData`), and the loading ends whatever happens, a failed read too. */
+  async onLoadFile(file: TFile): Promise<void> {
+    try {
+      await super.onLoadFile(file);
+    } finally {
+      this.settleLoad();
+    }
   }
 
   /** Resolves once the view is not loading (see `isLoading`): its file's text set, or the view closed. */
@@ -208,7 +219,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.fitFrame = null;
     if (this.chromeFrame !== null) window.cancelAnimationFrame(this.chromeFrame);
     this.chromeFrame = null;
-    this.loadedFile = null;
+    this.closed = true;
     const waiters = this.loadWaiters;
     this.loadWaiters = [];
     for (const resolve of waiters) resolve();
@@ -224,6 +235,16 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   setViewData(data: string, clear: boolean): void {
+    // Whatever happens in it, a throw included, the loading ends: an API call waiting for it goes on.
+    try {
+      this.takeUpViewData(data, clear);
+    } finally {
+      this.settleLoad();
+    }
+  }
+
+  /** `setViewData`'s work: loads `data`, or takes it up as a reload of the same file. */
+  private takeUpViewData(data: string, clear: boolean): void {
     if (clear) this.clear();
     let loaded: ReturnType<typeof loadDocument>;
     try {
@@ -233,15 +254,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
       this.showError(describeLoadError(error), data);
-      this.settleLoad();
       return;
     }
     // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
     const reload = !clear && this.loaded && !this.readOnly;
-    if (reload && this.adoptReload(data, loaded)) {
-      this.settleLoad();
-      return;
-    }
+    if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
     // Said once per type as the figure opens, not again each time the file is read back.
@@ -258,7 +275,6 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
     this.loaded = true;
     this.scheduleFit();
-    this.settleLoad();
   }
 
   /**

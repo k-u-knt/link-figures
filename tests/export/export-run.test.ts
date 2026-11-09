@@ -10,7 +10,7 @@ vi.mock("obsidian", async () => {
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile, Modal: class {}, Notice: class {}, Setting: class {} };
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
-const { exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS, DRAWN_WAIT_MS } = await import("../../src/export/export-run");
+const { closeBackgroundTab, exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS, DRAWN_WAIT_MS } = await import("../../src/export/export-run");
 type FigureExportTarget = import("../../src/export/export-run").FigureExportTarget;
 
 const FIELDS: Field[] = [
@@ -313,3 +313,39 @@ describe("exportInBackground", () => {
     expect(b.host.read).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("closeBackgroundTab", () => {
+  const tab = (over: { save?: () => Promise<void>; active?: boolean } = {}) => {
+    const events: string[] = [];
+    return {
+      events,
+      tab: {
+        save: over.save ?? (async () => void events.push("save")),
+        detach: () => void events.push("detach"),
+        isActive: () => over.active ?? false,
+      },
+    };
+  };
+
+  test("saves, then closes the tab", async () => {
+    const t = tab();
+    await closeBackgroundTab(t.tab);
+    expect(t.events).toEqual(["save", "detach"]);
+  });
+
+  test("a tab the user has switched to (now the active one) is left open", async () => {
+    const t = tab({ active: true });
+    await closeBackgroundTab(t.tab);
+    expect(t.events).toEqual(["save"]);
+  });
+
+  test("a save that fails is logged, the tab still closes, and the export does not fail for it", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const t = tab({ save: async () => { throw new Error("disk full"); } });
+    await expect(closeBackgroundTab(t.tab)).resolves.toBeUndefined();
+    expect(t.events).toEqual(["detach"]);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("could not save"), expect.any(Error));
+    error.mockRestore();
+  });
+});
+

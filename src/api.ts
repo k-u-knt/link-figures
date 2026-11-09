@@ -127,6 +127,21 @@ export interface ApiHost {
   pageLimitMm?(): number;
 }
 
+/** How long an API call waits at most for a view of its figure that is still loading (see `ApiHost.loadingFigure`). */
+export const LOADING_WAIT_MS = 5000;
+
+/** Whether `promise` settles within `ms`. */
+function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    promise.then(done, done);
+  });
+}
+
 export function createApi(host: ApiHost): LinkFiguresApi {
   const { app, registries, files } = host;
   /**
@@ -140,7 +155,12 @@ export function createApi(host: ApiHost): LinkFiguresApi {
     const start = async () => {
       // A view still loading decides nothing yet: the call waits for it, so it does not go to the file under the view's
       // feet, and then runs in it. Another may have started loading meanwhile, so this is asked again until none is.
-      for (let loading = host.loadingFigure?.(path); loading; loading = host.loadingFigure?.(path)) await loading;
+      // The wait is bounded (`LOADING_WAIT_MS`): a view that never finishes loading holds no call up for good.
+      const deadline = Date.now() + LOADING_WAIT_MS;
+      for (let loading = host.loadingFigure?.(path); loading; loading = host.loadingFigure?.(path)) {
+        const left = deadline - Date.now();
+        if (left <= 0 || !(await within(loading, left))) break;
+      }
       return work(path, host.openFigure(path));
     };
     const next = (queues.get(path) ?? Promise.resolve()).then(start, start);

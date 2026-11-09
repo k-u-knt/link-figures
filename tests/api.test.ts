@@ -1,4 +1,4 @@
-import { createApi, type OpenFigure } from "../src/api";
+import { createApi, LOADING_WAIT_MS, type OpenFigure } from "../src/api";
 import { registerBuiltinCommands } from "../src/commands/builtin";
 import { loadDocument } from "../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../src/format/serialize";
@@ -243,6 +243,27 @@ describe("headless (the figure is not open)", () => {
     await second;
     expect(writes).toBe(1);
     expect(view!.store.doc.nodes.map((n) => n.id)).toEqual(["c"]);
+  });
+
+  test("a view that never finishes loading holds a call up for LOADING_WAIT_MS at most; then the call picks as it would", async () => {
+    vi.useFakeTimers();
+    try {
+      const registries = createRegistries();
+      registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
+      let text = serializeFigureFile(figure(), emptyParsed());
+      const files = { read: async () => text, process: async (_p: string, edit: (t: string) => string) => void (text = edit(text)) };
+      const stuck = new Promise<void>(() => {});
+      const api = createApi({ app: {} as never, registries, files, normalizePath, openFigure: () => null, loadingFigure: () => stuck });
+      let done = false;
+      const run = api.run(PATH, "delete", { ids: ["a"] }).then(() => void (done = true));
+      await vi.advanceTimersByTimeAsync(LOADING_WAIT_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+      expect(loadDocument(text).doc.nodes.map((n) => n.id)).toEqual(["b", "c"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("paths that differ only in their slashes are one figure, and share one queue", async () => {

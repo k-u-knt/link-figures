@@ -23,6 +23,11 @@ vi.mock("obsidian", () => {
     registerDomEvent(): void {}
     register(): void {}
     requestSave = vi.fn();
+    /** As Obsidian's: reads the file and hands its text to `setViewData`. */
+    async onLoadFile(file: unknown): Promise<void> {
+      const text = await (this.app as { vault: { read(f: unknown): Promise<string> } }).vault.read(file);
+      (this as unknown as { setViewData(t: string, c: boolean): void }).setViewData(text, true);
+    }
   }
   return {
     TextFileView,
@@ -184,6 +189,60 @@ describe("loading (what an API call waits for before it picks the view or the fi
     const closing = t.view.whenLoaded();
     await t.view.onClose();
     await closing;
+    // Closed, it is never loading again, though Obsidian may not have cleared its file yet.
+    expect(t.view.isLoading()).toBe(false);
+    await t.view.whenLoaded();
+  });
+
+  test("an API call waiting on a view that closes while loading goes on, to the file", async () => {
+    const { createApi } = await import("../../src/api");
+    const t = setup();
+    t.view.file = { path: FIGURE_PATH } as never;
+    let text = t.text0;
+    const writes: string[] = [];
+    const { createRegistries } = await import("../../src/registry");
+    const registries = createRegistries();
+    registries.commands.register({ id: "x.touch", name: "Touch", group: "edit", params: {}, applies: () => true, run: (ctx: CommandContext) => ctx.store.commit("t", (d) => void (d.nodes[0].x = 7)) } as Command);
+    const api = createApi({
+      app: {} as never,
+      registries: registries as never,
+      files: { read: async () => text, process: async (_p, edit) => void writes.push((text = edit(text))) },
+      normalizePath: (p) => p,
+      openFigure: () => null,
+      loadingFigure: () => (t.view.isLoading() ? t.view.whenLoaded() : null),
+    });
+    let done = false;
+    const run = api.run(FIGURE_PATH, "x.touch").then(() => void (done = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toBe(false);
+    await t.view.onClose();
+    await run;
+    expect(writes).toHaveLength(1);
+  });
+
+  test("a load that throws while it draws (setDocument) still ends the loading", async () => {
+    const t = setup();
+    t.view.file = { path: FIGURE_PATH } as never;
+    const waited = t.view.whenLoaded();
+    (t.view as unknown as { setDocument: () => void }).setDocument = () => {
+      throw new Error("draw failed");
+    };
+    expect(() => t.view.setViewData(t.text0, true)).toThrow("draw failed");
+    await waited;
+    expect(t.view.isLoading()).toBe(false);
+  });
+
+  test("a file whose read fails ends the loading (onLoadFile rejects)", async () => {
+    const t = setup();
+    const file = { path: FIGURE_PATH };
+    t.view.file = file as never;
+    (t.view.app.vault as unknown as { read: unknown }).read = vi.fn(async () => {
+      throw new Error("EIO");
+    });
+    const waited = t.view.whenLoaded();
+    await expect(t.view.onLoadFile(file as never)).rejects.toThrow("EIO");
+    await waited;
+    expect(t.view.isLoading()).toBe(false);
   });
 });
 

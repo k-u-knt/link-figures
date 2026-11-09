@@ -301,6 +301,29 @@ export interface BackgroundFigure {
   close(): void | Promise<void>;
 }
 
+/** A background tab as `closeBackgroundTab` closes it. */
+export interface BackgroundTab {
+  /** Writes what the view would save (nothing, for a figure it only read). */
+  save(): Promise<void>;
+  detach(): void;
+  /** Whether it is the active tab: the user has switched to it meanwhile. */
+  isActive(): boolean;
+}
+
+/**
+ * Closes a tab `exportInBackground` opened: it saves first, and is waited on, so a call queued after the export cannot
+ * race that write. A save that fails is logged and does not fail the export. A tab the user has switched to meanwhile
+ * is theirs now, and is left open.
+ */
+export async function closeBackgroundTab(tab: BackgroundTab): Promise<void> {
+  try {
+    await tab.save();
+  } catch (error) {
+    console.error("Link Figures: could not save the figure exported in the background", error);
+  }
+  if (!tab.isActive()) tab.detach();
+}
+
 /** What `exportInBackground` needs of the plugin, so that it can be tested without Obsidian. */
 export interface BackgroundExportHost {
   registries: Registries;

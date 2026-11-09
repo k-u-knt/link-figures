@@ -368,3 +368,8 @@ export function resolveConnector(doc: Document, c: ConnectorNode, registries: Re
   const paintBox = atLeast(pathBounds(full), 2 * half);
   return { ends, path, caps, bounds, paintBox, detached: [placed[0] === null, placed[1] === null] };
 }
+
+/** Whether either end of `node` is attached to an item (such a connector follows its items; it cannot move as a whole). */
+export function hasAttachedEnd(node: ConnectorNode): boolean {
+  return node.ends.some((end) => end.kind === "attached");
+}

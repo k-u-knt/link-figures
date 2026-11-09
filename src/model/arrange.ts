@@ -1,9 +1,8 @@
-import { resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
 import { roundPx } from "../view/pointer-math";
 import { mmToPx, pageSizePx, unionRect, type Pt, type Rect } from "./geometry";
 import { childrenOf, isGroup } from "./groups";
-import type { ConnectorNode, Document, NodeId, Page } from "./types";
+import type { Document, NodeId, Page } from "./types";
 
 /**
  * Align and distribute: where each unit (a node, or a group with all in it) moves so that its visual bounds meet a
@@ -20,7 +19,8 @@ const roundRect = (r: Rect): Rect => ({ x: roundPx(r.x), y: roundPx(r.y), width:
 /**
  * Node `id`'s bounds as drawn, in page px: its box turned by its rotation about the box centre, then axis-aligned. A
  * container (a type with `members`) is the union of its members' visual bounds, at any depth (its own box when it has
- * none); a connector is the area it draws (`resolveConnector(…).bounds`). A missing node gives a zero rect.
+ * none). A connector needs no case of its own: the normaliser stores the area it draws as its box, with rotation 0, so
+ * the box path below gives that area. A missing node gives a zero rect.
  */
 export function visualBounds(doc: Document, id: NodeId, registries: Registries): Rect {
   return roundRect(rawBounds(doc, id, registries, new Set()));
@@ -34,7 +34,6 @@ function rawBounds(doc: Document, id: NodeId, registries: Registries, seen: Set<
     const members = childrenOf(doc, id).filter((m) => !seen.has(m));
     if (members.length > 0) return unionRect(members.map((m) => rawBounds(doc, m, registries, seen)));
   }
-  if (node.type === "connector") return resolveConnector(doc, node as ConnectorNode, registries).bounds;
   const turn = (node.rotation * Math.PI) / 180;
   const cos = Math.abs(Math.cos(turn));
   const sin = Math.abs(Math.sin(turn));

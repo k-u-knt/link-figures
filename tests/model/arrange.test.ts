@@ -2,6 +2,7 @@ import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
 import { alignOffsets, distributeOffsets, referenceRect, visualBounds } from "../../src/model/arrange";
 import { connectorNodeDefaults, createDocument, createPage, groupNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
+import { createFigureStore } from "../../src/model/normalise";
 import { mmToPx, pageSizePx } from "../../src/model/geometry";
 import type { ConnectorNode, Document, End, Node } from "../../src/model/types";
 import { connectorNodeType } from "../../src/nodes/connector-node";
@@ -54,8 +55,10 @@ describe("visualBounds", () => {
       { kind: "free", x: 10, y: 10 },
       { kind: "free", x: 60, y: 40 },
     ];
-    const c = connectorNodeDefaults(page, { id: "c", ends }, []);
-    const doc = make([c]);
+    // Through the store: the normaliser keeps a connector's box at its drawn bounds (rotation 0), which is all visualBounds reads.
+    const doc = createFigureStore(make([connectorNodeDefaults(page, { id: "c", ends }, [])]), r).doc;
+    const c = doc.nodes[0];
+    expect(c.rotation).toBe(0);
     const drawn = resolveConnector(doc, c as ConnectorNode, r).bounds;
     const got = visualBounds(doc, "c", r);
     for (const key of ["x", "y", "width", "height"] as const) expect(got[key]).toBeCloseTo(drawn[key], 2);

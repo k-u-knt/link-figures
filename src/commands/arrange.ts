@@ -1,7 +1,8 @@
+import { hasAttachedEnd } from "../connectors/geometry";
 import { alignOffsets, distributeOffsets, referenceRect, type AlignEdge, type AlignTo, type Axis, type DistributeBy } from "../model/arrange";
 import type { Pt } from "../model/geometry";
 import { commonParent, isLocked, unitsOf } from "../model/groups";
-import type { Document, NodeId, Page } from "../model/types";
+import type { ConnectorNode, Document, NodeId, Page } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import { targetIds } from "./builtin";
 import { translateUnits } from "./drawing";
@@ -18,9 +19,16 @@ const EDGES: AlignEdge[] = ["left", "hcenter", "right", "top", "vcenter", "botto
 type AlignArgs = { ids?: unknown[]; edge: AlignEdge; to?: AlignTo };
 type DistributeArgs = { ids?: unknown[]; axis: Axis; by: DistributeBy };
 
-/** The units named nodes act as, unlocked ones only (see the module comment). */
+/**
+ * The units named nodes act as, unlocked ones only (see the module comment). A connector with an attached end is left
+ * out: it follows its items and cannot move as a whole; one with two free ends is a unit.
+ */
 function unitsFor(doc: Document, ids: readonly NodeId[]): NodeId[] {
-  return unitsOf(doc, ids, commonParent(doc, ids)).filter((id) => !isLocked(doc, id));
+  const follows = (id: NodeId) => {
+    const node = doc.nodes.find((n) => n.id === id);
+    return node?.type === "connector" && hasAttachedEnd(node as ConnectorNode);
+  };
+  return unitsOf(doc, ids, commonParent(doc, ids)).filter((id) => !isLocked(doc, id) && !follows(id));
 }
 
 /** The units of the selection, for a toolbar button's `applies`; none headless. */

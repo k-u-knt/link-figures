@@ -102,6 +102,23 @@ describe("align", () => {
     // The connector's box was re-resolved in the same commit.
     expect(at(store.doc, "c").x + at(store.doc, "c").width).toBeCloseTo(vb("c").x + vb("c").width, 1);
   });
+  test("a connector with an attached end is not a unit; one with two free ends is", async () => {
+    const { store, call, vb } = setup([
+      box("a", 0, 0),
+      box("b", 100, 40),
+      line("c", [{ kind: "attached", node: "a", snap: "center" }, { kind: "free", x: 50, y: 100 }]),
+      line("f", [{ kind: "free", x: 10, y: 200 }, { kind: "free", x: 60, y: 230 }]),
+    ]);
+    const before = vb("f").x;
+    await call("align", { ids: ["a", "b", "c"], edge: "right" });
+    expect(at(store.doc, "a").x).toBe(100);
+    expect(at(store.doc, "b").x).toBe(100);
+    expect(vb("c").x + vb("c").width).toBeGreaterThan(100);
+    expect((at(store.doc, "c") as ConnectorNode).ends[1]).toEqual({ kind: "free", x: 50, y: 100 });
+    await call("align", { ids: ["a", "b", "f"], edge: "right" });
+    expect(vb("f").x).not.toBe(before);
+    expect(vb("f").x + vb("f").width).toBeCloseTo(110, 0);
+  });
   test("one undo step", async () => {
     const { store, call } = setup([box("a", 30, 0), box("b", 50, 20)]);
     const before = store.doc;

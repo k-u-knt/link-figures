@@ -38,7 +38,7 @@ import { CommandError } from "./registry/command";
 import { builtinShapeKinds } from "./shapes/builtin";
 import { DEFAULT_SETTINGS, LinkFiguresSettingTab, normaliseSettings, type LinkFiguresSettings } from "./settings/settings";
 import { LinkFiguresView } from "./view/figure-view";
-import { createFigureFile } from "./view/new-figure";
+import { createFigureFile, writeNewFigureFile } from "./view/new-figure";
 import { hasFigureMarker, installOpenHook, showInFigureView } from "./view/open-hook";
 import { installViewStateRewrite } from "./view/view-state-rewrite";
 
@@ -70,6 +70,9 @@ export default class LinkFiguresPlugin extends Plugin {
     openFigure: (path) => this.openFigureView(path),
     noteBlockId: (path, line) => this.blockIds.blockId(path, line),
     exportFigure: (path, request) => this.exportFigureAt(path, request),
+    createFigureFile: (path, text) => writeNewFigureFile(this.app, path, text),
+    defaultPreset: () => this.settings.defaultPreset,
+    pageLimitMm: () => this.settings.maxPageSizeMm,
   });
   /** The Markdown view a drag started in (its editor), for a drop of text on a figure to match against: see `EditorDragTracker`. */
   readonly editorDrag = new EditorDragTracker(() => this.app.workspace.getLeavesOfType("markdown"));

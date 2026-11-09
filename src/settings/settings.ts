@@ -2,7 +2,7 @@ import { PluginSettingTab, Setting, type App } from "obsidian";
 import { DEFAULT_PAGE_LIMIT_MM, MAX_DPI, MAX_PAGE_LIMIT_MM, MIN_DPI, MIN_PAGE_LIMIT_MM, normalisePageLimit } from "../constants";
 import type LinkFiguresPlugin from "../main";
 import { blockIdPrefix } from "../links/block-id";
-import { PAGE_PRESETS, getPreset } from "../model/presets";
+import { DEFAULT_PRESET_ID, PAGE_PRESETS, getPreset } from "../model/presets";
 
 /**
  * What a drop from a note's editor links to: the block, by its id (`"block-id"`, written into the note when it has
@@ -33,7 +33,7 @@ export interface LinkFiguresSettings {
 export const DEFAULT_SETTINGS: LinkFiguresSettings = {
   attachmentFolder: "",
   openAsFigure: true,
-  defaultPreset: "nature-double",
+  defaultPreset: DEFAULT_PRESET_ID,
   exportFolder: "",
   exportDpi: 300,
   maxPageSizeMm: DEFAULT_PAGE_LIMIT_MM,

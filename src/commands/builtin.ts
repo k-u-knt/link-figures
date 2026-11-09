@@ -1,5 +1,5 @@
 import { resolveConnector } from "../connectors/geometry";
-import { MIN_NODE_PX } from "../constants";
+import { DEFAULT_PAGE_LIMIT_MM, MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
@@ -56,6 +56,14 @@ export function editor(ctx: CommandContext): EditorView {
   return ctx.view as EditorView;
 }
 
+/**
+ * The largest width or height a page a command writes may have, in mm: the Maximum page size setting, from the view,
+ * else from the headless context (`CommandContext.pageLimitMm`), else its default.
+ */
+export function pageLimitMm(ctx: CommandContext): number {
+  return ctx.view ? editor(ctx).pageLimitMm() : (ctx.pageLimitMm ?? DEFAULT_PAGE_LIMIT_MM);
+}
+
 /** Does `fn`, a side effect on the view, once the edit is in: at once, or within a batch after the batch commits. */
 export function whenCommitted(ctx: CommandContext, fn: () => void): void {
   if (ctx.afterCommit) ctx.afterCommit(fn);
@@ -96,6 +104,8 @@ export function targetPage(ctx: CommandContext, command: string, args: { page?: 
 
 /** The parameters of a page-level command. */
 const PAGE_PARAMS: ParamSpec = { page: { type: "string" } };
+/** `add-page`'s: the page it goes after, and the page preset it has (else it is like that page). */
+const ADD_PAGE_PARAMS: ParamSpec = { ...PAGE_PARAMS, preset: { type: "string" } };
 
 /**
  * The new `z` of the nodes that move one place up (`forward`) or down (`backward`) the stack of one page. The stack is
@@ -337,20 +347,24 @@ function deleteNodes(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
 }
 
 /**
- * Adds a page like `args.page` (else the focus page) after it; headless with no page named, like the last page, at the
- * end. In a view a size over the Maximum page size setting is cut down to it; headless the page copied is one the figure
- * already has, so it is not cut.
+ * Adds a page after `args.page` (else the focus page; headless with no page named, after the last page): of the page
+ * preset `args.preset` when it is given (an id that is no preset is refused), else like that page. A size over the
+ * Maximum page size setting is cut down to it, and in a view the view says so.
  */
-function addPage(ctx: CommandContext, args?: { page?: unknown }): { id: PageId } {
+function addPage(ctx: CommandContext, args?: { page?: unknown; preset?: unknown }): { id: PageId } {
+  const command = "add-page";
   const { pages } = ctx.store.doc;
-  const after = targetPage(ctx, "add-page", args) ?? pages[pages.length - 1];
-  const limit = ctx.view ? editor(ctx).pageLimitMm() : Infinity;
-  const { page, clamped } = pageLike(after, pages.map((p) => p.id), limit);
+  const preset = args?.preset;
+  if (preset !== undefined && (typeof preset !== "string" || !getPreset(preset))) throw new CommandError(`${command}: there is no page preset "${String(preset)}"`);
+  const after = targetPage(ctx, command, args) ?? pages[pages.length - 1];
+  const limit = pageLimitMm(ctx);
+  const ids = pages.map((p) => p.id);
+  const { page, clamped } = pageLike(preset === undefined ? after : createPage(preset, ids), ids, limit);
   const at = pages.findIndex((p) => p.id === after?.id);
   ctx.store.commit("add-page", (draft) => {
     draft.pages.splice(at === -1 ? draft.pages.length : at + 1, 0, page);
   });
-  if (clamped) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
+  if (clamped && ctx.view) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
   return { id: page.id };
 }
 
@@ -500,7 +514,7 @@ function builtinCommands(): Command[] {
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(ctx.store.doc, n)),
       run: resetAspect,
     },
-    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", menu: ["page", "canvas"], params: PAGE_PARAMS, applies: () => true, run: addPage },
+    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", menu: ["page", "canvas"], params: ADD_PAGE_PARAMS, applies: () => true, run: addPage },
     {
       id: "delete-page",
       name: "Delete page",

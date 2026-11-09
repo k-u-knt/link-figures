@@ -40,6 +40,13 @@ export function createDocument(presetId: string): Document {
   return { version: 1, pages: [createPage(presetId, [], "Page 1")], nodes: [], edges: [] };
 }
 
+/** A new figure's document: `pages` empty pages (1 or more) of the preset `presetId`, named "Page 1", "Page 2"… */
+export function newFigureDocument(presetId: string, pages: number): Document {
+  const doc = createDocument(presetId);
+  while (doc.pages.length < pages) doc.pages.push(createPage(presetId, doc.pages.map((p) => p.id)));
+  return doc;
+}
+
 export function fileNodeDefaults(
   page: Page,
   partial: Partial<FileNode> & Pick<FileNode, "file" | "subpath" | "show">,

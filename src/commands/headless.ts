@@ -183,9 +183,15 @@ export async function readHeadlessFigure(registries: Registries, files: FigureFi
   return loadFigure(await files.read(path), registries).store.doc;
 }
 
+/** What a headless call is told of the plugin's settings, which a view would otherwise give its commands. */
+export interface HeadlessOptions {
+  /** The Maximum page size setting, in mm (see `CommandContext.pageLimitMm`). */
+  pageLimitMm?: number;
+}
+
 /** Runs one prepared call headless: see `withHeadlessFigure`. */
-export function runHeadless(app: App, registries: Registries, files: FigureFiles, path: string, call: PreparedCall): Promise<unknown> {
-  return withHeadlessFigure(app, registries, files, path, (ctx) => runNow(ctx, call, "when the figure is not open"));
+export function runHeadless(app: App, registries: Registries, files: FigureFiles, path: string, call: PreparedCall, options: HeadlessOptions = {}): Promise<unknown> {
+  return withHeadlessFigure(app, registries, files, path, (ctx) => runNow(ctx, call, "when the figure is not open"), options);
 }
 
 /**
@@ -200,13 +206,22 @@ export async function withHeadlessFigure<T>(
   files: FigureFiles,
   path: string,
   apply: (ctx: CommandContext, store: DocumentStore) => T,
+  options: HeadlessOptions = {},
 ): Promise<T> {
   let result: T | undefined;
   await files.process(path, (text) => {
     const { store, parsed } = loadFigure(text, registries);
     // After the normalisers, so a file that only they would change is not rewritten when the call changes nothing.
     const loaded = store.doc;
-    const ctx: CommandContext = { app, registries, view: null, store, selection: [], page: undefined };
+    const ctx: CommandContext = {
+      app,
+      registries,
+      view: null,
+      store,
+      selection: [],
+      page: undefined,
+      ...(options.pageLimitMm !== undefined ? { pageLimitMm: options.pageLimitMm } : {}),
+    };
     result = apply(ctx, store);
     return store.doc === loaded ? text : serializeFigureFile(store.doc, parsed);
   });

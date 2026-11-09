@@ -99,6 +99,11 @@ export interface CommandContext {
    * never when it fails. Without it a command does such things at once.
    */
   afterCommit?(fn: () => void): void;
+  /**
+   * Headless: the Maximum page size setting, in mm, which a page size a command writes keeps to (`DEFAULT_PAGE_LIMIT_MM`
+   * when absent). A view's own setting is read from the view (`pageLimitMm` in commands/builtin.ts).
+   */
+  pageLimitMm?: number;
 }
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";

@@ -11,12 +11,16 @@ import {
   type Call,
   type FigureFiles,
 } from "./commands/headless";
+import { FILE_SUFFIX } from "./constants";
 import type { ExportOutcome, ExportRequest } from "./export/export-run";
+import { emptyParsed, serializeFigureFile } from "./format/serialize";
 import type { BlockIdResult } from "./links/note-block-id";
+import { newFigureDocument } from "./model/defaults";
+import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
 import type { Registries } from "./registry";
-import type { CommandContext } from "./registry/command";
+import { CommandError, type CommandContext } from "./registry/command";
 import type { ParamSpec } from "./registry/params";
 
 /** A command as `commands()` describes it to a caller. */
@@ -64,8 +68,27 @@ export interface LinkFiguresApi {
    * the export report. Not a figure command: it finishes later. Waits for the calls queued on the figure before it.
    */
   export(figurePath: string, request: ExportRequest): Promise<ExportOutcome>;
+  /**
+   * Creates a new figure file at `path` (a vault path; `.lnkfig.md` is appended when it does not end so), as the "New
+   * figure" command makes one: `pages` empty pages (1 by default, up to 100) of the page preset `preset` (an id from
+   * the presets list; the Default page preset setting when left out). The folders above it that are missing are
+   * created. Refuses (`CommandError`) an unknown preset, a bad number of pages, and a path something is already at.
+   * Resolves to the figure's vault path. Not a figure command: it makes the file the commands then act on.
+   */
+  createFigure(path: string, options?: CreateFigureOptions): Promise<{ path: string }>;
   registries: Registries;
 }
+
+/** What `api.createFigure` may be told about the new figure. */
+export interface CreateFigureOptions {
+  /** A page preset's id (see model/presets.ts); the Default page preset setting when left out. */
+  preset?: string;
+  /** How many pages it has, all of the preset (1 to `MAX_NEW_FIGURE_PAGES`); 1 when left out. */
+  pages?: number;
+}
+
+/** The most pages `api.createFigure` makes a figure with. */
+export const MAX_NEW_FIGURE_PAGES = 100;
 
 /** An open view of a figure, as the API uses it. */
 export interface OpenFigure {
@@ -86,6 +109,15 @@ export interface ApiHost {
   noteBlockId?(path: string, line: number): Promise<BlockIdResult>;
   /** Exports the figure at `path` (normalised), opening it in the background when it is not open: see `exportFigure`. Without it, `export` rejects. */
   exportFigure?(path: string, request: ExportRequest): Promise<ExportOutcome>;
+  /**
+   * Writes `text` as a new file at `path` (normalised), creating the folders above it that are missing; rejects, writing
+   * nothing, when something is already there (see `writeNewFigureFile`). Without it, `createFigure` rejects.
+   */
+  createFigureFile?(path: string, text: string): Promise<void>;
+  /** The Default page preset setting; without it, `DEFAULT_PRESET_ID`. */
+  defaultPreset?(): string;
+  /** The Maximum page size setting, in mm, which headless page sizes keep to; without it, `DEFAULT_PAGE_LIMIT_MM`. */
+  pageLimitMm?(): number;
 }
 
 export function createApi(host: ApiHost): LinkFiguresApi {
@@ -111,6 +143,9 @@ export function createApi(host: ApiHost): LinkFiguresApi {
     return next;
   };
 
+  /** What a headless call is told of the settings (see `HeadlessOptions`). */
+  const headless = () => ({ pageLimitMm: host.pageLimitMm?.() });
+
   return {
     registries,
 
@@ -128,7 +163,7 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       return queued(figurePath, (path, view) => {
         requireView(call, view !== null);
         if (view) return runCall(view.store, view.commandContext(), call);
-        return runHeadless(app, registries, files, path, call);
+        return runHeadless(app, registries, files, path, call, headless());
       });
     },
 
@@ -137,7 +172,7 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       const prepared = prepareBatch(registries, calls);
       return queued(figurePath, (path, view) => {
         if (view) return runBatch(view.store, view.commandContext(), prepared);
-        return withHeadlessFigure(app, registries, files, path, (ctx, store) => runBatch(store, ctx, prepared));
+        return withHeadlessFigure(app, registries, files, path, (ctx, store) => runBatch(store, ctx, prepared), headless());
       });
     },
 
@@ -153,6 +188,30 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       const exportFigure = host.exportFigure;
       if (!exportFigure) throw new Error("export: figures cannot be exported here");
       return queued(figurePath, (path) => exportFigure(path, request));
+    },
+
+    async createFigure(figurePath, options = {}) {
+      const command = "createFigure";
+      if (typeof figurePath !== "string" || figurePath.trim() === "") throw new CommandError(`${command}: the path must name a file in the vault`);
+      if (typeof options !== "object" || options === null || Array.isArray(options)) throw new CommandError(`${command}: the options must be an object`);
+      const { pages = 1 } = options;
+      // A stale setting falls back to the default preset, as the New figure command does; a preset the caller names must be one.
+      const setting = host.defaultPreset?.();
+      const preset = options.preset ?? (setting !== undefined && getPreset(setting) ? setting : DEFAULT_PRESET_ID);
+      if (typeof preset !== "string" || !getPreset(preset)) throw new CommandError(`${command}: there is no page preset "${String(preset)}"`);
+      if (typeof pages !== "number" || !Number.isInteger(pages) || pages < 1 || pages > MAX_NEW_FIGURE_PAGES) {
+        throw new CommandError(`${command}: "pages" must be a whole number from 1 to ${MAX_NEW_FIGURE_PAGES}`);
+      }
+      const write = host.createFigureFile;
+      if (!write) throw new CommandError(`${command}: figures cannot be created here`);
+      const normalised = host.normalizePath(figurePath);
+      if (normalised === "/") throw new CommandError(`${command}: the path must name a file in the vault`);
+      const path = normalised.endsWith(FILE_SUFFIX) ? normalised : `${normalised}${FILE_SUFFIX}`;
+      // In the figure's queue, so a call on it made right after this one waits for the file to be there.
+      return queued(path, async () => {
+        await write(path, serializeFigureFile(newFigureDocument(preset, pages), emptyParsed()));
+        return { path };
+      });
     },
 
     async read(figurePath) {

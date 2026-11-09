@@ -155,7 +155,8 @@ function previewOf(node: ConnectorNode, ctx: InteractionContext): PathData {
 /**
  * `node` with each end that is snapped to an anchor but names none given its item's anchor nearest to where the end is
  * drawn (where an end with an anchor id its item does not have is drawn: as if snapped to the centre). An end whose item
- * is missing or has no anchors is left as it is, for the checks to refuse. Returns `node` itself when no end needs one.
+ * is missing or has no anchors is left as it is, for the checks to refuse. When another of its fields is too malformed to
+ * draw the line by, the anchor nearest the item's centre is taken. Returns `node` itself when no end needs one.
  */
 function withNearestAnchors(node: ConnectorNode, ctx: UpdateContext): ConnectorNode {
   const ends = Array.isArray(node.ends) ? node.ends : [];
@@ -164,11 +165,20 @@ function withNearestAnchors(node: ConnectorNode, ctx: UpdateContext): ConnectorN
   if (ends.length !== 2 || !ends.some(lacking)) return node;
   // Drawn with an anchor id no item has, an end is placed as a centre-snapped one: where the normaliser looks too.
   const placeholder = ends.map((end) => (lacking(end) ? { ...end, anchor: "" } : end)) as [End, End];
-  const drawn = resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends;
+  let drawn: Pt[] | null;
+  try {
+    drawn = resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends.map((e) => e.pt);
+  } catch {
+    // A malformed field beside the ends (caps that are not two caps) leaves the line undrawable. The end then takes the
+    // anchor nearest its item's centre, so that the ends are well formed and the check of the malformed field is the
+    // one that refuses the patch, with its own message.
+    drawn = null;
+  }
   const filled = ends.map((end, i) => {
     if (!lacking(end)) return end;
-    const anchors = attachTarget(ctx.doc, ctx.registries, end.node)?.anchors ?? [];
-    return anchors.length === 0 ? end : { ...end, anchor: nearestAnchor(anchors, drawn[i].pt).id };
+    const target = attachTarget(ctx.doc, ctx.registries, end.node);
+    const anchors = target?.anchors ?? [];
+    return anchors.length === 0 || !target ? end : { ...end, anchor: nearestAnchor(anchors, drawn?.[i] ?? target.center).id };
   }) as [End, End];
   return { ...node, ends: filled };
 }
@@ -252,6 +262,16 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
       return null;
     }
     if (key === "caps") return pairOf(value, isCap) ? null : '"caps" must be two caps ({kind, size})';
+    if (key === "page") {
+      // An end attached to an item on another page would come free there; node.move takes the items along, and the
+      // connector with them. Ends the same patch gives are the "ends" check's to judge on the new page.
+      const before = ctx.doc.nodes.find((n) => n.id === node.id);
+      if (!before || JSON.stringify((before as ConnectorNode).ends) !== JSON.stringify(node.ends)) return null;
+      const pageOf = (id: unknown) => ctx.doc.nodes.find((n) => n.id === id)?.page;
+      const ends: unknown[] = Array.isArray(node.ends) ? node.ends : [];
+      const left = ends.some((e) => isRecord(e) && e.kind === "attached" && pageOf(e.node) !== undefined && pageOf(e.node) !== value);
+      return left ? "a connector attached to items moves to another page with them: use node.move on the items and the connector" : null;
+    }
     return fieldError(CONNECTOR_FIELDS, key, value);
   },
 

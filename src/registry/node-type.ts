@@ -190,7 +190,9 @@ export interface NodeType<N extends Node = Node> {
    * For `node.update`: what is wrong with `value`, one of the type's own top-level fields (`"fill"`, `"ends"`) as the
    * patch leaves it, or null when it is fine. `node` is the whole node as the patch leaves it (after `completeUpdate`),
    * for a field that depends on another (a connector's ends must be on its page). Called for each such field a patch
-   * touches; a key the type does not know is fine, as the file format keeps unknown keys.
+   * touches; a key the type does not know is fine, as the file format keeps unknown keys. Also called for the base field
+   * `"page"` when a patch moves the node to another page, so a type can refuse a move this command cannot make (a
+   * connector attached to items, which `node.move` moves with them).
    */
   checkField?(key: string, value: unknown, ctx: UpdateContext, node: N): string | null;
   /**

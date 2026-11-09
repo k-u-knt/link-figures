@@ -1,14 +1,16 @@
 import { resolveConnector } from "../connectors/geometry";
 import { endAt, endError, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
+import { MIN_NODE_PX } from "../constants";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
+import { getPreset } from "../model/presets";
 import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } from "../model/geometry";
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
 import type { Registries } from "../registry";
 import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/params";
 import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
-import { writePageField } from "../view/page-fields";
-import { editor, targetIds, targetPage, whenCommitted } from "./builtin";
+import { CUSTOM_PRESET, writePageField } from "../view/page-fields";
+import { editor, pageLimitMm, targetIds, targetPage, whenCommitted } from "./builtin";
 import { descendantsOf, expandUnits, isGroup, isLocked, scaleUnits } from "../model/groups";
 import { current, isDraft } from "immer";
 
@@ -54,6 +56,19 @@ export function newNodeId(ctx: CommandContext, command: string, id: unknown): st
   return id as string;
 }
 
+/**
+ * Throws `CommandError` when a size a create call gives (`width`, `height`, page px; left out is fine) is under the least
+ * a node may have, a millimetre (`MIN_NODE_PX`): a create is refused where an update (`node.update`) keeps the size to it.
+ */
+export function checkMinSize(command: string, size: { width?: number; height?: number }): void {
+  for (const key of ["width", "height"] as const) {
+    const value = size[key];
+    if (value !== undefined && value < MIN_NODE_PX) {
+      throw new CommandError(`${command}: "${key}" must be at least 1 mm (${Math.ceil(MIN_NODE_PX * 100) / 100} px), not ${value}`);
+    }
+  }
+}
+
 /** The `z` that puts a new node above everything on `page`. */
 export function topOf(doc: Document, page: Page): number {
   return doc.nodes.reduce((top, n) => (n.page === page.id ? Math.max(top, n.z) : top), -1) + 1;
@@ -95,6 +110,7 @@ function createShape(ctx: CommandContext, args: ShapeCreateArgs): { id: NodeId }
   for (const name of ["params", "fill", "border"] as const) checkPlain(command, name, args[name]);
   const id = newNodeId(ctx, command, args.id);
   const page = creationPage(ctx, command, args);
+  checkMinSize(command, args);
   const doc = ctx.store.doc;
   const partial: Partial<ShapeNode> = {
     kind: kind.id,
@@ -240,6 +256,9 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null);
     if (error !== null) throw new CommandError(`${command}: ${error}`);
     if (key === "page" && !ctx.store.doc.pages.some((p) => p.id === value)) throw new CommandError(`${command}: there is no page "${String(value)}"`);
+    // A type may refuse a page change it cannot make by this command (a connector attached to items: node.move).
+    const pageError = key === "page" ? (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null) : null;
+    if (pageError !== null) throw new CommandError(`${command}: ${pageError}`);
   }
   ctx.store.commit(command, (draft) => {
     const target = draft.nodes.find((n) => n.id === node.id) as unknown as Record<string, unknown> | undefined;
@@ -331,8 +350,9 @@ const SIZE_KEYS = ["preset", "width", "height"];
  * Changes page `id` by `patch`, merged into it as `node.update` merges (`{ margins: { left: 15 } }`). Its `id` cannot
  * change; keys it does not know are kept, as the file format keeps them. A `preset` sets the size to the preset's (and
  * is applied before a `width` or `height` the same patch gives); a width or height that is then not the preset's makes
- * the page custom. With the figure open, a width or height over the Maximum page size setting is cut down to it and the
- * view says so, as the inspector's edits are; headless it is not cut, as `add-page` does not cut.
+ * the page custom; a `preset` that is neither a preset's id nor "custom" is refused. A width or height over the Maximum
+ * page size setting is cut down to it, as the inspector's edits are (headless, the setting the API was given), and with
+ * the figure open the view says so.
  */
 function updatePage(ctx: CommandContext, args: { id: string; patch: Record<string, unknown> }): { id: PageId } {
   const command = "page.update";
@@ -349,7 +369,12 @@ function updatePage(ctx: CommandContext, args: { id: string; patch: Record<strin
     const error = Object.hasOwn(PAGE_FIELDS, key) ? paramError(key, PAGE_FIELDS[key], after[key]) : null;
     if (error !== null) throw new CommandError(`${command}: ${error}`);
   }
-  const limit = ctx.view ? editor(ctx).pageLimitMm() : Infinity;
+  // A preset is one of the presets, or custom (a size of the page's own).
+  const preset = after.preset;
+  if (changed.includes("preset") && preset !== CUSTOM_PRESET && !getPreset(preset as string)) {
+    throw new CommandError(`${command}: there is no page preset "${String(preset)}"`);
+  }
+  const limit = pageLimitMm(ctx);
   // The preset first, so a size given with it is the one the page keeps.
   const ordered = [...SIZE_KEYS.filter((key) => changed.includes(key)), ...changed.filter((key) => !SIZE_KEYS.includes(key))];
   let clamped = false;
@@ -361,7 +386,7 @@ function updatePage(ctx: CommandContext, args: { id: string; patch: Record<strin
       else (target as unknown as Record<string, unknown>)[key] = after[key];
     }
   });
-  if (clamped) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
+  if (clamped && ctx.view) whenCommitted(ctx, () => editor(ctx).notePageLimit(limit));
   return { id: page.id };
 }
 
@@ -544,7 +569,8 @@ function toolBox(from: PlacePoint, to: PlacePoint, square: boolean): { x: number
     from.x === to.x && from.y === to.y
       ? { x: from.x - mmToPx(CLICK_SHAPE_MM.width) / 2, y: from.y - mmToPx(CLICK_SHAPE_MM.height) / 2, width: mmToPx(CLICK_SHAPE_MM.width), height: mmToPx(CLICK_SHAPE_MM.height) }
       : dragRect(from, to, square);
-  return { x: roundPx(box.x), y: roundPx(box.y), width: roundPx(box.width), height: roundPx(box.height) };
+  // Never under a millimetre, which `shape.create` refuses: a drag that small makes the least shape there is.
+  return { x: roundPx(box.x), y: roundPx(box.y), width: nodeSizePx(roundPx(box.width)), height: nodeSizePx(roundPx(box.height)) };
 }
 
 /**

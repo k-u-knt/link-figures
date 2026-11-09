@@ -4,7 +4,7 @@ import { extensionOf } from "../links/intake-classify";
 import { isPanelExtension } from "../links/resolver";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
-import { addNode, creationPage, newNodeId, topOf } from "./drawing";
+import { addNode, checkMinSize, creationPage, newNodeId, topOf } from "./drawing";
 
 /**
  * The commands that make panels (file nodes). `panel.create` is how every panel comes to be: a drop or paste on the
@@ -55,6 +55,7 @@ export function createPanel(ctx: CommandContext, args: PanelCreateArgs): { id: N
   if (args.file === "") throw new CommandError(`${command}: "file" must not be empty`);
   const id = newNodeId(ctx, command, args.id);
   const page = creationPage(ctx, command, args);
+  checkMinSize(command, args);
   const doc = ctx.store.doc;
   const partial: Partial<FileNode> & Pick<FileNode, "file" | "subpath" | "show"> = {
     file: args.file,

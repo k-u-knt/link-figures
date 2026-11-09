@@ -25,6 +25,9 @@ export const PAGE_PRESETS: PagePreset[] = [
   { id: "slide-4-3", name: "Slide 4:3", width: 254, height: 190.5 },
 ];
 
+/** The page preset a new figure gets when nothing says otherwise (the default of the Default page preset setting). */
+export const DEFAULT_PRESET_ID = "nature-double";
+
 export function getPreset(id: string): PagePreset | undefined {
   return PAGE_PRESETS.find((p) => p.id === id);
 }

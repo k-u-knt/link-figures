@@ -28,7 +28,14 @@ Obsidian hides `.tif`/`.tiff` files in the file explorer unless Settings → Fil
 
 **Text labels.** "Text" in the toolbar (or "Link Figures: Text" in the command palette) arms the text tool for panel letters and captions: click on the page to place a label there, and type (what you type replaces "Text"). Escape, a click off the pages, or "Text" again puts the tool down without adding anything. Double-click a label to edit it again. Its font (the installed families), size in points, weight, style, colour, alignment and line height are in the inspector.
 
-**Export.** "Export" in the toolbar opens a dialog: choose SVG or PDF (vector), the current page or all pages, and the resolution used for what has to be drawn as pixels. An SVG export is one file per page, and an SVG panel stays editable in Inkscape. A PDF export is one file with a page for each page exported, and a PDF panel is embedded in it as a vector. Files are written next to the figure, or into the export folder below.
+**Export.** "Export" in the toolbar opens a dialog: choose a format, the current page or all pages, and the resolution (dpi; the 300, 600 and 1000 buttons set the resolutions journals ask for). The chosen format's own options appear under the Format menu. Files are written next to the figure, or into the export folder below.
+
+- **SVG** (vector): one file per page, `<figure> - <page>.svg`. An SVG panel stays editable in Inkscape. The dpi is for what has to be drawn as pixels (PDF pages and note content).
+- **PDF** (vector): one file with a page for each page exported. A PDF panel is embedded in it as a vector.
+- **PNG**: one file per page, `<figure> - <page>.png`, the whole page drawn at the dpi, with the dpi written into the file (`pHYs`) and marked sRGB. No options.
+- **TIFF**: one file per page, `<figure> - <page>.tif`, 8-bit RGB with the dpi as its resolution. Option: Compression, Deflate (the default) or None.
+
+PNG and TIFF draw the same page SVG as the SVG and PDF exports, so all four look the same. They are flattened onto the page's paper colour (white when the paper is transparent). PDF panels are drawn from their rasters at the export dpi, content cards from a snapshot of the stage, and text in the fonts installed on your computer. A page too large to draw at the dpi you asked for (Chromium's canvas holds at most 16 384 px on a side and 268 million pixels) is drawn at the largest dpi that fits, and the notice says `"<page>": drawn at <n> dpi (the largest that fits)`. A page that cannot be drawn at all is named in the notice, and the other pages are still written. PNG and TIFF are 8-bit sRGB, which is what a browser canvas holds: there is no CMYK, no ICC profile other than the sRGB mark, and no 16-bit output. A4 at 1000 dpi is about 8 300 × 11 700 px, whose canvas alone takes some 390 MB of memory while it is drawn, so it takes a few seconds; 300 or 600 dpi is enough for most journals.
 
 **Trimmed export.** What a crop hides is left out of the exported file, so the data you cropped away is not sent along with the figure. Every export removes from each panel's source what lies wholly outside the part that shows (the crop, and what the panel's rectangle cuts off when it is filled): a PNG, JPEG, GIF, WebP, AVIF, BMP or TIFF panel is cut to the visible pixels (rounded outward to whole pixels), and so is a PDF panel's image in an SVG export. An item that crosses the crop's edge (a line, an axis, a long label, or an image embedded in an SVG or PDF plot, such as a heat map) is kept whole, and its hidden part is still in the file under the clip. A trimmed raster is written as a PNG in sRGB, as the stage shows it: an embedded colour profile is not carried over, a JPEG can grow several times in size, and an animated GIF keeps its first frame. The export's notice has a line for each cropped panel saying what was removed, or why it could not be trimmed. The figure itself keeps the full sources, so a crop can always be widened again.
 
@@ -76,7 +83,15 @@ This works in the Obsidian developer console, in another plugin and in the Obsid
 | `await api.run(path, id, args?)` | Runs one command on the figure and resolves to its result. On an open figure it is one undo step there; on a figure that is not open the file is read, changed and saved. Rejects with a `CommandError` for an unknown command, bad arguments, or a command that needs the figure open when it is not. |
 | `await api.batch(path, calls)` | Runs `calls` (`[{ id, args? }, …]`) in order as one edit, all or nothing: every call is checked before any runs, and if one fails nothing changes. One undo step in an open figure, one save otherwise. Resolves to the array of their results. A `needsView` command cannot be in a batch. |
 | `await api.read(path)` | The figure's document as JSON: the open view's current one, else the file's. |
+| `await api.export(path, { format, pages?, dpi?, options? })` | Exports the figure as the Export dialog does, to the export folder. `format` is an exporter's id (`svg`, `pdf`, `png`, `tiff`); `pages` is `"current"` (the default: the page in focus; for a closed figure, the page the background view opens on, so name the pages or use `"all"` there), `"all"`, or a list of page ids; `dpi` is from 72 to 1200 (the setting's when left out); `options` are the format's own (`{ compression: "none" }` for TIFF), each left out at its default. Resolves to `{ files, warnings }`: the vault paths written and the notice's lines. A figure that is not open is opened in a background tab, waited on until its panels and content cards are drawn, exported and closed again. A bad format, dpi, option or page is refused before anything is opened or written. It is not a figure command, so it is not in `api.commands()`. |
 | `api.registries` | The registries (commands, node types, shape kinds, routes, cap kinds, paint types, shape operations, adjustments, exporters). A new shape kind, route, cap kind or paint type is one registration; nothing else changes. |
+
+Export every page of a figure as TIFF at 600 dpi, uncompressed:
+
+```js
+const { files, warnings } = await api.export("Notes/My figure.lnkfig.md", { format: "tiff", pages: "all", dpi: 600, options: { compression: "none" } });
+// files => ["Notes/My figure - Page 1.tif", "Notes/My figure - Page 2.tif"]
+```
 
 Calls on one figure run one after another, so a script need not await each. With the figure open, an edit that arrives while it has an unsaved change of its own lands in the open view, as one undo step, and the unsaved change is kept.
 
@@ -248,7 +263,7 @@ await api.run("Notes/My figure.lnkfig.md", "panel.create", { file: "Notes/Method
 | Default page preset | Nature - double column | Page size of a new figure. |
 | Attachment folder | empty | Folder for images dropped or pasted into a figure. Empty uses Obsidian's own attachment setting. |
 | Export folder | empty | Folder for exported files. Empty saves them next to the figure. |
-| Export resolution | 300 dpi | Dots per inch for what is drawn as pixels, from 72 to 1200. |
+| Export resolution | 300 dpi | Dots per inch for what is drawn as pixels (the whole page in PNG and TIFF), from 72 to 1200. |
 | Drop from a note | Block (adds a block id) | What a panel dragged out of a note's editor links to: Block, Heading or Direct. See Linking a place in a note. |
 | Block id prefix | `fig` | The start of a block id written into a note. |
 
@@ -279,7 +294,7 @@ Milestone 1 also settles three things the design leaves open. Run each check in 
 
 ## Roadmap
 
-M2 is the editor: its first part (shapes and connectors, fills and paints, scripting) is in, and alignment, crop, groups, PNG, TIFF and PowerPoint export follow; M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission. The design, the file format and the milestones are in [docs/superpowers/specs/2026-10-27-link-figures-design.md](docs/superpowers/specs/2026-10-27-link-figures-design.md).
+M2 is the editor: its first part (shapes and connectors, fills and paints, scripting) is in, as are alignment, crop, groups and PNG and TIFF export; PowerPoint export follows; M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission. The design, the file format and the milestones are in [docs/superpowers/specs/2026-10-27-link-figures-design.md](docs/superpowers/specs/2026-10-27-link-figures-design.md).
 
 ## Development
 

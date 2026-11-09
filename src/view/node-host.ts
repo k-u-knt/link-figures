@@ -6,6 +6,7 @@ import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
+import { nodeTypeOrPlaceholder } from "../nodes/placeholder-node";
 import type { ImageState, NodeRenderer, RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
@@ -364,11 +365,8 @@ export class NodeHost {
   }
 
   private mountNode(node: Node): void {
-    const type = this.registries.nodeTypes.get(node.type);
-    if (!type) {
-      console.warn(`Link Figures: no node type "${node.type}" is registered, so node ${node.id} is not drawn`);
-      return;
-    }
+    // A node of a type no plugin registers (another plugin's item, that plugin missing) is drawn as a placeholder.
+    const type = nodeTypeOrPlaceholder(this.registries, node.type);
     const host = this.hostFor(node.page);
     if (!host) {
       console.warn(`Link Figures: node ${node.id} is on page "${node.page}", which does not exist, so it is not drawn`);

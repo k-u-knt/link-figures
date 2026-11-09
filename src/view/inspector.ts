@@ -9,6 +9,7 @@ import type { UndoStep } from "../registry/command";
 import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
 import type { Registries } from "../registry";
+import { nodeTypeOrPlaceholder } from "../nodes/placeholder-node";
 import type { LinkFiguresView } from "./figure-view";
 import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writeValue } from "./page-fields";
 import { roundPx } from "./pointer-math";
@@ -682,7 +683,8 @@ export class Inspector {
     const nodes = this.view.store.doc.nodes;
     const first = nodes.find((n) => n.id === ids[0]);
     if (!first) return null;
-    const type = this.view.plugin.registries.nodeTypes.get(first.type);
+    // A node of a type no plugin registers is shown under its placeholder's name, with the base fields only.
+    const type = nodeTypeOrPlaceholder(this.view.plugin.registries, first.type);
     const derived = new Set(type?.derivedFields ?? []);
     const base = nodeBaseFields().filter((f) => !derived.has(f.key));
     const baseKeys = new Set(base.map((f) => f.key));

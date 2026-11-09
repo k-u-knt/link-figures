@@ -174,7 +174,7 @@ export interface FigureFiles {
 
 /** A figure file's text loaded into a store with a figure's normalisers, and what loading it gave. */
 function loadFigure(text: string, registries: Registries): { store: DocumentStore; parsed: ParsedFigureFile } {
-  const { doc, parsed } = loadDocument(text);
+  const { doc, parsed } = loadDocument(text, registries);
   return { store: createFigureStore(doc, registries), parsed };
 }
 

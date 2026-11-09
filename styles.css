@@ -588,3 +588,22 @@
 .lf-crop-handle[data-handle="s"] { left: 50%; top: 100%; cursor: ns-resize; }
 .lf-crop-handle[data-handle="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
 .lf-crop-handle[data-handle="w"] { left: 0; top: 50%; cursor: ew-resize; }
+
+/* A node of a type no plugin registers (another plugin's item, that plugin missing): a dashed box with its type. */
+.lf-placeholder {
+  border: 1px dashed var(--lf-ui-faint, var(--text-faint));
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.lf-placeholder-label {
+  color: var(--lf-ui-faint, var(--text-faint));
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+  padding: 2px;
+  pointer-events: none;
+  user-select: none;
+}

@@ -472,6 +472,19 @@ describe("node section", () => {
     expect(keysOf(el)).toEqual(["x", "y", "width", "height", "rotation", "opacity", "name", "locked", "pageIndex"]);
   });
 
+  test("a node of a type no plugin registers shows only the base fields, under its placeholder's name, and they write", () => {
+    const { el, store, selection } = setup((d) => {
+      d.nodes.push({ id: "x-1", type: "x.chart", page: d.pages[0].id, x: 0, y: 0, width: 20 * MM, height: 20 * MM, z: 0, rotation: 0, opacity: 1, locked: false, series: [1] } as unknown as Node);
+    });
+    selection.set(["x-1"]);
+    expect(titleOf(el)).toBe("Node");
+    expect(el.find((e) => e.hasClass("lf-inspector-sub"))?.text).toBe("Missing: x.chart");
+    expect(keysOf(el)).toEqual(["x", "y", "width", "height", "rotation", "opacity", "name", "locked"]);
+    el.typeInto("width", "30");
+    expect(store.doc.nodes[0].width).toBeCloseTo(30 * MM, 1);
+    expect((store.doc.nodes[0] as unknown as { series: unknown }).series).toEqual([1]);
+  });
+
   test("typing a width in millimetres resizes the node in pixels, and a long run of edits is one undo step", () => {
     const { el, store, selection, labels } = setup((d) => { addNode(d, { id: "p-img", width: 40 * MM }); });
     const seen = labels();

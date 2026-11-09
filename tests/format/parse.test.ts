@@ -71,8 +71,8 @@ test("migrate preserves unknown keys on the document, pages and nodes", () => {
   expect((doc.nodes[0] as unknown as Record<string, unknown>).futureKey).toEqual([1]);
 });
 test("migrate fills page defaults", () => { const doc = migrate({ version: 1, pages: [{ id: "pg-1", width: 10, height: 20 }], nodes: [] }); expect(doc.pages[0]).toEqual({ id: "pg-1", name: "Page 1", width: 10, height: 20, paper: "#ffffff", margins: { top: 0, right: 0, bottom: 0, left: 0 }, grid: { spacing: 5, show: false } }); expect(doc.edges).toEqual([]); });
-test("migrate rejects unknown node types", () => expect(() => migrate(docWith([{ id: "p-1", type: "hologram", ...geom }]))).toThrow(FormatError));
-test("migrate does not mistake inherited object members for node types", () => expect(() => migrate(docWith([{ id: "p-1", type: "constructor", ...geom }]))).toThrow(FormatError));
+test("migrate keeps a node of a type it does not build in, with only the common defaults filled in", () => expect(migrate(docWith([{ id: "p-1", type: "hologram", ...geom, beam: { k: 1 } }])).nodes[0]).toEqual({ id: "p-1", type: "hologram", ...geom, beam: { k: 1 }, z: 0, rotation: 0, opacity: 1, locked: false }));
+test("migrate does not mistake inherited object members for node types", () => expect(migrate(docWith([{ id: "p-1", type: "constructor", ...geom }])).nodes[0]).toEqual({ id: "p-1", type: "constructor", ...geom, z: 0, rotation: 0, opacity: 1, locked: false }));
 test("migrate fills the missing keys of partial margins and grid", () => { const doc = migrate({ version: 1, pages: [{ id: "pg-1", width: 10, height: 20, margins: { top: 5 }, grid: { show: true } }], nodes: [] }); expect(doc.pages[0].margins).toEqual({ top: 5, right: 0, bottom: 0, left: 0 }); expect(doc.pages[0].grid).toEqual({ spacing: 5, show: true }); });
 test("migrate rejects other versions", () => { expect(() => migrate({ ...docWith([]), version: 2 })).toThrow(FormatError); expect(() => migrate({ pages: [], nodes: [] })).toThrow(FormatError); });
 test.each([

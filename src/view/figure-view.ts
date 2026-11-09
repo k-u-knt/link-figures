@@ -186,7 +186,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (clear) this.clear();
     let loaded: ReturnType<typeof loadDocument>;
     try {
-      loaded = loadDocument(data);
+      loaded = loadDocument(data, this.plugin.registries);
     } catch (error) {
       // Refuse to open, and with it to save: the file is shown as it is and never replaced by a default document.
       this.setDocument(blankDocument(), emptyParsed());

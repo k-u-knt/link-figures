@@ -749,3 +749,47 @@ describe("drawn", () => {
     await expect(failing.nodeHost.drawn()).resolves.toBeUndefined();
   });
 });
+
+describe("a node of a type no plugin registers", () => {
+  /** An element as the placeholder builds it: Obsidian's `createDiv`, a style and a dataset. */
+  class DomEl {
+    children: DomEl[] = [];
+    dataset: Record<string, string> = {};
+    style: Record<string, string> = {};
+    removed = false;
+    constructor(readonly cls: string[], readonly text = "") {}
+    get lastElementChild() {
+      return this.children[this.children.length - 1] ?? null;
+    }
+    createDiv(info: { cls?: string | string[]; text?: string } = {}): DomEl {
+      const el = new DomEl(info.cls === undefined ? [] : Array.isArray(info.cls) ? info.cls : [info.cls], info.text ?? "");
+      this.children.push(el);
+      return el;
+    }
+    replaceChildren(): void {
+      this.children = [];
+    }
+    remove(): void {
+      this.removed = true;
+    }
+  }
+
+  test("is drawn as a placeholder labelled with its type, not skipped", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const t = setup();
+    const page = t.doc.pages[0];
+    const node = { id: "x-1", type: "x.chart", page: page.id, x: 1, y: 2, width: 30, height: 40, z: 9, rotation: 0, opacity: 1, locked: false, series: [1] } as unknown as Node;
+    const doc: Document = { ...t.doc, nodes: [node] };
+    const host = new DomEl([]);
+    const nodeHost = new NodeHost(t.view as never, { nodesHost: () => host } as never, { nodeTypes: { get: () => undefined } } as unknown as Registries);
+    nodeHost.renderAll(doc);
+    const el = nodeHost.elementFor("x-1") as unknown as DomEl;
+    expect(el).toBe(host.children[0]);
+    expect(el.cls).toEqual(["lf-node", "lf-placeholder"]);
+    expect(el.dataset.nodeId).toBe("x-1");
+    expect(el.children.map((c) => c.text)).toEqual(["Missing: x.chart"]);
+    expect(el.style).toMatchObject({ left: "1px", top: "2px", width: "30px", height: "40px", zIndex: "9" });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

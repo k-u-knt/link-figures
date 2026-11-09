@@ -239,6 +239,14 @@ export interface NodeType<N extends Node = Node> {
    * value to one. Undefined for a key that is a path into the node, which `node.update` writes.
    */
   fieldRoute?(key: string): FieldRoute<N> | undefined;
+  /**
+   * For a type a plugin registers (not one this plugin builds in): validates one of its nodes as a figure file holds it,
+   * and gives the node back, completed with what is missing. `raw` has the base fields checked (`id`, `type`, `page`, a
+   * numeric box) and the common defaults filled in (`z`, `rotation`, `opacity`, `locked`); every other key is as the
+   * file has it. Throw to refuse the file (the message is shown, naming the node); the node given back keeps `raw`'s `id`
+   * and `type`. Without it, a node of the type is loaded as it is.
+   */
+  migrate?(raw: Record<string, unknown>): N;
 }
 
 /** How the inspector reads and writes a field that a command writes (see `NodeType.fieldRoute`). */

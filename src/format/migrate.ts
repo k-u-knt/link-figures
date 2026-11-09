@@ -1,7 +1,7 @@
 import { DEFAULT_FONT, FORMAT_VERSION } from "../constants";
 import { defaultBorder, defaultCaps } from "../model/defaults";
 import { isEnd } from "../registry/params";
-import type { Document } from "../model/types";
+import type { Document, Node } from "../model/types";
 import { FormatError } from "./errors";
 
 type Json = Record<string, unknown>;
@@ -102,7 +102,32 @@ function migrateConnector(id: string, node: Json): void {
   if (!Array.isArray(caps) || caps.length !== 2 || !caps.every(isCap)) throw new FormatError(`Node ${id}: "caps" must be two caps { kind, size }`);
 }
 
-function migrateNode(raw: unknown, index: number): Json {
+/**
+ * How `migrate` finds the NodeType a plugin registered for a type this plugin does not build in: its `migrate` hook, when
+ * it has one, validates and completes the type's nodes. Undefined for a type no plugin registers.
+ */
+export type NodeMigrations = (type: string) => { migrate?(raw: Record<string, unknown>): Node } | undefined;
+
+/**
+ * A node of a type this plugin does not build in: with the common defaults filled in, it goes through the `migrate` hook
+ * of the NodeType a plugin registered for it, when there is one; otherwise (no plugin registers the type, or its NodeType
+ * has no hook) it is kept as it is, every key of its own included, so saving it loses nothing.
+ */
+function migrateForeign(id: string, type: string, raw: Json, nodeTypes: NodeMigrations | undefined): Json {
+  const node = fill(raw, COMMON_DEFAULTS());
+  const hook = nodeTypes?.(type)?.migrate;
+  if (!hook) return node;
+  let out: unknown;
+  try {
+    out = hook(node);
+  } catch (error) {
+    throw new FormatError(`Node ${id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(out) || out.id !== id || out.type !== type) throw new FormatError(`Node ${id}: the "${type}" type's migrate hook did not give the node back`);
+  return out;
+}
+
+function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations): Json {
   if (!isRecord(raw)) throw new FormatError(`Node ${index + 1} is not an object`);
   const { id, type, page } = raw;
   if (typeof id !== "string" || id === "") throw new FormatError(`Node ${index + 1} has no id`);
@@ -113,7 +138,7 @@ function migrateNode(raw: unknown, index: number): Json {
   }
   // Whether the group it names exists is the store's group normaliser's to check, as the document is loaded.
   if (raw.parent !== undefined && typeof raw.parent !== "string") throw new FormatError(`Node ${id}: "parent" must be a string`);
-  if (!Object.hasOwn(NODE_DEFAULTS, type)) throw new FormatError(`Node ${id} has unsupported type "${type}"`);
+  if (!Object.hasOwn(NODE_DEFAULTS, type)) return migrateForeign(id, type, raw, nodeTypes);
   const node = fill(raw, NODE_DEFAULTS[type]());
   if (type === "file") {
     node.adjustments = migrateAdjustments(id, node.adjustments);
@@ -136,13 +161,14 @@ function migrateNode(raw: unknown, index: number): Json {
 /**
  * Validates the parsed JSON body and fills missing optional fields with the model's defaults, by node type.
  * Unknown extra keys on the document, pages and nodes are kept. File nodes get empty `file`/`subpath`;
- * the loader fills those from the Links section.
+ * the loader fills those from the Links section. A node of a type that is not built in is kept (see `migrateForeign`);
+ * `nodeTypes` finds the hooks of the types plugins register.
  */
-export function migrate(json: unknown): Document {
+export function migrate(json: unknown, nodeTypes?: NodeMigrations): Document {
   if (!isRecord(json)) throw new FormatError("Figure JSON must be an object");
   if (json.version !== FORMAT_VERSION) throw new FormatError(`Unsupported figure format version: ${String(json.version)}`);
   if (!Array.isArray(json.pages)) throw new FormatError('Figure JSON has no "pages" array');
   if (!Array.isArray(json.nodes)) throw new FormatError('Figure JSON has no "nodes" array');
-  const doc = { ...json, version: FORMAT_VERSION, pages: json.pages.map(migratePage), nodes: json.nodes.map(migrateNode), edges: [] };
+  const doc = { ...json, version: FORMAT_VERSION, pages: json.pages.map(migratePage), nodes: json.nodes.map((n, i) => migrateNode(n, i, nodeTypes)), edges: [] };
   return doc as unknown as Document;
 }

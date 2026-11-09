@@ -71,7 +71,7 @@ export function buildPageSvg(
   for (const node of nodes) {
     const type = registries.nodeTypes.get(node.type);
     if (!type) {
-      warnings.push(`${nodeLabel(doc, node)}: no node type "${node.type}" is registered, skipped`);
+      warnings.push(`"${node.type}" item skipped: no plugin draws it`);
       continue;
     }
     if (opts.overlaysOnly) {

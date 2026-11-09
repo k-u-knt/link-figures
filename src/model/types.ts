@@ -154,6 +154,14 @@ export interface GroupNode extends NodeBase {
 
 export type Node = FileNode | TextNode | ShapeNode | ConnectorNode | GroupNode;
 
+/**
+ * A node of a type this plugin does not build in, such as another plugin's item: the base fields plus keys of its own,
+ * kept verbatim through load and save. It travels as a `Node` (it is not a member of the union, whose `type`s it would
+ * blur); code that does not know its type works from its base fields only, and the stage draws it as a placeholder
+ * when no plugin registers its type (see nodes/placeholder-node.ts).
+ */
+export type ForeignNode = NodeBase & Record<string, unknown>;
+
 export interface Document {
   version: 1;
   pages: Page[];

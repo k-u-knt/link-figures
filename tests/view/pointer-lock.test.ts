@@ -256,3 +256,14 @@ test("unlocking a selected node in the inspector gives its box the handles back,
   expect(boxes()[0].classes).toContain("is-locked");
   expect(boxes()[0].children).toEqual([]);
 });
+
+test("a node of a type no plugin registers is pressed by its box and dragged like any item, its own keys kept", () => {
+  const { view, pointer, nodeOf } = setup((d) => {
+    d.nodes.push({ id: "x-1", type: "x.chart", page: d.pages[0].id, x: 10, y: 20, width: 100, height: 40, z: 0, rotation: 0, opacity: 1, locked: false, series: [1] } as unknown as Node);
+  });
+  pointer("pointerdown", 50, 30);
+  expect(view.selection.ids).toEqual(["x-1"]);
+  pointer("pointermove", 90, 70);
+  pointer("pointerup", 90, 70);
+  expect(nodeOf("x-1")).toMatchObject({ x: 50, y: 60, width: 100, height: 40, series: [1] });
+});

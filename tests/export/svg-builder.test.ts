@@ -136,8 +136,15 @@ test("a node whose type is not registered is skipped with a warning", () => {
   const d = docWith({});
   const { svg, warnings } = buildPageSvg(d, d.pages[0], createRegistries(), new Map([[d.nodes[0].id, image()]]));
   expect(svg).not.toContain("<image");
-  expect(warnings).toHaveLength(1);
-  expect(warnings[0]).toContain('"file"');
+  expect(warnings).toEqual(['"file" item skipped: no plugin draws it']);
+});
+
+test("a node of a type no plugin draws (another plugin's item) is skipped with the warning, its own keys ignored", () => {
+  const d = docWith({});
+  d.nodes.push({ id: "x-1", type: "x.chart", page: d.pages[0].id, x: 0, y: 0, width: 10, height: 10, z: 5, rotation: 0, opacity: 1, locked: false, series: [1] } as never);
+  const { warnings, drawn } = buildPageSvg(d, d.pages[0], reg(), new Map([[d.nodes[0].id, image()]]));
+  expect(warnings).toEqual(['"x.chart" item skipped: no plugin draws it']);
+  expect(drawn).toBe(1);
 });
 
 test("nodes are drawn in z order, equal z keeping document order", () => {

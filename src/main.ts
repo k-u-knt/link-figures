@@ -17,6 +17,7 @@ import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
+import { pngExporter, tiffExporter } from "./export/exporters/raster";
 import { svgExporter } from "./export/exporters/svg";
 import { localFontSource } from "./fonts/local-source";
 import { createDecoders } from "./links/decoders";
@@ -74,6 +75,8 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.nodeTypes.register(groupNodeType);
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
+    this.registries.exporters.register(pngExporter);
+    this.registries.exporters.register(tiffExporter);
     for (const paint of builtinPaintTypes) this.registries.paints.register(paint);
     for (const kind of builtinShapeKinds) this.registries.shapes.register(kind);
     for (const route of builtinRoutes) this.registries.routes.register(route);

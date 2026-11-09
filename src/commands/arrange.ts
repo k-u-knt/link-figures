@@ -51,7 +51,7 @@ function applyOffsets(ctx: CommandContext, command: string, offsets: Map<NodeId,
   const moves = [...offsets].filter(([, d]) => d.x !== 0 || d.y !== 0);
   if (moves.length === 0) return;
   ctx.store.commit(command, (draft) => {
-    for (const [id, d] of moves) translateUnits(draft, [id], d.x, d.y, ctx.registries);
+    for (const [id, d] of moves) translateUnits(draft, [id], d.x, d.y, ctx.registries, ctx.view?.unreadableNodes);
   });
 }
 

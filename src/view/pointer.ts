@@ -9,7 +9,7 @@ import { collectSnapLines, SNAP_OPTION, SNAP_REACH_SCREEN_PX, snapEdges, snapMov
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { DragTargets, ToolPreview } from "../registry/command";
-import type { HandleDrag, InteractionContext, NodeType } from "../registry/node-type";
+import { nodeTypeFor, type HandleDrag, type InteractionContext, type NodeType } from "../registry/node-type";
 import type { SnapLine } from "../registry/snap";
 import { CROP_ROTATED_NOTICE, CropSession, croppable, type CropHandle } from "./crop-session";
 import type { LinkFiguresView } from "./figure-view";
@@ -1316,13 +1316,12 @@ export class PointerController {
 
   private nodeType(node: Node): NodeType | undefined {
     // A node its plugin could not read is pressed by its box, as a placeholder (see `LinkFiguresView.unreadableNodes`).
-    if (this.view.unreadableNodes?.has(node.id)) return undefined;
-    return this.view.plugin.registries.nodeTypes.get(node.type);
+    return nodeTypeFor(this.view.plugin.registries, node, this.view.unreadableNodes);
   }
 
   /** What a node type's pointer hooks are given: the registries, `doc`, the view's settings and the snap reach at its zoom. */
   private interaction(doc: Document): InteractionContext {
-    return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key), snapReach: this.snapReach() };
+    return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key), snapReach: this.snapReach(), unreadable: this.view.unreadableNodes };
   }
 
   // Snapping

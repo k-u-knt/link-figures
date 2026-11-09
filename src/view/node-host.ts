@@ -7,7 +7,7 @@ import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
 import { viewNodeType } from "../nodes/placeholder-node";
-import type { ImageState, NodeRenderer, RenderContext } from "../registry/node-type";
+import { nodeTypeFor, type ImageState, type NodeRenderer, type RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
@@ -165,7 +165,7 @@ export class NodeHost {
     }
     for (const node of doc.nodes) {
       if (changed.has(node.id)) continue;
-      const deps = this.registries.nodeTypes.get(node.type)?.dependsOn?.(node);
+      const deps = nodeTypeFor(this.registries, node, this.view.unreadableNodes)?.dependsOn?.(node);
       const entry = deps?.some((dep) => changed.has(dep)) ? this.entries.get(node.id) : undefined;
       if (entry) this.updateEntry(entry, node);
     }

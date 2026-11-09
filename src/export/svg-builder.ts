@@ -2,7 +2,7 @@ import { pageSizePx } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Registries } from "../registry";
-import type { SvgContext } from "../registry/node-type";
+import { nodeTypeFor, type SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
 import { isTransparentPaper } from "../model/paper";
 
@@ -84,7 +84,7 @@ export function buildPageSvg(
 
   const body: string[] = [];
   for (const node of nodes) {
-    const type = opts.unreadable?.has(node.id) ? undefined : registries.nodeTypes.get(node.type);
+    const type = nodeTypeFor(registries, node, opts.unreadable);
     if (!type) {
       const warning = opts.unreadable?.has(node.id) ? unreadableTypeWarning(node.type) : skippedTypeWarning(node.type);
       // Said once for all the items of the type.

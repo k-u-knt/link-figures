@@ -301,11 +301,11 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     if (which === 0 || which === 1) {
       const mode = snapModeOf(ctx.viewOption(SNAP_MODE_OPTION));
       const at = { x: roundPx(to.x), y: roundPx(to.y) };
-      const end = endAt(ctx.doc, ctx.registries, node.page, at, under, mode, node.id, ctx.snapReach);
+      const end = endAt(ctx.doc, ctx.registries, node.page, at, under, mode, node.id, ctx.snapReach, ctx.unreadable);
       return {
         call: { id: "connector.setEnd", args: { id: node.id, which, end } },
         preview: previewOf(withEnd(node, which, end), ctx),
-        marks: snapMarks(ctx.doc, ctx.registries, node.page, at, under, mode, node.id, ctx.snapReach),
+        marks: snapMarks(ctx.doc, ctx.registries, node.page, at, under, mode, node.id, ctx.snapReach, ctx.unreadable),
       };
     }
     const route = ctx.registries.routes.get(node.route);

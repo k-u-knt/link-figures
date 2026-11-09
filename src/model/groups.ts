@@ -1,5 +1,6 @@
 import { current, isDraft } from "immer";
 import type { Registries } from "../registry";
+import { nodeTypeFor } from "../registry/node-type";
 import { nodeSizePx, roundPx } from "../view/pointer-math";
 import type { Pt } from "./geometry";
 import type { Document, Node, NodeId } from "./types";
@@ -118,14 +119,14 @@ export function commonParent(doc: Document, ids: readonly NodeId[]): NodeId | nu
  * nothing else (text size, stroke width, corner radius) changes. A container's own box is left to the group normaliser,
  * which derives it from its members. Only fields that change are written.
  */
-export function scaleUnits(draft: Document, ids: readonly NodeId[], sx: number, sy: number, origin: Pt, registries: Registries): void {
+export function scaleUnits(draft: Document, ids: readonly NodeId[], sx: number, sy: number, origin: Pt, registries: Registries, unreadable?: ReadonlySet<NodeId>): void {
   const doc: Document = isDraft(draft) ? current(draft) : structuredClone(draft);
   const wanted = new Set(expandUnits(doc, ids));
   const ctx = { registries, doc };
   for (const target of draft.nodes) {
     if (!wanted.has(target.id)) continue;
     const node = doc.nodes.find((n) => n.id === target.id) as Node;
-    const type = registries.nodeTypes.get(node.type);
+    const type = nodeTypeFor(registries, node, unreadable);
     let next: Record<string, unknown>;
     if (type?.scale) next = type.scale(node, sx, sy, origin, ctx) as Record<string, unknown>;
     else if (type?.members) continue;

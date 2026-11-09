@@ -377,6 +377,21 @@ describe("nodes drawn from other nodes", () => {
     t.nodeHost.applyChange(t.doc, new Set([t.a.id, t.label.id]));
     expect(t.updatesOf(t.label.id)).toHaveLength(2);
   });
+
+  test("an unreadable node's dependsOn is never called, and one that would throw cannot break the update", () => {
+    const t = setup();
+    const dependsOn = vi.fn((): NodeId[] => {
+      throw new Error("bad data");
+    });
+    const dependent: NodeType = { ...t.recording.type, dependsOn };
+    const registries = { nodeTypes: { get: (type: string) => (type === "text" ? dependent : t.recording.type) } } as unknown as Registries;
+    const view = { ...t.view, unreadableNodes: new Set([t.label.id]) };
+    const nodeHost = new NodeHost(view as never, { nodesHost: () => t.host } as never, registries);
+    nodeHost.renderAll(t.doc);
+    const next: Document = { ...t.doc, nodes: t.doc.nodes.map((n) => (n.id === t.a.id ? ({ ...n, x: 9 } as Node) : n)) };
+    expect(() => nodeHost.applyChange(next, new Set([t.a.id]))).not.toThrow();
+    expect(dependsOn).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolve", () => {

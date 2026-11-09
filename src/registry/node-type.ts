@@ -126,6 +126,11 @@ export interface InteractionContext {
   viewOption(key: string): unknown;
   /** How near (page px) a dragged end must come to a snap point to take it, at the view's zoom (see `SNAP_REACH_PX`). */
   snapReach: number;
+  /**
+   * The nodes their plugin could not read (see `FigureViewLike.unreadableNodes`): handled as placeholders, so a new
+   * connector end is never attached to one (see `nodeTypeFor`).
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /** A point of a selected node that can be dragged to change it, in page px; `id` is the node type's own. */
@@ -298,4 +303,14 @@ export class NodeTypeRegistry {
   all(): NodeType<any>[] {
     return [...this.types.values()];
   }
+}
+
+/**
+ * The NodeType whose hooks may run on `node`: the one registered for its type, or undefined for a type no plugin
+ * registers and for a node its plugin's `migrate` hook could not read (one of `unreadable`, see `loadDocument`). Such a
+ * node is handled as a placeholder, by its box: callers take the same fallback they take for an unregistered type, and
+ * its type's hooks are never called on it. Every call of a node's type hooks looks its type up here.
+ */
+export function nodeTypeFor(registries: { nodeTypes: NodeTypeRegistry }, node: Pick<Node, "id" | "type">, unreadable?: ReadonlySet<NodeId>): NodeType<any> | undefined {
+  return unreadable?.has(node.id) ? undefined : registries.nodeTypes.get(node.type);
 }

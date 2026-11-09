@@ -2,6 +2,7 @@ import type { Document, End, Node, NodeId } from "./types";
 import type { Pt, Rect } from "./geometry";
 import { rectPath, transformPath, type Matrix, type PathData } from "./path";
 import type { Registries } from "../registry";
+import { nodeTypeFor } from "../registry/node-type";
 import type { Anchor } from "../registry/shape-kind";
 import { boxAnchors } from "../shapes/builtin";
 
@@ -54,10 +55,10 @@ export function boxAttachable(node: Node): Attachable {
  * `null` when there is no such node, or its type does not implement `attachable` (a connector, or a type that is not
  * registered).
  */
-export function attachTarget(doc: Document, registries: Registries, id: NodeId): AttachTarget | null {
+export function attachTarget(doc: Document, registries: Registries, id: NodeId, unreadable?: ReadonlySet<NodeId>): AttachTarget | null {
   const node = doc.nodes.find((n) => n.id === id);
   if (!node) return null;
-  const type = registries.nodeTypes.get(node.type);
+  const type = nodeTypeFor(registries, node, unreadable);
   if (!type?.attachable) return null;
   return { ...type.attachable(node, { registries }), center: centerOf(node) };
 }
@@ -83,10 +84,11 @@ export function attachableUnder(
   page: string,
   under: readonly NodeId[],
   exclude?: NodeId,
+  unreadable?: ReadonlySet<NodeId>,
 ): { id: NodeId; target: AttachTarget } | null {
   for (const id of under) {
     if (id === exclude || doc.nodes.find((n) => n.id === id)?.page !== page) continue;
-    const target = attachTarget(doc, registries, id);
+    const target = attachTarget(doc, registries, id, unreadable);
     if (target) return { id, target };
   }
   return null;
@@ -112,12 +114,13 @@ export function attachableNear(
   mode: SnapMode,
   reach: number,
   exclude?: NodeId,
+  unreadable?: ReadonlySet<NodeId>,
 ): { id: NodeId; target: AttachTarget; anchor: Anchor | null } | null {
   if (!(reach > 0)) return null;
   let best: { id: NodeId; target: AttachTarget; anchor: Anchor | null; away: number; z: number } | null = null;
   for (const node of doc.nodes) {
     if (node.id === exclude || node.page !== page) continue;
-    const target = attachTarget(doc, registries, node.id);
+    const target = attachTarget(doc, registries, node.id, unreadable);
     if (!target) continue;
     const points: (Anchor | null)[] = mode === "center" || target.anchors.length === 0 ? [null] : target.anchors;
     for (const anchor of points) {
@@ -145,12 +148,13 @@ export function endAt(
   mode: SnapMode,
   exclude?: NodeId,
   reach = 0,
+  unreadable?: ReadonlySet<NodeId>,
 ): End {
-  const near = attachableNear(doc, registries, page, at, mode, reach, exclude);
+  const near = attachableNear(doc, registries, page, at, mode, reach, exclude, unreadable);
   if (near) {
     return near.anchor ? { kind: "attached", node: near.id, snap: "anchor", anchor: near.anchor.id } : { kind: "attached", node: near.id, snap: "center" };
   }
-  const found = attachableUnder(doc, registries, page, under, exclude);
+  const found = attachableUnder(doc, registries, page, under, exclude, unreadable);
   if (!found) return { kind: "free", x: at.x, y: at.y };
   const { anchors } = found.target;
   if (mode === "center" || anchors.length === 0) return { kind: "attached", node: found.id, snap: "center" };
@@ -168,11 +172,11 @@ export function nearestAnchor(anchors: readonly Anchor[], at: Pt): Anchor {
  * attached one must be attached to a node of `doc` on that page whose type can be attached to. Which anchor it names is
  * the connector normaliser's to settle. The message follows the end's name: `is attached to "a", which is …`.
  */
-export function endError(doc: Document, registries: Registries, end: End, page: string): string | null {
+export function endError(doc: Document, registries: Registries, end: End, page: string, unreadable?: ReadonlySet<NodeId>): string | null {
   if (end.kind === "free") return null;
   const target = doc.nodes.find((n) => n.id === end.node);
   if (!target) return `is attached to "${end.node}", which is not a node of the figure`;
-  if (!attachTarget(doc, registries, end.node)) return `cannot attach to "${end.node}" (a ${target.type})`;
+  if (!attachTarget(doc, registries, end.node, unreadable)) return `cannot attach to "${end.node}" (a ${target.type})`;
   if (target.page !== page) return `is attached to "${end.node}", which is on another page`;
   return null;
 }
@@ -191,8 +195,9 @@ export function snapMarks(
   mode: SnapMode,
   exclude?: NodeId,
   reach = 0,
+  unreadable?: ReadonlySet<NodeId>,
 ): Pt[] {
-  const found = attachableNear(doc, registries, page, at, mode, reach, exclude) ?? attachableUnder(doc, registries, page, under, exclude);
+  const found = attachableNear(doc, registries, page, at, mode, reach, exclude, unreadable) ?? attachableUnder(doc, registries, page, under, exclude, unreadable);
   if (!found) return [];
   const { anchors, center } = found.target;
   return mode === "center" || anchors.length === 0 ? [center] : anchors.map((a) => ({ x: a.x, y: a.y }));

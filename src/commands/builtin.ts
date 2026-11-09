@@ -5,6 +5,7 @@ import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
 import { expandUnits, isGroup, isLocked } from "../model/groups";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
+import { SNAP_OPTION, snapOn } from "../model/snap";
 import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
 import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
@@ -373,6 +374,27 @@ async function resetAspect(ctx: CommandContext): Promise<void> {
  * Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). Those
  * that act on the selection, the zoom, a tool or a dialog are `needsView`; the rest can run headless through the API.
  */
+/**
+ * The toolbar toggle for snapping drags to items, the page and its margins (see `model/snap`): a setting of the view's
+ * own (`SNAP_OPTION`), on until turned off; its button says which it is, and is shown pressed while on.
+ */
+export const snapToggle: Command = {
+  id: "snap.toggle",
+  name: "Snap",
+  icon: "magnet",
+  group: "view",
+  needsView: true,
+  applies: (ctx) => !!ctx.view,
+  run(ctx) {
+    if (!ctx.view) throw new CommandError("snap.toggle needs the figure to be open");
+    ctx.view.setViewOption(SNAP_OPTION, !snapOn(ctx.view.viewOption(SNAP_OPTION)));
+  },
+  state: (ctx) => {
+    const on = snapOn(ctx.view?.viewOption(SNAP_OPTION));
+    return { name: on ? "Snap: on" : "Snap: off", icon: "magnet", active: on };
+  },
+};
+
 function builtinCommands(): Command[] {
   // A tool: the toolbar button and the palette entry arm it, and the next press on a page places a label there.
   const text: Command = {
@@ -422,6 +444,7 @@ function builtinCommands(): Command[] {
       run: deletePage,
     },
     { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).fitPage() },
+    snapToggle,
     { id: "zoom-100", name: "Zoom to 100%", icon: "search", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).zoomTo(1) },
     { id: "export", name: "Export", icon: "download", group: "export", needsView: true, applies: () => true, run: (ctx) => editor(ctx).requestExport() },
     {

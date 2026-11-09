@@ -1,12 +1,15 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
+import { visualBounds } from "../model/arrange";
 import { SNAP_REACH_PX } from "../model/attach";
-import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
+import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, unionRect, type PlacePoint, type Pt, type Rect } from "../model/geometry";
 import { descendantsOf, isGroup, isLocked, outermostUnit, parentOf, unitsOf } from "../model/groups";
 import { toSvgPath } from "../model/path";
+import { collectSnapLines, SNAP_OPTION, SNAP_REACH_SCREEN_PX, snapEdges, snapMove, snapOn, type SnapLines } from "../model/snap";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { DragTargets, ToolPreview } from "../registry/command";
 import type { HandleDrag, InteractionContext, NodeType } from "../registry/node-type";
+import type { SnapLine } from "../registry/snap";
 import type { LinkFiguresView } from "./figure-view";
 import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, nodeSizePx, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
 import { pagePointAt, pageWorldRect } from "./viewport";
@@ -35,6 +38,12 @@ type Intent =
   | { kind: "marquee"; pageId: PageId; base: NodeId[]; within: NodeId | null; leaveOnClick: boolean };
 
 /**
+ * What a drag snaps to (see `model/snap`): the lines on the drag's page, taken from the document as it was when the drag
+ * began, less what is being dragged. Null on a gesture that does not snap (snapping off when it began).
+ */
+type Snap = { pageId: PageId; lines: SnapLines } | null;
+
+/**
  * `idle -> pressed -> moving | resizing | handling | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool
  * that is dragged out. (Panning the canvas is the view's own gesture, which this one stays out of: see
  * `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels; `from` is the same point on the
@@ -47,11 +56,11 @@ type Intent =
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
-  | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean }
-  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null }
+  | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean; snap: Snap; bounds: Rect | null }
+  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null; snap: Snap }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; within: NodeId | null; el: HTMLElement }
-  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null };
+  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null; snap: Snap };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
@@ -88,6 +97,8 @@ export class PointerController {
   private hoverEl: Element | null = null;
   /** The faint dashed outline of the entered group (see `LinkFiguresView.enteredGroup`), or null. */
   private enteredEl: HTMLElement | null = null;
+  /** The snap guides of the drag under way (see `drawGuides`), in its page's overlay. */
+  private guideEls: HTMLElement[] = [];
 
   constructor(private readonly view: LinkFiguresView) {}
 
@@ -296,8 +307,8 @@ export class PointerController {
     const now = this.view.viewport.toWorld(this.view.stagePoint(ev));
     const dx = now.x - g.world.x;
     const dy = now.y - g.world.y;
-    if (g.kind === "moving") this.moveBy(g, dx, dy);
-    else if (g.kind === "resizing") this.resizeBy(g, dx, dy, ev.shiftKey);
+    if (g.kind === "moving") this.moveBy(g, dx, dy, ev);
+    else if (g.kind === "resizing") this.resizeBy(g, dx, dy, ev);
     else if (g.kind === "handling") this.dragHandleTo(g, now);
     else if (g.kind === "marquee") this.sweep(g, now);
   }
@@ -315,7 +326,13 @@ export class PointerController {
     if (intent.kind === "move") {
       const editable = this.editableSelection(doc);
       const ids = doc.nodes.filter((n) => editable.has(n.id)).map((n) => n.id);
-      if (ids.length > 0) return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false };
+      if (ids.length > 0) {
+        // The dragged units' bounds snap as one, to the lines of their page (they are all on one) less themselves.
+        const pageId = doc.nodes.find((n) => n.id === ids[0])?.page;
+        const snap = pageId === undefined ? null : this.snapLines(pageId, ids);
+        const bounds = snap && unionRect(ids.map((id) => visualBounds(doc, id, this.view.plugin.registries)));
+        return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false, snap, bounds };
+      }
       const page = this.selectionPage(doc);
       return page === null ? null : this.beginMarquee(g, page, [], this.entered);
     }
@@ -324,7 +341,7 @@ export class PointerController {
       if (!node) return null;
       const start = { x: node.x, y: node.y, width: node.width, height: node.height };
       const group = isGroup(doc, node.id, this.view.plugin.registries) ? { pageId: node.page, el: null } : null;
-      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start, group };
+      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start, group, snap: this.snapLines(node.page, [node.id]) };
     }
     if (intent.kind === "handle") {
       if (!doc.nodes.some((n) => n.id === intent.id)) return null;
@@ -345,9 +362,11 @@ export class PointerController {
 
   /**
    * Moves the dragged nodes to where the drag has taken them, by `node.move` (without the page change, which is for
-   * the release): each call moves them on by what is left to go, and the calls of one drag make one undo step.
+   * the release): each call moves them on by what is left to go, and the calls of one drag make one undo step. The
+   * total offset is first snapped, so that an edge or centre of the dragged units' bounds that comes within reach of a
+   * line lands on it (not with Alt held).
    */
-  private moveBy(g: Moving, dx: number, dy: number): void {
+  private moveBy(g: Moving, dx: number, dy: number, ev: { altKey?: boolean }): void {
     const present = new Set(this.store.doc.nodes.map((n) => n.id));
     g.ids = g.ids.filter((id) => present.has(id));
     // What was being dragged has been deleted from under the pointer.
@@ -355,7 +374,12 @@ export class PointerController {
       this.endGesture();
       return;
     }
-    const to = { x: roundPx(dx), y: roundPx(dy) };
+    let to = { x: roundPx(dx), y: roundPx(dy) };
+    if (g.snap && g.bounds && this.snapping(ev)) {
+      const s = snapMove(g.snap.lines, offsetRect(g.bounds, to), this.snapReachPage());
+      to = { x: roundPx(to.x + s.dx), y: roundPx(to.y + s.dy) };
+      this.drawGuides(g.snap, s.guides, offsetRect(g.bounds, to));
+    } else this.clearGuides();
     const step = { x: roundPx(to.x - g.moved.x), y: roundPx(to.y - g.moved.y) };
     if (step.x === 0 && step.y === 0) return;
     this.view.runCommandById("node.move", { ids: g.ids, dx: step.x, dy: step.y, pages: false }, g.started ? "continue" : "start");
@@ -379,12 +403,12 @@ export class PointerController {
    * A group is not changed while the drag goes on: its new box is outlined in its page's overlay, and the release
    * resizes it (see `finishGroupResize`). Any other node's box is written directly, the commits making one undo step.
    */
-  private resizeBy(g: Resizing, dx: number, dy: number, keepAspect: boolean): void {
+  private resizeBy(g: Resizing, dx: number, dy: number, ev: { shiftKey: boolean; altKey?: boolean }): void {
     if (!this.store.doc.nodes.some((n) => n.id === g.id)) {
       this.endGesture();
       return;
     }
-    const next = resizedBox(g, dx, dy, keepAspect);
+    const next = this.snappedBox(g, dx, dy, ev);
     if (g.group) {
       const host = this.overlayOf(g.group.pageId);
       if (!host) return;
@@ -414,9 +438,28 @@ export class PointerController {
    */
   private finishGroupResize(g: Resizing, ev: PointerEvent): void {
     const now = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    const box = resizedBox(g, now.x - g.world.x, now.y - g.world.y, ev.shiftKey);
+    const box = this.snappedBox(g, now.x - g.world.x, now.y - g.world.y, ev);
     this.endGesture();
     if (this.store.doc.nodes.some((n) => n.id === g.id)) this.view.runCommandById("node.update", { id: g.id, patch: box });
+  }
+
+  /**
+   * The box a resize drag by (`dx`, `dy`) gives (see `resizedBox`), its dragged edges snapped to the lines within reach,
+   * with guides drawn for them. Not snapped with Alt held, with Shift (the aspect is kept, which a snapped edge would
+   * break), nor for a rotated node, whose box's edges are not where it is drawn.
+   */
+  private snappedBox(g: Resizing, dx: number, dy: number, ev: { shiftKey: boolean; altKey?: boolean }): Rect {
+    const next = resizedBox(g, dx, dy, ev.shiftKey);
+    const node = this.store.doc.nodes.find((n) => n.id === g.id);
+    if (!g.snap || ev.shiftKey || !node || node.rotation !== 0 || !this.snapping(ev)) {
+      this.clearGuides();
+      return next;
+    }
+    const edges = { left: g.handle.includes("w"), right: g.handle.includes("e"), top: g.handle.includes("n"), bottom: g.handle.includes("s") };
+    const s = snapEdges(g.snap.lines, next, edges, this.snapReachPage());
+    const box = { x: roundPx(s.rect.x), y: roundPx(s.rect.y), width: nodeSizePx(roundPx(s.rect.width)), height: nodeSizePx(roundPx(s.rect.height)) };
+    this.drawGuides(g.snap, s.guides, box);
+    return box;
   }
 
   /**
@@ -479,7 +522,9 @@ export class PointerController {
 
   private startDrawing(ev: PointerEvent, world: Pt, from: PlacePoint): void {
     const under = this.itemsUnder(this.store.doc, from.page.id, world);
-    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null };
+    // A tool with a preview of its own (the connector) finds what it attaches to itself; a box is dragged out snapping.
+    const snap = this.view.armedTool?.preview ? null : this.snapLines(from.page.id, []);
+    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null, snap };
     try {
       this.stage?.setPointerCapture(ev.pointerId);
     } catch {
@@ -489,17 +534,26 @@ export class PointerController {
 
   /**
    * Where the pointer of `ev` puts the far end of the drawing: `from` itself while the pointer has not gone further
-   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper; and the items
-   * of the press page under the pointer (under the press, for a click). Null when the press page has gone.
+   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper and snapped
+   * to the lines within reach (not with Alt, nor Shift, which squares the box); the items of the press page under the
+   * pointer (under the press, for a click); and the lines it snapped to.
+   * Null when the press page has gone.
    */
-  private drawingEnd(g: Drawing, ev: PointerEvent): { to: PlacePoint; targets: DragTargets } | null {
+  private drawingEnd(g: Drawing, ev: PointerEvent): { to: PlacePoint; targets: DragTargets; guides: SnapLine[] } | null {
     const doc = this.store.doc;
     const page = doc.pages.find((p) => p.id === g.from.page.id);
     if (!page) return null;
     const reach = this.snapReach();
-    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under, reach } };
+    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under, reach }, guides: [] };
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    return { to: clampToPaper(doc, page, world), targets: { from: g.under, to: this.itemsUnder(doc, page.id, world), reach } };
+    let to = clampToPaper(doc, page, world);
+    let guides: SnapLine[] = [];
+    if (g.snap && !ev.shiftKey && this.snapping(ev)) {
+      const s = snapMove(g.snap.lines, { x: to.x, y: to.y, width: 0, height: 0 }, this.snapReachPage());
+      to = clampToPaper(doc, page, { x: world.x + s.dx, y: world.y + s.dy });
+      guides = s.guides;
+    }
+    return { to, targets: { from: g.under, to: this.itemsUnder(doc, page.id, world), reach }, guides };
   }
 
   /**
@@ -513,6 +567,8 @@ export class PointerController {
       return;
     }
     const { to, targets } = end;
+    if (g.snap && end.guides.length > 0) this.drawGuides(g.snap, end.guides, dragRect(g.from, to, ev.shiftKey));
+    else this.clearGuides();
     if (this.view.armedTool?.preview) {
       g.el = this.drawPreviewIn(g.from.page.id, this.view.toolPreview(to === g.from ? null : g.from, to, targets), g.el);
       return;
@@ -647,6 +703,7 @@ export class PointerController {
     // First, so the capture event that the release below causes finds nothing to end.
     this.gesture = { kind: "idle" };
     this.dragStartedAt = null;
+    this.clearGuides();
     if (g.kind === "idle") return;
     this.store.endMerge();
     if (g.kind === "marquee" || g.kind === "drawing" || g.kind === "handling") g.el?.remove();
@@ -690,6 +747,11 @@ export class PointerController {
   // Keyboard
 
   private onKeyDown(ev: KeyboardEvent): void {
+    // Escape takes the snap guides of a drag away (the drag goes on, and draws them again where it snaps next).
+    if (ev.key === "Escape" && this.guideEls.length > 0) {
+      ev.preventDefault();
+      this.clearGuides();
+    }
     // Escape during a group's resize drops it: the group is changed only by the release.
     if (ev.key === "Escape" && this.gesture.kind === "resizing" && this.gesture.group && !this.view.readOnly) {
       ev.preventDefault();
@@ -1007,6 +1069,64 @@ export class PointerController {
     return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key), snapReach: this.snapReach() };
   }
 
+  // Snapping
+
+  /** The lines on page `pageId` a drag snaps to, less `exclude` (see `Snap`); null when snapping is off or the page is gone. */
+  private snapLines(pageId: PageId, exclude: NodeId[]): Snap {
+    if (!snapOn(this.view.viewOption(SNAP_OPTION))) return null;
+    const doc = this.store.doc;
+    const page = doc.pages.find((p) => p.id === pageId);
+    if (!page) return null;
+    const registries = this.view.plugin.registries;
+    return { pageId, lines: collectSnapLines(registries.snaps.all(), doc, page, new Set(exclude), registries) };
+  }
+
+  /** Whether the drag snaps at the pointer event `ev`: not with Alt held, nor with snapping toggled off. */
+  private snapping(ev: { altKey?: boolean }): boolean {
+    return !ev.altKey && snapOn(this.view.viewOption(SNAP_OPTION));
+  }
+
+  /** `SNAP_REACH_SCREEN_PX` in page px at the viewport's zoom. */
+  private snapReachPage(): number {
+    return SNAP_REACH_SCREEN_PX / this.view.viewport.zoom;
+  }
+
+  /**
+   * Draws a guide (a 1 px line) in the overlay of the drag's page along each line in `guides`, one for lines at the same
+   * place, spanning them and `moving` (what is dragged, as it now is); the guides drawn before are replaced.
+   */
+  private drawGuides(snap: NonNullable<Snap>, guides: SnapLine[], moving: Rect): void {
+    this.clearGuides();
+    const host = this.overlayOf(snap.pageId);
+    if (!host || guides.length === 0) return;
+    const vertical = new Set(snap.lines.x);
+    const spans = new Map<string, { vertical: boolean; pos: number; from: number; to: number }>();
+    for (const line of guides) {
+      const v = vertical.has(line);
+      const key = `${v ? "x" : "y"}:${line.pos}`;
+      const span = spans.get(key) ?? { vertical: v, pos: line.pos, from: v ? moving.y : moving.x, to: v ? moving.y + moving.height : moving.x + moving.width };
+      span.from = Math.min(span.from, line.from);
+      span.to = Math.max(span.to, line.to);
+      spans.set(key, span);
+    }
+    for (const span of spans.values()) {
+      const el = host.ownerDocument.createElement("div");
+      el.className = `lf-snap-guide ${span.vertical ? "is-vertical" : "is-horizontal"}`;
+      const style = el.style;
+      style.left = `${span.vertical ? span.pos : span.from}px`;
+      style.top = `${span.vertical ? span.from : span.pos}px`;
+      style.width = `${span.vertical ? 0 : span.to - span.from}px`;
+      style.height = `${span.vertical ? span.to - span.from : 0}px`;
+      host.appendChild(el);
+      this.guideEls.push(el);
+    }
+  }
+
+  private clearGuides(): void {
+    for (const el of this.guideEls) el.remove();
+    this.guideEls = [];
+  }
+
   /** `SNAP_REACH_PX` in page px at the viewport's zoom. */
   private snapReach(): number {
     return SNAP_REACH_PX / this.view.viewport.zoom;
@@ -1028,6 +1148,11 @@ function resizedBox(g: Resizing, dx: number, dy: number, keepAspect: boolean): R
   const next = resizeRect(g.start, g.handle, dx, dy, { keepAspect, min: MIN_NODE_PX });
   // Rounding must not take a size back under the least it may be.
   return { x: roundPx(next.x), y: roundPx(next.y), width: nodeSizePx(roundPx(next.width)), height: nodeSizePx(roundPx(next.height)) };
+}
+
+/** `rect` moved by `by`. */
+function offsetRect(rect: Rect, by: Pt): Rect {
+  return { x: rect.x + by.x, y: rect.y + by.y, width: rect.width, height: rect.height };
 }
 
 /** The world point `world` as a point on `page`, clamped to its paper. */

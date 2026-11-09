@@ -499,3 +499,17 @@
   border: calc(1px / var(--lf-zoom, 1)) dashed var(--interactive-accent);
   pointer-events: none;
 }
+
+/* A line a drag has snapped to: 1 screen px wide whatever the zoom, along the line (see PointerController.drawGuides). */
+.lf-snap-guide {
+  position: absolute;
+  pointer-events: none;
+}
+
+.lf-snap-guide.is-vertical {
+  border-left: calc(1px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+}
+
+.lf-snap-guide.is-horizontal {
+  border-top: calc(1px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+}

@@ -6,6 +6,17 @@ import { MIN_NODE_PX } from "../constants";
 import type { ConnectorNode, Document, NodeId, Page } from "./types";
 import { ancestorsOf, childrenOf, descendantsOf, unitsOf } from "./groups";
 
+/** The view option (see `FigureViewLike.viewOption`) that turns snapping off when `false`; any other value, unset included, is on. */
+export const SNAP_OPTION = "snap";
+
+/** How near, in screen px, a dragged edge or centre has to come to a line to snap to it; divided by the zoom for page px. */
+export const SNAP_REACH_SCREEN_PX = 6;
+
+/** Whether the value of the view option `SNAP_OPTION` turns snapping on: anything but `false`. */
+export function snapOn(value: unknown): boolean {
+  return value !== false;
+}
+
 /** The lines a move or resize snaps to, by axis: `x` are vertical lines, `y` horizontal ones. */
 export type SnapLines = { x: SnapLine[]; y: SnapLine[] };
 

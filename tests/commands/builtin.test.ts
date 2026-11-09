@@ -102,6 +102,7 @@ test("the built-in commands, in toolbar order, with the icons and groups of the 
     "page/add-page/file-plus",
     "page/delete-page/file-minus",
     "view/fit-page/maximize",
+    "view/snap.toggle/magnet",
     "view/zoom-100/search",
     "export/export/download",
   ]);
@@ -218,7 +219,7 @@ describe("commands that act on nodes take ids", () => {
 test("the commands that need a view are flagged, and the rest are not", () => {
   const { plugin } = setup();
   const needsView = plugin.registries.commands.all().filter((c) => c.needsView).map((c) => c.id).sort();
-  expect(needsView).toEqual(["export", "fit-page", "insert-text", "open-source", "reset-aspect", "zoom-100"]);
+  expect(needsView).toEqual(["export", "fit-page", "insert-text", "open-source", "reset-aspect", "snap.toggle", "zoom-100"]);
 });
 
 describe("duplicating connectors", () => {

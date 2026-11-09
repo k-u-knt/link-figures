@@ -16,6 +16,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@types/pako": "^2.0.4",
     "builtin-modules": "^5.4.0",
     "esbuild": "^0.28.2",
     "happy-dom": "^21.0.4",
@@ -30,6 +31,7 @@
     "immer": "^11.2.9",
     "jspdf": "^4.2.1",
     "monkey-around": "^3.0.0",
+    "pako": "^2.2.0",
     "svg2pdf.js": "^2.8.1",
     "utif": "^3.1.0"
   }

@@ -5,7 +5,7 @@ import type { ParsedFigureFile } from "../format/parse";
 import { serializeFigureFile } from "../format/serialize";
 import { createFigureStore } from "../model/normalise";
 import type { DocumentStore } from "../model/store";
-import type { Document } from "../model/types";
+import type { Document, NodeId } from "../model/types";
 import type { Registries } from "../registry";
 import { CommandError, type Command, type CommandContext, type CommandStore, type UndoStep } from "../registry/command";
 import { validateArgs } from "../registry/params";
@@ -173,9 +173,9 @@ export interface FigureFiles {
 }
 
 /** A figure file's text loaded into a store with a figure's normalisers, and what loading it gave. */
-function loadFigure(text: string, registries: Registries): { store: DocumentStore; parsed: ParsedFigureFile } {
-  const { doc, parsed } = loadDocument(text, registries);
-  return { store: createFigureStore(doc, registries), parsed };
+function loadFigure(text: string, registries: Registries): { store: DocumentStore; parsed: ParsedFigureFile; unreadable: ReadonlySet<NodeId> } {
+  const { doc, parsed, unreadable } = loadDocument(text, registries);
+  return { store: createFigureStore(doc, registries), parsed, unreadable };
 }
 
 /** The document of the figure file at `path`, as a view would load it. */
@@ -210,7 +210,11 @@ export async function withHeadlessFigure<T>(
 ): Promise<T> {
   let result: T | undefined;
   await files.process(path, (text) => {
-    const { store, parsed } = loadFigure(text, registries);
+    const loadedFigure = loadFigure(text, registries);
+    const { store, parsed } = loadedFigure;
+    // The nodes their plugin could not read, as a view holds them: no hook of their type is called on them, and a
+    // duplicate adds its copies of them for the calls after it.
+    const unreadable = new Set(loadedFigure.unreadable);
     // After the normalisers, so a file that only they would change is not rewritten when the call changes nothing.
     const loaded = store.doc;
     const ctx: CommandContext = {
@@ -220,6 +224,8 @@ export async function withHeadlessFigure<T>(
       store,
       selection: [],
       page: undefined,
+      unreadable,
+      markUnreadable: (ids) => ids.forEach((id) => unreadable.add(id)),
       ...(options.pageLimitMm !== undefined ? { pageLimitMm: options.pageLimitMm } : {}),
     };
     result = apply(ctx, store);

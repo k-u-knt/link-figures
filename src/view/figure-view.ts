@@ -427,7 +427,16 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   commandContext(): CommandContext {
-    return { app: this.app, registries: this.plugin.registries, view: this, store: this.store, selection: this.selectedIds(), page: this.focusPage() };
+    return {
+      app: this.app,
+      registries: this.plugin.registries,
+      view: this,
+      store: this.store,
+      selection: this.selectedIds(),
+      page: this.focusPage(),
+      unreadable: this.unreadableNodes,
+      markUnreadable: (ids) => this.markUnreadable(ids),
+    };
   }
 
   /** Runs `command` on the current context, if it applies; a failure is shown to the user rather than lost. */

@@ -3,7 +3,7 @@ import { alignOffsets, distributeOffsets, referenceRect, type AlignEdge, type Al
 import type { Pt } from "../model/geometry";
 import { commonParent, isLocked, unitsOf } from "../model/groups";
 import type { Document, NodeId, Page } from "../model/types";
-import { CommandError, type Command, type CommandContext } from "../registry/command";
+import { CommandError, unreadableIn, type Command, type CommandContext } from "../registry/command";
 import { targetIds } from "./builtin";
 import { translateUnits } from "./drawing";
 
@@ -51,7 +51,7 @@ function applyOffsets(ctx: CommandContext, command: string, offsets: Map<NodeId,
   const moves = [...offsets].filter(([, d]) => d.x !== 0 || d.y !== 0);
   if (moves.length === 0) return;
   ctx.store.commit(command, (draft) => {
-    for (const [id, d] of moves) translateUnits(draft, [id], d.x, d.y, ctx.registries, ctx.view?.unreadableNodes);
+    for (const [id, d] of moves) translateUnits(draft, [id], d.x, d.y, ctx.registries, unreadableIn(ctx));
   });
 }
 

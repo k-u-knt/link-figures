@@ -8,7 +8,7 @@ import { PAGE_PRESETS, getPreset } from "../model/presets";
 import { SNAP_OPTION, snapOn } from "../model/snap";
 import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
-import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
+import { CommandError, unreadableIn, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
 import type { ImageState } from "../registry/node-type";
 import type { Plane } from "../links/decoders/tiff-convert";
@@ -321,9 +321,9 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   // A copy of a node its plugin could not read cannot be read either: it is marked before it is drawn, so the stage
   // shows it as a placeholder and an export skips it. Headless the copy is saved as the original is, and its plugin's
   // hook fails on it too when the figure is next loaded.
-  const unreadable = ctx.view?.unreadableNodes;
+  const unreadable = unreadableIn(ctx);
   const unreadableCopies = unreadable ? copies.filter((_, i) => unreadable.has(originals[i].id)).map((c) => c.id) : [];
-  if (unreadableCopies.length > 0) ctx.view?.markUnreadable?.(unreadableCopies);
+  if (unreadableCopies.length > 0) ctx.markUnreadable?.(unreadableCopies);
   ctx.store.commit("duplicate", (draft) => {
     draft.nodes.push(...copies);
   });

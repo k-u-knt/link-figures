@@ -111,6 +111,19 @@ export interface CommandContext {
    * when absent). A view's own setting is read from the view (`pageLimitMm` in commands/builtin.ts).
    */
   pageLimitMm?: number;
+  /**
+   * The nodes their plugin's `migrate` hook could not read when the figure was loaded (see `loadDocument`), and their
+   * copies since: open, the view's `unreadableNodes`; headless, those of the file as this call loaded it. No hook of
+   * their type is called on them (read it through `unreadableIn`). Absent, every node is read by its type.
+   */
+  unreadable?: ReadonlySet<NodeId>;
+  /** Adds `ids` (copies of unreadable nodes) to `unreadable`, so the calls after this one treat them alike. */
+  markUnreadable?(ids: NodeId[]): void;
+}
+
+/** The nodes that `ctx`'s commands must not hand to their type's hooks (see `CommandContext.unreadable`). */
+export function unreadableIn(ctx: Pick<CommandContext, "unreadable">): ReadonlySet<NodeId> | undefined {
+  return ctx.unreadable;
 }
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";

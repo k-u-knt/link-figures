@@ -6,7 +6,7 @@ import { getPreset } from "../model/presets";
 import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } from "../model/geometry";
 import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
 import type { Registries } from "../registry";
-import { CommandError, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
+import { CommandError, unreadableIn, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/params";
 import { nodeTypeFor } from "../registry/node-type";
 import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
@@ -133,7 +133,7 @@ function createShape(ctx: CommandContext, args: ShapeCreateArgs): { id: NodeId }
  * that page whose type can be attached to. Which anchor it names is the connector normaliser's to settle.
  */
 function checkEnd(ctx: CommandContext, command: string, name: string, end: End, page: string): void {
-  const error = endError(ctx.store.doc, ctx.registries, end, page, ctx.view?.unreadableNodes);
+  const error = endError(ctx.store.doc, ctx.registries, end, page, unreadableIn(ctx));
   if (error !== null) throw new CommandError(`${command}: "${name}" ${error}`);
 }
 
@@ -240,7 +240,7 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   const before = node as unknown as Record<string, unknown>;
   let after: Record<string, unknown> = { ...before };
   for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
-  const type = nodeTypeFor(ctx.registries, node, ctx.view?.unreadableNodes);
+  const type = nodeTypeFor(ctx.registries, node, unreadableIn(ctx));
   const updateCtx = { registries: ctx.registries, doc: ctx.store.doc };
   // A size the patch gives is kept to the least a node may have, as a resize by a handle keeps it; one that is not a
   // size at all (negative, not a number) is left for the checks below to refuse. A type's derived size is its own.
@@ -306,13 +306,13 @@ function updateGroup(ctx: CommandContext, node: Node, patch: Record<string, unkn
   if (sx === 1 && sy === 1 && dx === 0 && dy === 0 && name === undefined && locked === undefined) return { id: node.id };
   const members = descendantsOf(ctx.store.doc, node.id);
   ctx.store.commit(command, (draft) => {
-    if (sx !== 1 || sy !== 1) scaleUnits(draft, members, sx, sy, { x: node.x, y: node.y }, ctx.registries, ctx.view?.unreadableNodes);
+    if (sx !== 1 || sy !== 1) scaleUnits(draft, members, sx, sy, { x: node.x, y: node.y }, ctx.registries, unreadableIn(ctx));
     if (dx !== 0 || dy !== 0) {
       const scaled = new Map(current(draft).nodes.map((n) => [n.id, n] as const));
       const moving = new Set(members);
       for (const target of draft.nodes) {
         const origin = scaled.get(target.id);
-        if (origin && moving.has(target.id)) translateInto(ctx.registries, target, origin, dx, dy, ctx.view?.unreadableNodes);
+        if (origin && moving.has(target.id)) translateInto(ctx.registries, target, origin, dx, dy, unreadableIn(ctx));
       }
     }
     const group = draft.nodes.find((n) => n.id === node.id);
@@ -493,7 +493,7 @@ function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
   const units = targetIds(ctx, command, args).filter((id) => !isLocked(before, id));
   const ids = new Set(expandUnits(before, units));
   if (ids.size === 0) return { ids: [] };
-  if (args.dx !== 0 || args.dy !== 0) ctx.store.commit(command, (draft) => translateUnits(draft, units, args.dx, args.dy, ctx.registries, ctx.view?.unreadableNodes));
+  if (args.dx !== 0 || args.dy !== 0) ctx.store.commit(command, (draft) => translateUnits(draft, units, args.dx, args.dy, ctx.registries, unreadableIn(ctx)));
   // A second commit with the same label, which the store merges into the first: the boxes it reads are the ones the
   // move gave, normalised (a connector's is the area its moved ends draw).
   if (args.pages) placeOnPages(ctx, command, ids);
@@ -522,7 +522,7 @@ function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<Nod
   };
   const moving = doc.nodes.filter((n) => ids.has(n.id));
   const units = moving.filter((n) => n.parent === undefined || !ids.has(n.parent));
-  const hookOf = (node: Node) => nodeTypeFor(ctx.registries, node, ctx.view?.unreadableNodes)?.pageAfterMove;
+  const hookOf = (node: Node) => nodeTypeFor(ctx.registries, node, unreadableIn(ctx))?.pageAfterMove;
   const destination = new Map<NodeId, PageId>();
   const place = (unit: Node, page: PageId): void => {
     destination.set(unit.id, page);
@@ -553,7 +553,7 @@ function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<Nod
       const origin = byId.get(node.id);
       if (!to || !origin) continue;
       node.page = to.page;
-      translateInto(ctx.registries, node, origin, to.dx, to.dy, ctx.view?.unreadableNodes);
+      translateInto(ctx.registries, node, origin, to.dx, to.dy, unreadableIn(ctx));
     }
   });
 }
@@ -609,8 +609,8 @@ function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets
   const page = from.page.id;
   const at = (p: PlacePoint) => ({ x: roundPx(p.x), y: roundPx(p.y) });
   return [
-    endAt(doc, ctx.registries, page, at(from), targets.from, mode, undefined, targets.reach, ctx.view?.unreadableNodes),
-    endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach, ctx.view?.unreadableNodes),
+    endAt(doc, ctx.registries, page, at(from), targets.from, mode, undefined, targets.reach, unreadableIn(ctx)),
+    endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach, unreadableIn(ctx)),
   ];
 }
 
@@ -638,7 +638,7 @@ const connectorTool: Command = {
   },
   preview(ctx, from, to, targets): ToolPreview {
     const at = { x: roundPx(to.x), y: roundPx(to.y) };
-    const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, at, targets.to, snapModeIn(ctx), undefined, targets.reach, ctx.view?.unreadableNodes);
+    const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, at, targets.to, snapModeIn(ctx), undefined, targets.reach, unreadableIn(ctx));
     if (!from) return { marks };
     const doc = ctx.store.doc;
     const line = connectorNodeDefaults(from.page, { ends: toolEnds(ctx, from, to, targets), caps: defaultCaps() }, doc.nodes.map((n) => n.id));

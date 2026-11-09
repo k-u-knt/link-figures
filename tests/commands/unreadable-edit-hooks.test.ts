@@ -1,7 +1,8 @@
 import { registerBuiltinCommands } from "../../src/commands/builtin";
 import { drawingCommands } from "../../src/commands/drawing";
 import { groupCommands } from "../../src/commands/groups";
-import { prepareCall, runCall } from "../../src/commands/headless";
+import { createApi } from "../../src/api";
+import { prepareCall, runBatch, runCall, withHeadlessFigure } from "../../src/commands/headless";
 import { loadDocument } from "../../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { endAt, snapMarks } from "../../src/model/attach";
@@ -15,6 +16,7 @@ import { createRegistries } from "../../src/registry";
 import type { CommandContext } from "../../src/registry/command";
 import { nodeTypeFor, type NodeType } from "../../src/registry/node-type";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
+import { normalizePath } from "../export/fake-vault";
 
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
 
@@ -75,7 +77,7 @@ function openFigure() {
     selectedIds: () => selection,
     setSelection: (ids: NodeId[]) => void (selection = ids),
   };
-  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection, page: store.doc.pages[0] });
+  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection, page: store.doc.pages[0], unreadable: view.unreadableNodes, markUnreadable: view.markUnreadable });
   const call = (id: string, args: Record<string, unknown>) => runCall(store, ctx(), prepareCall(r, { id, args }));
   const chartNode = () => store.doc.nodes.find((n) => n.id === "x-1") as Node;
   return { r, store, call, hooks, unreadableNodes, chartNode };
@@ -122,4 +124,53 @@ test("a new connector end attaches to an unreadable item as its box, and its att
   expect(endAt(doc, r, page, { x: 29, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toEqual({ kind: "attached", node: "x-1", snap: "anchor", anchor: "e" });
   expect(snapMarks(doc, r, page, { x: 29, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toHaveLength(4);
   expect(hooks.attachable).not.toHaveBeenCalled();
+});
+
+describe("headless (the figure not open)", () => {
+  /** The figure file holding the unreadable `x-1` and a shape `s`, and an API over a vault that holds it. */
+  function closedFigure() {
+    const { r, hooks } = registries();
+    const doc = createDocument("a4-portrait");
+    const page = doc.pages[0];
+    const chart = { id: "x-1", type: "x.chart", page: page.id, x: 10, y: 10, width: 20, height: 20, z: 0, rotation: 0, opacity: 1, locked: false, series: "bad" };
+    const original = serializeFigureFile({ ...doc, nodes: [chart, shapeNodeDefaults(page, { id: "s", x: 50, y: 50, width: 20, height: 20, z: 1 }, [])] as unknown as Node[] }, emptyParsed());
+    const text = new Map([["f.lnkfig.md", original]]);
+    const files = {
+      read: async (path: string) => text.get(path)!,
+      process: async (path: string, edit: (t: string) => string) => void text.set(path, edit(text.get(path)!)),
+    };
+    const api = createApi({ app: {} as never, registries: r, files, normalizePath, openFigure: () => null });
+    return { r, api, hooks, files, original, file: () => text.get("f.lnkfig.md")! };
+  }
+
+  /** `text` with x-1 at (15, 17) in place of (10, 10), every other byte as it was. */
+  const movedChart = (text: string) => text.replace(/("id": "x-1",[^}]*?"x": )10(,\s*"y": )10/, "$115$217");
+
+  const allHooks = (hooks: ReturnType<typeof registries>["hooks"]) => Object.values(hooks);
+
+  test("node.move of an unreadable item calls none of its hooks, and changes only its position", async () => {
+    const { api, hooks, original, file } = closedFigure();
+    await api.run("f.lnkfig.md", "node.move", { ids: ["x-1"], dx: 5, dy: 7 });
+    for (const hook of allHooks(hooks)) expect(hook).not.toHaveBeenCalled();
+    const moved = movedChart(original);
+    expect(moved).not.toBe(original);
+    expect(file()).toBe(moved);
+  });
+
+  test("node.update of an unreadable item calls none of its hooks, and changes only its position", async () => {
+    const { api, hooks, original, file } = closedFigure();
+    await api.run("f.lnkfig.md", "node.update", { id: "x-1", patch: { x: 15, y: 17 } });
+    for (const hook of allHooks(hooks)) expect(hook).not.toHaveBeenCalled();
+    expect(file()).toBe(movedChart(original));
+  });
+
+  test("a copy that a duplicate makes of an unreadable item is unreadable too, for the calls after it", async () => {
+    const { r, hooks, files } = closedFigure();
+    await withHeadlessFigure({} as never, r, files, "f.lnkfig.md", (ctx, store) => {
+      const [{ ids }] = runBatch(store, ctx, [prepareCall(r, { id: "duplicate", args: { ids: ["x-1"] } })]) as [{ ids: NodeId[] }];
+      expect(ctx.unreadable?.has(ids[0])).toBe(true);
+      runBatch(store, ctx, [prepareCall(r, { id: "node.move", args: { ids, dx: 5, dy: 0 } })]);
+    });
+    for (const hook of allHooks(hooks)) expect(hook).not.toHaveBeenCalled();
+  });
 });

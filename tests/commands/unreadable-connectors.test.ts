@@ -86,7 +86,7 @@ function openFigure(chart: Chart) {
   const loaded = loadDocument(text, r);
   const store = createFigureStore(loaded.doc, r);
   const view = { file: { path: "f.lnkfig.md" }, unreadableNodes: new Set<NodeId>(loaded.unreadable), markUnreadable: () => {}, selectedIds: () => [], setSelection: () => {} };
-  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection: [], page: store.doc.pages[0] });
+  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection: [], page: store.doc.pages[0], unreadable: view.unreadableNodes });
   const call = (id: string, args: Record<string, unknown>) => runCall(store, ctx(), prepareCall(r, { id, args }));
   const save = () => serializeFigureFile(store.doc, loaded.parsed);
   const connector = () => store.doc.nodes.find((n) => n.id === "c") as ConnectorNode;

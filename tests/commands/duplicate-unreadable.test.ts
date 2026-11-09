@@ -66,7 +66,7 @@ function openFigure() {
     selectedIds: () => selection,
     setSelection: (ids: NodeId[]) => void (selection = ids),
   };
-  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection, page: store.doc.pages[0] });
+  const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection, page: store.doc.pages[0], unreadable: view.unreadableNodes, markUnreadable: view.markUnreadable });
   const call = (id: string, args: Record<string, unknown>) => runCall(store, ctx(), prepareCall(r, { id, args }));
   const exportWarnings = () => buildPageSvg(store.doc, store.doc.pages[0], r, new Map(), { unreadable: unreadableNodes });
   return { r, store, view, call, exportWarnings, toSvg };

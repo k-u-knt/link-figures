@@ -99,6 +99,12 @@
   cursor: pointer;
 }
 
+/* A nullable colour switched off (no paper): greyed as Obsidian greys a disabled text or number input. */
+.lf-field-control input[type="color"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .lf-unit {
   flex: none;
   font-size: var(--font-ui-smaller);

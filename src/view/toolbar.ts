@@ -36,8 +36,10 @@ export class Toolbar {
       this.shown.set(command.id, { name, icon });
       const active = command.id === armed || state.active === true;
       button.toggleClass("is-active", active);
-      // A tool or a toggle is a pressed or an unpressed button; a one-shot command has no such state.
-      if (command.place || command.placeDrag || command.state) button.setAttribute("aria-pressed", String(active));
+      // A tool, or a state command whose state says active or not, is a pressed or an unpressed button;
+      // a one-shot command, or a state command that carries its state in its name, has no such state.
+      if (command.place || command.placeDrag || typeof state.active === "boolean") button.setAttribute("aria-pressed", String(active));
+      else button.removeAttribute("aria-pressed");
     }
   }
 

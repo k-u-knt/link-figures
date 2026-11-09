@@ -92,6 +92,9 @@ export class FakeEl {
     return this.cls.includes(name);
   }
 
+  removeAttribute(name: string): void {
+    delete this.attrs[name];
+  }
   setAttribute(name: string, value: string): void {
     this.attrs[name] = value;
   }

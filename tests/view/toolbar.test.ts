@@ -123,16 +123,20 @@ test("a command that shows the view's state has its button's name, icon and pres
   expect(icons).toHaveLength(3);
 });
 
-test("tools and toggles report aria-pressed as they are shown; a one-shot command has none", () => {
+test("tools and state commands with an active flag report aria-pressed as they are shown; others have none", () => {
   const tool: Command = { ...cmd("rect", "insert"), place: () => null as never };
   const drag: Command = { ...cmd("line", "insert"), placeDrag: () => null as never };
-  const toggle: Command = { ...cmd("snap", "insert"), state: () => ({ active: true }) };
-  const { el, toolbar, view } = setup([cmd("undo", "edit"), tool, drag, toggle]);
-  const [undo, rect, line, snap] = el.children.filter((c) => c.tag === "button");
-  const pressed = () => [rect, line, snap].map((b) => b.attrs["aria-pressed"]);
+  let on = true;
+  const toggle: Command = { ...cmd("grid", "insert"), state: () => ({ active: on }) };
+  const named: Command = { ...cmd("snap", "insert"), state: () => ({ name: "Snap: anchor" }) };
+  const { el, toolbar, view } = setup([cmd("undo", "edit"), tool, drag, toggle, named]);
+  const [undo, rect, line, grid, snap] = el.children.filter((c) => c.tag === "button");
+  const pressed = () => [rect, line, grid].map((b) => b.attrs["aria-pressed"]);
   expect(pressed()).toEqual(["false", "false", "true"]);
   view.armedTool = view.plugin.registries.commands.get("rect")!;
+  on = false;
   toolbar.render();
-  expect(pressed()).toEqual(["true", "false", "true"]);
+  expect(pressed()).toEqual(["true", "false", "false"]);
   expect("aria-pressed" in undo.attrs).toBe(false);
+  expect("aria-pressed" in snap.attrs).toBe(false);
 });

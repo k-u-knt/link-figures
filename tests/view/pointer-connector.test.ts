@@ -218,6 +218,18 @@ test("a press on an anchor dot, outside the body, attaches there: the reach is 8
   expect(connectors()[0].ends[0]).toEqual(attached("A", "e"));
 });
 
+test("the anchor reach is in screen px: at zoom 2, 6 screen px attach and 10 do not", async () => {
+  const { drag, connectors, view } = setup();
+  view.viewport.zoom = 2;
+  // 6 screen px = 3 page px from the `e` anchor, inside the 4 page px reach; 10 screen px = 5 page px, outside it.
+  // Both presses are right of A's edge (x 150), so neither is over the body.
+  await drag([306, 180], [700, 180]);
+  expect(connectors()[0].ends[0]).toEqual(attached("A", "e"));
+  view.armedTool = view.plugin.registries.commands.get("tool.connector") ?? view.armedTool;
+  await drag([310, 180], [700, 180]);
+  expect(connectors()[1].ends[0]).toEqual({ kind: "free", x: 155, y: 90 });
+});
+
 test("while armed, the item under the pointer shows its anchors (its centre in centre mode), and a drag previews the line", () => {
   const { registries, view, options } = setup();
   const tool = registries.commands.get("tool.connector")!;

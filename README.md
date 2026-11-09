@@ -270,7 +270,7 @@ Format "PowerPoint (editable)" in the Export dialog (and `api.export(path, { for
 
 **Groups** stay groups when their members are next to each other in the stacking order; a group with another item between its members is written as separate items, with a note.
 
-**One file per page size.** A figure whose pages differ in size gives one file per size: the first is `<figure>.pptx`, the others `<figure> (<width>×<height> mm).pptx`. A page larger than 1422.4 mm or smaller than 25.4 mm on a side is scaled to PowerPoint's limits, with a note.
+**One file per page size.** A figure whose pages differ in size gives one file per size: the size of the figure's first page gets `<figure>.pptx`, the others `<figure> (<width>×<height> mm).pptx`, whichever pages are exported, so a size always writes to the same file. A page larger than 1422.4 mm or smaller than 25.4 mm on a side is scaled to PowerPoint's limits, with a note.
 
 ## Settings
 

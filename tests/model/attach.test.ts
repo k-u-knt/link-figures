@@ -65,12 +65,14 @@ test("a shape of an unregistered kind attaches as its box", () => {
   expect(attachTarget(docWith(shape), registries, "s")!.anchors.map((a) => a.id)).toEqual(["n", "e", "s", "w"]);
 });
 
-test("a connector, an unregistered type and a missing id give null", () => {
+test("a connector and a missing id give null; an unregistered type attaches as its box", () => {
   const connector = { ...textNodeDefaults(page, {}, []), id: "c", type: "connector" } as unknown as Node;
   registries.nodeTypes.register({ ...textNodeType, type: "connector" as never, attachable: undefined });
   expect(attachTarget(docWith(connector), registries, "c")).toBeNull();
   const stranger = { ...connector, id: "u", type: "unknown" } as unknown as Node;
-  expect(attachTarget(docWith(stranger), registries, "u")).toBeNull();
+  const target = attachTarget(docWith(stranger), registries, "u")!;
+  expect(target.fallback).toBe(true);
+  expect(target.anchors.map((a) => a.id)).toEqual(["n", "e", "s", "w"]);
   expect(attachTarget(docWith(), registries, "missing")).toBeNull();
 });
 

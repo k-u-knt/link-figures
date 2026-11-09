@@ -15,7 +15,16 @@ export interface Attachable {
 /** What a connector needs of an item: its `Attachable`, and the centre of its box (which rotation leaves where it is). */
 export interface AttachTarget extends Attachable {
   center: Pt;
+  /**
+   * True when the item is attached to as its box because its own `attachable` cannot be asked: its type is not
+   * registered (a foreign item), its plugin could not read it, or its hook threw. Its own anchors are not known then,
+   * so an end snapped to one of them keeps its anchor id as it is (see `connectorNormaliser`).
+   */
+  fallback?: true;
 }
+
+/** The node types whose throwing `attachable` hook has been reported, so each is reported once. */
+const reportedAttachable = new Set<string>();
 
 /** The centre of a node's box, the point its rotation turns about. */
 function centerOf(node: Node): Pt {
@@ -52,15 +61,28 @@ export function boxAttachable(node: Node): Attachable {
 
 /**
  * What a connector attaches to for the node `id`: its outline and anchors in page px (rotation applied) and its centre.
- * `null` when there is no such node, or its type does not implement `attachable` (a connector, or a type that is not
- * registered).
+ * `null` when there is no such node, or its registered type does not implement `attachable` (a connector). An item no
+ * registered type can be asked about (foreign, one of `unreadable`, or whose hook throws) is attached to as its box
+ * (`AttachTarget.fallback`), so a connector attached to it keeps its end.
  */
 export function attachTarget(doc: Document, registries: Registries, id: NodeId, unreadable?: ReadonlySet<NodeId>): AttachTarget | null {
   const node = doc.nodes.find((n) => n.id === id);
   if (!node) return null;
   const type = nodeTypeFor(registries, node, unreadable);
-  if (!type?.attachable) return null;
-  return { ...type.attachable(node, { registries }), center: centerOf(node) };
+  const asBox = (): AttachTarget => ({ ...boxAttachable(node), center: centerOf(node), fallback: true });
+  // A foreign or unreadable item is attached to as its box, so a connector attached to it keeps its end.
+  if (!type) return asBox();
+  if (!type.attachable) return null;
+  try {
+    return { ...type.attachable(node, { registries }), center: centerOf(node) };
+  } catch (error) {
+    // A plugin's bug: contained here, so it cannot break a commit (the connector normaliser runs in every one).
+    if (!reportedAttachable.has(node.type)) {
+      reportedAttachable.add(node.type);
+      console.warn(`Link Figures: the "${node.type}" type's attachable hook failed; its items are attached to as their box`, error);
+    }
+    return asBox();
+  }
 }
 
 /** How a connector's end that is dropped on an item attaches to it: at its nearest anchor, or at its centre. */

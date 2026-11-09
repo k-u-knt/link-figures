@@ -114,11 +114,12 @@ test("node.update of an unreadable item checks and writes the base fields only, 
   expect(hooks.checkField).not.toHaveBeenCalled();
 });
 
-test("a new connector end is not attached to an unreadable item, and its attachable is never called", () => {
+test("a new connector end attaches to an unreadable item as its box, and its attachable is never called", () => {
   const { r, store, hooks, unreadableNodes } = openFigure();
   const doc = store.doc;
   const page = doc.pages[0].id;
-  expect(endAt(doc, r, page, { x: 20, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toEqual({ kind: "free", x: 20, y: 20 });
-  expect(snapMarks(doc, r, page, { x: 20, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toEqual([]);
+  // The box of x-1 (10, 10, 20 × 20): its "e" anchor is (30, 20).
+  expect(endAt(doc, r, page, { x: 29, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toEqual({ kind: "attached", node: "x-1", snap: "anchor", anchor: "e" });
+  expect(snapMarks(doc, r, page, { x: 29, y: 20 }, ["x-1"], "anchor", undefined, 8, unreadableNodes)).toHaveLength(4);
   expect(hooks.attachable).not.toHaveBeenCalled();
 });

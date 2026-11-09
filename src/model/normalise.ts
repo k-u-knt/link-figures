@@ -47,6 +47,7 @@ export function connectorNormaliser(registries: Registries): Normaliser {
     for (const node of draft.nodes) {
       if (!isConnector(node)) continue;
       const snapshot = now.nodes.find((n) => n.id === node.id) as ConnectorNode;
+      if (keptAsItWas(before, now, snapshot, registries)) continue;
       const resolved = resolveConnector(now, snapshot, registries);
       let ends: [End, End] = snapshot.ends;
       for (const i of [0, 1] as const) {
@@ -56,7 +57,9 @@ export function connectorNormaliser(registries: Registries): Normaliser {
           const pt = lastPoint(before, snapshot, i, registries) ?? resolved.ends[i].pt;
           ends = withEnd(ends, i, { kind: "free", x: pt.x, y: pt.y });
         } else if (end.snap === "anchor") {
-          const anchors = attachTarget(now, registries, end.node)?.anchors ?? [];
+          const target = attachTarget(now, registries, end.node);
+          // An item attached to as its box (see `AttachTarget.fallback`) does not know its own anchors: the id stays.
+          const anchors = target && !target.fallback ? target.anchors : [];
           if (anchors.length > 0 && !anchors.some((a) => a.id === end.anchor)) {
             ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "anchor", anchor: nearestAnchor(anchors, resolved.ends[i].pt).id });
           }
@@ -76,6 +79,23 @@ export function connectorNormaliser(registries: Registries): Normaliser {
       if (node.rotation !== 0) node.rotation = 0;
     }
   };
+}
+
+/**
+ * Whether connector `c` is left exactly as it is: when an end of it is attached to an item that is attached to as its
+ * box (foreign, unreadable, or with a failing hook: `AttachTarget.fallback`), and neither it nor any item it is
+ * attached to has changed since `before`. Its box and anchors were worked out by the item's own plugin, which the box
+ * cannot redo, so an edit elsewhere leaves the file as it was.
+ */
+function keptAsItWas(before: Document, now: Document, c: ConnectorNode, registries: Registries): boolean {
+  const attached = c.ends.flatMap((end) => (end.kind === "attached" ? [end.node] : []));
+  if (!attached.some((id) => attachTarget(now, registries, id)?.fallback)) return false;
+  const same = (id: NodeId): boolean => {
+    const was = before.nodes.find((n) => n.id === id);
+    const is = now.nodes.find((n) => n.id === id);
+    return was !== undefined && is !== undefined && (was === is || JSON.stringify(was) === JSON.stringify(is));
+  };
+  return same(c.id) && attached.every(same);
 }
 
 /** `ends` with end `i` replaced: a new pair, so the caller can tell that something changed. */

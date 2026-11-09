@@ -68,6 +68,7 @@ export default class LinkFiguresPlugin extends Plugin {
     files: this.figureFiles,
     normalizePath,
     openFigure: (path) => this.openFigureView(path),
+    loadingFigure: (path) => this.loadingFigureViews(path),
     noteBlockId: (path, line) => this.blockIds.blockId(path, line),
     exportFigure: (path, request) => this.exportFigureAt(path, request),
     createFigureFile: (path, text) => writeNewFigureFile(this.app, path, text),
@@ -198,6 +199,20 @@ export default class LinkFiguresPlugin extends Plugin {
       if (!best || (this.viewActivity.get(view) ?? 0) > (this.viewActivity.get(best) ?? 0)) best = view;
     }
     return best;
+  }
+
+  /**
+   * Resolves once every figure view of `path` that is still loading has loaded (see `LinkFiguresView.whenLoaded`); null
+   * when none is. A tab not yet shown (deferred) is not loading: it reads the file when it is shown.
+   */
+  private loadingFigureViews(path: string): Promise<void> | null {
+    const target = normalizePath(path);
+    const loading: Promise<void>[] = [];
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof LinkFiguresView && view.file?.path === target && view.isLoading()) loading.push(view.whenLoaded());
+    }
+    return loading.length === 0 ? null : Promise.all(loading).then(() => undefined);
   }
 
   /** Notes as `noteBlockId` and a drop out of a note read and write them: by path, through the cache, an open Markdown editor, and `vault.process`. */

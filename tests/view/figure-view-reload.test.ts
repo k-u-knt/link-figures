@@ -157,6 +157,36 @@ describe("opening", () => {
   });
 });
 
+describe("loading (what an API call waits for before it picks the view or the file)", () => {
+  test("a view is loading from when it has a file until setViewData has run for it; whenLoaded resolves then", async () => {
+    const t = setup();
+    expect(t.view.isLoading()).toBe(false);
+    await t.view.whenLoaded();
+    // Obsidian sets the file, then reads it and hands its text over.
+    t.view.file = { path: FIGURE_PATH } as never;
+    expect(t.view.isLoading()).toBe(true);
+    let done = false;
+    const waited = t.view.whenLoaded().then(() => void (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    t.view.setViewData(t.text0, true);
+    await waited;
+    expect(t.view.isLoading()).toBe(false);
+  });
+
+  test("a file that cannot be read ends the loading too, and so does closing the view", async () => {
+    const t = setup();
+    t.view.file = { path: FIGURE_PATH } as never;
+    const waited = t.view.whenLoaded();
+    t.view.setViewData("not a figure ```lnkfig\n{", true);
+    await waited;
+    t.view.file = { path: FIGURE_PATH } as never;
+    const closing = t.view.whenLoaded();
+    await t.view.onClose();
+    await closing;
+  });
+});
+
 describe("an untouched figure is saved back as it was read", () => {
   test("even when the store's normalisers would change it (a group whose box is stale): opening and closing never rewrites it", async () => {
     const { groupNodeType } = await import("../../src/nodes/group-node");

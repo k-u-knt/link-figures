@@ -110,6 +110,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return this.store.unreadable;
   }
 
+  /** The file whose text the last `setViewData` took up (or could not read): while `file` is another, the view is loading. */
+  private loadedFile: unknown = null;
+  /** What `whenLoaded` waits on: resolved when `setViewData` has run, or the view closes. */
+  private loadWaiters: (() => void)[] = [];
+
   /** The file text as `setViewData` received it. */
   private rawText = "";
   /** What the loaded document serialises to, to tell whether it has changed since the file was read. */
@@ -173,6 +178,28 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onVaultRename(file, oldPath)));
   }
 
+  /**
+   * Whether the view has a file that its text has not yet been handed to it for (Obsidian is reading it): an API call
+   * waits for it (`whenLoaded`) before it decides between the view and the file.
+   */
+  isLoading(): boolean {
+    return this.file !== null && this.loadedFile !== this.file;
+  }
+
+  /** Resolves once the view is not loading (see `isLoading`): its file's text set, or the view closed. */
+  whenLoaded(): Promise<void> {
+    if (!this.isLoading()) return Promise.resolve();
+    return new Promise((resolve) => this.loadWaiters.push(resolve));
+  }
+
+  /** The view has taken up its file's text (or will not): whoever waits for it to load goes on. */
+  private settleLoad(): void {
+    this.loadedFile = this.file;
+    const waiters = this.loadWaiters;
+    this.loadWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
   async onClose(): Promise<void> {
     this.pointer?.detach();
     this.resizeObserver?.disconnect();
@@ -181,6 +208,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.fitFrame = null;
     if (this.chromeFrame !== null) window.cancelAnimationFrame(this.chromeFrame);
     this.chromeFrame = null;
+    this.loadedFile = null;
+    const waiters = this.loadWaiters;
+    this.loadWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   getViewData(): string {
@@ -202,11 +233,15 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
       this.showError(describeLoadError(error), data);
+      this.settleLoad();
       return;
     }
     // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
     const reload = !clear && this.loaded && !this.readOnly;
-    if (reload && this.adoptReload(data, loaded)) return;
+    if (reload && this.adoptReload(data, loaded)) {
+      this.settleLoad();
+      return;
+    }
     this.clearError();
     this.readOnly = false;
     // Said once per type as the figure opens, not again each time the file is read back.
@@ -223,6 +258,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
     this.loaded = true;
     this.scheduleFit();
+    this.settleLoad();
   }
 
   /**

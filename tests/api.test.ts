@@ -195,6 +195,56 @@ describe("headless (the figure is not open)", () => {
     expect(view.store.canUndo()).toBe(false);
   });
 
+  test("a view that is still loading when a call's turn comes is waited for: the call then runs in it, not on the file", async () => {
+    const registries = createRegistries();
+    registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
+    let text = serializeFigureFile(figure(), emptyParsed());
+    let writes = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const files = {
+      read: async () => text,
+      async process(_path: string, edit: (t: string) => string) {
+        await gate;
+        const after = edit(text);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (after !== text) writes++;
+        text = after;
+      },
+    };
+    let view: ReturnType<typeof openView> | null = null;
+    let finishLoading: (() => void) | null = null;
+    let loading: Promise<void> | null = null;
+    const api = createApi({
+      app: {} as never,
+      registries,
+      files,
+      normalizePath,
+      openFigure: () => view,
+      loadingFigure: () => loading,
+    });
+    // The first call starts on the file, the figure being closed, and waits there.
+    const first = api.run(PATH, "delete", { ids: ["a"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A view of the figure starts loading; the second call is queued behind the first.
+    loading = new Promise<void>((resolve) => (finishLoading = () => {
+      // It loads the file as it is when it finishes: with the first call's edit.
+      view = openView(loadDocument(text).doc, registries, () => 0);
+      loading = null;
+      resolve();
+    }));
+    const second = api.run(PATH, "delete", { ids: ["b"] });
+    release();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The second has not gone to the file while the view was loading.
+    expect(writes).toBe(1);
+    finishLoading!();
+    await second;
+    expect(writes).toBe(1);
+    expect(view!.store.doc.nodes.map((n) => n.id)).toEqual(["c"]);
+  });
+
   test("paths that differ only in their slashes are one figure, and share one queue", async () => {
     const { api, log, saved, ids } = setup();
     await Promise.all([api.run("figs//fig.lnkfig.md", "delete", { ids: ["a"] }), api.run(`/${PATH}`, "delete", { ids: ["b"] })]);

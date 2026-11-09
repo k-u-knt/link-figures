@@ -105,6 +105,13 @@ export interface ApiHost {
   normalizePath(path: string): string;
   /** The most recently active view that has the figure at `path` (normalised) loaded, or null when none has. */
   openFigure(path: string): OpenFigure | null;
+  /**
+   * Resolves once every view of the figure at `path` (normalised) that is still loading has finished (its first
+   * `setViewData` done); null when none is loading. A call waits on it before it decides between a view and the file,
+   * so a view that opens while a call works on the file takes over only for the calls after it, with that call's edit
+   * loaded. Without it, a call decides at once.
+   */
+  loadingFigure?(path: string): Promise<void> | null;
   /** Finds or writes the block id at `line` of the note at `path` (normalised): see `noteBlockId`. Without it, `blockId` rejects. */
   noteBlockId?(path: string, line: number): Promise<BlockIdResult>;
   /** Exports the figure at `path` (normalised), opening it in the background when it is not open: see `exportFigure`. Without it, `export` rejects. */
@@ -130,7 +137,12 @@ export function createApi(host: ApiHost): LinkFiguresApi {
   const queues = new Map<string, Promise<unknown>>();
   const queued = <T>(figurePath: string, work: (path: string, view: OpenFigure | null) => T | Promise<T>): Promise<T> => {
     const path = host.normalizePath(figurePath);
-    const start = () => work(path, host.openFigure(path));
+    const start = async () => {
+      // A view still loading decides nothing yet: the call waits for it, so it does not go to the file under the view's
+      // feet, and then runs in it. Another may have started loading meanwhile, so this is asked again until none is.
+      for (let loading = host.loadingFigure?.(path); loading; loading = host.loadingFigure?.(path)) await loading;
+      return work(path, host.openFigure(path));
+    };
     const next = (queues.get(path) ?? Promise.resolve()).then(start, start);
     const settled = next.then(
       () => undefined,

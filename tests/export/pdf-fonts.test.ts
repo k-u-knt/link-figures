@@ -484,6 +484,29 @@ describe("PDF export with installed fonts", () => {
     expect(out.text).toMatch(/\/BaseFont \/Font[A-Z]{6}-Bold/);
   });
 
+  test("an unquoted non-ASCII family on a label is quoted in the PDF copy, so it embeds that face with no fallback warning", async () => {
+    const jp = "日本語ゴシック";
+    const f = figure();
+    f.label("Hello", { family: jp });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ [jp]: family(jp) })));
+    expect(out.svg).toContain(`font-family="${jp}"`);
+    expect(out.warnings).toEqual([]);
+    expect(out.text).toContain("/FontFile2");
+    expect(fontsDrawn(out.text, out.content)).toHaveLength(1);
+  });
+
+  test("families that are not plain identifiers are quoted in attributes, inline styles, <style> text and the font shorthand", async () => {
+    const jp = "日本語ゴシック";
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg"><style>.a { font-family: ${jp}, Arial !important; } .b { font: 10px Noto Sans JP, serif; }</style>` +
+      `<text class="a" font-family="Source Han, ${jp}, sans-serif">x</text><text class="b" style="font-family: Noto Sans JP">y</text></svg>`;
+    const out = await prepareFonts(svg, resolverOver(fakeSource({})));
+    expect(out.svg).toContain(`font-family="&quot;Source Han&quot;, &quot;${jp}&quot;, sans-serif"`);
+    expect(out.svg).toContain(`font-family: "${jp}", Arial !important`);
+    expect(out.svg).toContain(`font-family: "Noto Sans JP", serif`);
+    expect(out.svg).toContain(`font-family: "Noto Sans JP"`);
+  });
+
   test("when output() fails over fonts, the export falls back to standard fonts with one warning", async () => {
     const f = figure();
     f.label("Hello", { family: "Calibri" });

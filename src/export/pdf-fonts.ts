@@ -111,6 +111,31 @@ export function parseFamilies(value: string): string[] {
   return names;
 }
 
+/** A family name that svg2pdf.js's parser reads unquoted: one CSS identifier (ASCII letters, digits, `-`, `_`; no space). */
+const PLAIN_FAMILY = /^-?[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/**
+ * A `font-family` value with each unquoted name that is not a plain identifier (non-ASCII letters, spaces, a leading digit)
+ * quoted, which svg2pdf.js's parser needs (it throws on an unquoted 日本語ゴシック). The value as it was when nothing needs it.
+ */
+export function quoteFamilies(value: string): string {
+  const important = /\s*!\s*important\s*$/i.exec(value)?.[0] ?? "";
+  const list = important ? value.slice(0, value.length - important.length) : value;
+  const items: string[] = [];
+  let changed = false;
+  const re = /\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,]+)\s*(?:,|$)/gy;
+  let m: RegExpExecArray | null;
+  while (re.lastIndex < list.length && (m = re.exec(list))) {
+    const item = m[1].trim();
+    if (item !== "" && !/^["']/.test(item) && !PLAIN_FAMILY.test(item)) {
+      items.push(`"${item.replace(/\s+/g, " ").replace(/[\\"]/g, "\\$&")}"`);
+      changed = true;
+    } else items.push(item);
+    if (m[0] === "") break;
+  }
+  return changed ? `${items.join(", ")}${important}` : value;
+}
+
 interface Declaration {
   property: string;
   value: string;
@@ -248,6 +273,7 @@ function weightKeyword(value: string): string {
 const slantKeyword = (value: string) => (value.trim().toLowerCase() === "oblique" ? "italic" : value);
 
 const WEIGHT_DECL_RE = /(font-weight\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
+const FONT_FAMILY_DECL_RE = /(font-family\s*:\s*)([^;}]+?)(\s*(?:;|}|$))/gi;
 const SLANT_DECL_RE = /(font-style\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
 /**
  * CSS text with each `font` shorthand written out as its longhands, which every reader understands, and each weight
@@ -286,6 +312,32 @@ function rewriteWeights(root: Element): boolean {
         el.textContent = css;
         changed = true;
       }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Quotes the family names svg2pdf.js cannot read unquoted, in attributes, inline styles and `<style>` text; true when
+ * anything changed. Done last, so that the owners of text are still found by the family they were drawn with.
+ */
+function quoteUnreadableFamilies(root: Element): boolean {
+  let changed = false;
+  const quoteDecls = (css: string) => css.replace(FONT_FAMILY_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${quoteFamilies(value)}${tail}`);
+  for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
+    const attr = el.getAttribute("font-family");
+    if (attr !== null && quoteFamilies(attr) !== attr) {
+      el.setAttribute("font-family", quoteFamilies(attr));
+      changed = true;
+    }
+    const style = el.getAttribute("style");
+    if (style !== null && quoteDecls(style) !== style) {
+      el.setAttribute("style", quoteDecls(style));
+      changed = true;
+    }
+    if (el.localName === "style" && el.textContent && quoteDecls(el.textContent) !== el.textContent) {
+      el.textContent = quoteDecls(el.textContent);
+      changed = true;
     }
   }
   return changed;
@@ -485,7 +537,7 @@ function toWinAnsi(el: Element, ownOnly = false): { replaced: string[]; changed:
 /** Sets `font-family` in an element's inline style, which wins over every other source in svg2pdf.js. */
 function setInlineFamily(el: Element, family: string): void {
   const kept = declarations(el.getAttribute("style") ?? "").filter((d) => d.property !== "font-family");
-  el.setAttribute("style", [...kept.map((d) => `${d.property}: ${d.value}${d.important ? " !important" : ""}`), `font-family: ${family}`].join("; "));
+  el.setAttribute("style", [...kept.map((d) => `${d.property}: ${d.value}${d.important ? " !important" : ""}`), `font-family: ${quoteFamilies(family)}`].join("; "));
 }
 
 // ---- The pass ------------------------------------------------------------------------------------------------------
@@ -634,6 +686,7 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
     }
   }
 
+  if (quoteUnreadableFamilies(root)) changed = true;
   return { svg: changed ? new XMLSerializer().serializeToString(root) : svg, faces: [...faces.values()], warnings };
 }
 

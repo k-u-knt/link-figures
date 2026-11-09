@@ -210,19 +210,27 @@ test("a press or a release on bare paper gives a free end there; a click draws n
   expect(view.armedTool).toBeNull();
 });
 
+test("a press on an anchor dot, outside the body, attaches there: the reach is 8 screen px", async () => {
+  const { drag, connectors, view } = setup();
+  view.viewport.zoom = 2;
+  // A's `e` anchor (150, 90) is (300, 180) on screen; the press is 2 screen px outside it, the release on B.
+  await drag([302, 180], [700, 180]);
+  expect(connectors()[0].ends[0]).toEqual(attached("A", "e"));
+});
+
 test("while armed, the item under the pointer shows its anchors (its centre in centre mode), and a drag previews the line", () => {
   const { registries, view, options } = setup();
   const tool = registries.commands.get("tool.connector")!;
   const page = view.store.doc.pages[0];
   const ctx = view.commandContext();
-  expect(tool.preview!(ctx, null, { page, x: 100, y: 90 }, { from: [], to: ["A"] })).toEqual({
+  expect(tool.preview!(ctx, null, { page, x: 100, y: 90 }, { from: [], to: ["A"], reach: 0 })).toEqual({
     marks: [{ x: 100, y: 50 }, { x: 150, y: 90 }, { x: 100, y: 130 }, { x: 50, y: 90 }],
   });
-  expect(tool.preview!(ctx, null, { page, x: 600, y: 600 }, { from: [], to: [] })).toEqual({ marks: [] });
+  expect(tool.preview!(ctx, null, { page, x: 600, y: 600 }, { from: [], to: [], reach: 0 })).toEqual({ marks: [] });
   options.set(SNAP_MODE_OPTION, "center");
-  expect(tool.preview!(ctx, null, { page, x: 100, y: 90 }, { from: [], to: ["A"] })!.marks).toEqual([{ x: 100, y: 90 }]);
+  expect(tool.preview!(ctx, null, { page, x: 100, y: 90 }, { from: [], to: ["A"], reach: 0 })!.marks).toEqual([{ x: 100, y: 90 }]);
   // A drag from A's centre to bare paper: a line from A's edge (centre snap clips at the outline) to the release.
-  const drawn = tool.preview!(ctx, { page, x: 100, y: 90 }, { page, x: 400, y: 90 }, { from: ["A"], to: [] })!;
+  const drawn = tool.preview!(ctx, { page, x: 100, y: 90 }, { page, x: 400, y: 90 }, { from: ["A"], to: [], reach: 0 })!;
   expect(drawn.path![0]).toMatchObject({ op: "M", x: 150, y: 90 });
 });
 
@@ -272,7 +280,7 @@ test("the bend handle of a curved connector sets routeParams.bend, and the middl
   const { addConnector, view, drag, connectors, labels, registries, store } = setup(null);
   const c = await addConnector({ kind: "free", x: 100, y: 300 }, { kind: "free", x: 300, y: 300 }, { route: "curved" });
   view.selection.set([c.id]);
-  const ctx = { registries, doc: store.doc, viewOption: () => undefined };
+  const ctx = { registries, doc: store.doc, viewOption: () => undefined, snapReach: 0 };
   const bend = connectorNodeType.handles!(c, ctx).find((h) => h.id === "route.bend")!;
   // Bend 0.25 over a 200 px line: the curve's middle is 0.75 × 50 px below it.
   expect(bend).toMatchObject({ x: 200, y: 337.5 });

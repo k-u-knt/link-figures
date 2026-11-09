@@ -93,11 +93,63 @@ export function attachableUnder(
 }
 
 /**
- * The end a connector on `page` gets for a point `at` (page px) with `under` the items there, topmost first: attached
- * to the first of them that it can attach to (see `attachableUnder`), at its anchor nearest `at` in anchor mode or at its
- * centre in centre mode (or when it has no anchors); else free at `at`.
+ * How near (screen px) a connector's end must come to a snap point for it to take it, though it is on no item's body:
+ * an anchor's dot sits on the edge, half outside. The view turns it into page px at its zoom; headless it is 0.
  */
-export function endAt(doc: Document, registries: Registries, page: string, at: Pt, under: readonly NodeId[], mode: SnapMode, exclude?: NodeId): End {
+export const SNAP_REACH_PX = 8;
+
+/**
+ * The item on `page` (other than `exclude`) that a connector can attach to with a snap point within `reach` (page px) of
+ * `at`, and that point: its anchors in anchor mode (its centre when it has none), its centre in centre mode. The nearest
+ * point wins, and of points as near the one of the higher `z` (the later item, at the same `z`). `anchor` is null for the
+ * centre. Null when no point is within reach.
+ */
+export function attachableNear(
+  doc: Document,
+  registries: Registries,
+  page: string,
+  at: Pt,
+  mode: SnapMode,
+  reach: number,
+  exclude?: NodeId,
+): { id: NodeId; target: AttachTarget; anchor: Anchor | null } | null {
+  if (!(reach > 0)) return null;
+  let best: { id: NodeId; target: AttachTarget; anchor: Anchor | null; away: number; z: number } | null = null;
+  for (const node of doc.nodes) {
+    if (node.id === exclude || node.page !== page) continue;
+    const target = attachTarget(doc, registries, node.id);
+    if (!target) continue;
+    const points: (Anchor | null)[] = mode === "center" || target.anchors.length === 0 ? [null] : target.anchors;
+    for (const anchor of points) {
+      const p = anchor ?? target.center;
+      const away = Math.hypot(p.x - at.x, p.y - at.y);
+      if (away > reach) continue;
+      if (!best || away < best.away || (away === best.away && node.z >= best.z)) best = { id: node.id, target, anchor, away, z: node.z };
+    }
+  }
+  return best && { id: best.id, target: best.target, anchor: best.anchor };
+}
+
+/**
+ * The end a connector on `page` gets for a point `at` (page px) with `under` the items there, topmost first. Within
+ * `reach` (page px) of a snap point it attaches there (see `attachableNear`). Else it is attached to the first of `under`
+ * that it can attach to (see `attachableUnder`), at its anchor nearest `at` in anchor mode or at its centre in centre
+ * mode (or when it has no anchors); else free at `at`.
+ */
+export function endAt(
+  doc: Document,
+  registries: Registries,
+  page: string,
+  at: Pt,
+  under: readonly NodeId[],
+  mode: SnapMode,
+  exclude?: NodeId,
+  reach = 0,
+): End {
+  const near = attachableNear(doc, registries, page, at, mode, reach, exclude);
+  if (near) {
+    return near.anchor ? { kind: "attached", node: near.id, snap: "anchor", anchor: near.anchor.id } : { kind: "attached", node: near.id, snap: "center" };
+  }
   const found = attachableUnder(doc, registries, page, under, exclude);
   if (!found) return { kind: "free", x: at.x, y: at.y };
   const { anchors } = found.target;
@@ -126,11 +178,21 @@ export function endError(doc: Document, registries: Registries, end: End, page: 
 }
 
 /**
- * The points worth showing while a connector's end is over `under` (topmost first): the anchors of the item it would
- * attach to in anchor mode, its centre in centre mode (or when it has no anchors), and none over nothing it can attach to.
+ * The points worth showing while a connector's end is at `at` over `under` (topmost first), of the item `endAt` would
+ * attach it to: its anchors in anchor mode, its centre in centre mode (or when it has no anchors), and none when it
+ * would be free. So the marks stay on while the end is within `reach` of an anchor's dot, off the item's body.
  */
-export function snapMarks(doc: Document, registries: Registries, page: string, under: readonly NodeId[], mode: SnapMode, exclude?: NodeId): Pt[] {
-  const found = attachableUnder(doc, registries, page, under, exclude);
+export function snapMarks(
+  doc: Document,
+  registries: Registries,
+  page: string,
+  at: Pt,
+  under: readonly NodeId[],
+  mode: SnapMode,
+  exclude?: NodeId,
+  reach = 0,
+): Pt[] {
+  const found = attachableNear(doc, registries, page, at, mode, reach, exclude) ?? attachableUnder(doc, registries, page, under, exclude);
   if (!found) return [];
   const { anchors, center } = found.target;
   return mode === "center" || anchors.length === 0 ? [center] : anchors.map((a) => ({ x: a.x, y: a.y }));

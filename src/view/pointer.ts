@@ -1,4 +1,5 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
+import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
 import { toSvgPath } from "../model/path";
 import type { DocumentStore } from "../model/store";
@@ -425,9 +426,10 @@ export class PointerController {
     const doc = this.store.doc;
     const page = doc.pages.find((p) => p.id === g.from.page.id);
     if (!page) return null;
-    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under } };
+    const reach = this.snapReach();
+    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under, reach } };
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    return { to: clampToPaper(doc, page, world), targets: { from: g.under, to: this.itemsUnder(doc, page.id, world) } };
+    return { to: clampToPaper(doc, page, world), targets: { from: g.under, to: this.itemsUnder(doc, page.id, world), reach } };
   }
 
   /**
@@ -488,7 +490,7 @@ export class PointerController {
       return;
     }
     const under = this.itemsUnder(doc, at.page.id, world);
-    const preview = this.view.toolPreview(null, at, { from: [], to: under });
+    const preview = this.view.toolPreview(null, at, { from: [], to: under, reach: this.snapReach() });
     // Over another page than before, it is drawn afresh in that page's overlay.
     if (this.hoverEl && this.hoverEl.parentElement !== this.overlayOf(at.page.id)) this.clearHover();
     this.hoverEl = this.drawPreviewIn(at.page.id, preview, this.hoverEl);
@@ -856,9 +858,14 @@ export class PointerController {
     return this.view.plugin.registries.nodeTypes.get(node.type);
   }
 
-  /** What a node type's pointer hooks are given: the registries, `doc` and the view's settings. */
+  /** What a node type's pointer hooks are given: the registries, `doc`, the view's settings and the snap reach at its zoom. */
   private interaction(doc: Document): InteractionContext {
-    return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key) };
+    return { registries: this.view.plugin.registries, doc, viewOption: (key) => this.view.viewOption(key), snapReach: this.snapReach() };
+  }
+
+  /** `SNAP_REACH_PX` in page px at the viewport's zoom. */
+  private snapReach(): number {
+    return SNAP_REACH_PX / this.view.viewport.zoom;
   }
 
   private itemsOn(doc: Document, page: Page): { id: NodeId; rect: Rect; z: number; locked: boolean }[] {

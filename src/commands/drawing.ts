@@ -501,7 +501,10 @@ function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets
   const doc = ctx.store.doc;
   const page = from.page.id;
   const at = (p: PlacePoint) => ({ x: roundPx(p.x), y: roundPx(p.y) });
-  return [endAt(doc, ctx.registries, page, at(from), targets.from, mode), endAt(doc, ctx.registries, page, at(to), targets.to, mode)];
+  return [
+    endAt(doc, ctx.registries, page, at(from), targets.from, mode, undefined, targets.reach),
+    endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach),
+  ];
 }
 
 /**
@@ -526,7 +529,8 @@ const connectorTool: Command = {
     ctx.view.runCommandById("connector.create", { page: from.page.id, from: start, to: end });
   },
   preview(ctx, from, to, targets): ToolPreview {
-    const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, targets.to, snapModeIn(ctx));
+    const at = { x: roundPx(to.x), y: roundPx(to.y) };
+    const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, at, targets.to, snapModeIn(ctx), undefined, targets.reach);
     if (!from) return { marks };
     const doc = ctx.store.doc;
     const line = connectorNodeDefaults(from.page, { ends: toolEnds(ctx, from, to, targets), caps: defaultCaps() }, doc.nodes.map((n) => n.id));

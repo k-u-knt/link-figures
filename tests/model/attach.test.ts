@@ -1,4 +1,4 @@
-import { attachTarget } from "../../src/model/attach";
+import { attachTarget, endAt, snapMarks } from "../../src/model/attach";
 import { createDocument, createPage, fileNodeDefaults, shapeNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { pathBounds } from "../../src/model/path";
 import type { Document, Node } from "../../src/model/types";
@@ -72,4 +72,49 @@ test("a connector, an unregistered type and a missing id give null", () => {
   const stranger = { ...connector, id: "u", type: "unknown" } as unknown as Node;
   expect(attachTarget(docWith(stranger), registries, "u")).toBeNull();
   expect(attachTarget(docWith(), registries, "missing")).toBeNull();
+});
+
+// Snap reach: a press within reach of a snap point (an anchor, or the centre in centre mode) takes it, though the press
+// is on no item's body. Rect "r" is 0,0 100 × 50: its `e` anchor is (100, 25).
+const rect = (id: string, x: number, z = 0): Node => ({ ...shapeNodeDefaults(page, { kind: "rect", params: {} }, []), id, x, y: 0, width: 100, height: 50, z });
+
+test("a point within reach of an anchor attaches there, with nothing under it", () => {
+  const doc = docWith(rect("r", 0));
+  expect(endAt(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "r", snap: "anchor", anchor: "e" });
+  expect(endAt(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor", undefined, 0)).toEqual({ kind: "free", x: 103, y: 25 });
+  expect(endAt(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor")).toEqual({ kind: "free", x: 103, y: 25 });
+  expect(endAt(doc, registries, page.id, { x: 120, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "free", x: 120, y: 25 });
+  // The connector itself is passed over.
+  expect(endAt(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor", "r", 8)).toEqual({ kind: "free", x: 103, y: 25 });
+});
+
+test("in centre mode the centre is the snap point within reach", () => {
+  const doc = docWith(rect("r", 0));
+  expect(endAt(doc, registries, page.id, { x: 52, y: 27 }, [], "center", undefined, 8)).toEqual({ kind: "attached", node: "r", snap: "center" });
+  // An anchor within reach is not a snap point in centre mode.
+  expect(endAt(doc, registries, page.id, { x: 103, y: 25 }, [], "center", undefined, 8)).toEqual({ kind: "free", x: 103, y: 25 });
+});
+
+test("the marks stay on while the point is within reach of an anchor", () => {
+  const doc = docWith(rect("r", 0));
+  expect(snapMarks(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor", undefined, 8)).toEqual(attachTarget(doc, registries, "r")!.anchors.map((a) => ({ x: a.x, y: a.y })));
+  expect(snapMarks(doc, registries, page.id, { x: 103, y: 25 }, [], "anchor")).toEqual([]);
+});
+
+test("of two anchors within reach the nearer wins, and on a tie the higher z", () => {
+  // r's `e` at (100, 25), q's `w` at (110, 25).
+  const doc = docWith(rect("r", 0, 1), rect("q", 110, 0));
+  expect(endAt(doc, registries, page.id, { x: 104, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "r", snap: "anchor", anchor: "e" });
+  expect(endAt(doc, registries, page.id, { x: 106, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "q", snap: "anchor", anchor: "w" });
+  expect(endAt(doc, registries, page.id, { x: 105, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "r", snap: "anchor", anchor: "e" });
+  const flipped = docWith(rect("r", 0, 0), rect("q", 110, 1));
+  expect(endAt(flipped, registries, page.id, { x: 105, y: 25 }, [], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "q", snap: "anchor", anchor: "w" });
+});
+
+test("a snap point within reach comes before the item under the point", () => {
+  // q lies over r's `e` (its own `w` at (90, 25) is out of reach): a point on r's `e` is in q's body.
+  const doc = docWith(rect("r", 0), rect("q", 90, 1));
+  expect(endAt(doc, registries, page.id, { x: 101, y: 25 }, ["q"], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "r", snap: "anchor", anchor: "e" });
+  // Out of every reach, the item under it as before.
+  expect(endAt(doc, registries, page.id, { x: 140, y: 12 }, ["q"], "anchor", undefined, 8)).toEqual({ kind: "attached", node: "q", snap: "anchor", anchor: "n" });
 });

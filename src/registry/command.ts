@@ -52,11 +52,13 @@ export type UndoStep = "own" | "start" | "continue";
 
 /**
  * The items under the two points of a tool's drag, each list topmost first: under the press (`from`) and under the
- * release (`to`). Only items on the press page count; the tool decides what, if anything, it does with them.
+ * release (`to`). Only items on the press page count; the tool decides what, if anything, it does with them. `reach`
+ * is how near (page px) a point must come to a snap point to take it (see `SNAP_REACH_PX`).
  */
 export interface DragTargets {
   from: NodeId[];
   to: NodeId[];
+  reach: number;
 }
 
 /**

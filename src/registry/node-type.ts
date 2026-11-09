@@ -60,6 +60,8 @@ export interface InteractionContext {
   doc: Document;
   /** A setting of the open view, such as the snap mode new connector ends take (see `FigureViewLike.viewOption`). */
   viewOption(key: string): unknown;
+  /** How near (page px) a dragged end must come to a snap point to take it, at the view's zoom (see `SNAP_REACH_PX`). */
+  snapReach: number;
 }
 
 /** A point of a selected node that can be dragged to change it, in page px; `id` is the node type's own. */

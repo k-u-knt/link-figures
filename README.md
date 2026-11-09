@@ -153,6 +153,8 @@ The paint defaults are `{ type: "solid", color: "#000000" }`, a linear gradient 
 
 **Align, distribute and snap.** The toolbar has Align left, centre, right, top, middle and bottom, and Distribute horizontally and vertically (three or more items). A group counts as one item. A drag snaps to the edges and centres of other items and to the page's edges, centre lines and margins, with a guide line while it holds; hold Alt during a drag to skip snapping, or turn it off with the "Snap" toggle in the toolbar (`snap.toggle`; it is a setting of the open figure, not saved with it).
 
+**Right-click menu.** Right-click an item for what the toolbar offers for it: Duplicate, Delete, Lock and Unlock, Crop and Reset crop, Bring forward and Send backward, Group and Ungroup, the aligns and distributes, Auto display range and Reset display, Reset aspect ratio and Open source (greyed out where they do not apply). The item is selected first unless it is already part of the selection, so a right-click on one of several selected items acts on them all. Right-click a page's paper for Text, Rectangle, Ellipse, Connector, Add page, Delete page, Fit page and Export on that page, or the canvas around the pages for Add page, Fit page, Zoom to 100% and Export. The Menu key or Shift+F10 opens the menu from the keyboard. A command added by another plugin can list itself with `menu: ["item" | "page" | "canvas"]`. "Lock" and "Unlock" (`lock`, `unlock`, also in the toolbar and the palette) set `locked` on the selected items; a locked group locks everything in it.
+
 **Crop.** Double-click an image panel (or click "Crop") to crop it on the page: drag a handle to move that edge of the crop, drag inside the box to move the image under it, Enter or a click outside to finish, Escape to cancel. The whole crop session is one undo step. A rotated panel is not cropped on the page (set its rotation to 0); the inspector's "Crop left/top/right/bottom (%)" fields and `panel.crop` work on it anyway.
 
 | Id | Arguments (defaults in brackets) | Result |
@@ -163,6 +165,7 @@ The paint defaults are `{ type: "solid", color: "#000000" }`, a linear gradient 
 | `group.remove` | `ids` (required) | `{}` |
 | `align` | `ids` (the selection), `edge` (`"left"`, `"hcenter"`, `"right"`, `"top"`, `"vcenter"` or `"bottom"`; required), `to` (`"selection"` for two or more items, else `"margins"`; or `"page"`) | `{ ids }` |
 | `distribute` | `ids` (the selection), `axis` (`"horizontal"` or `"vertical"`; required), `by` (`"gap"` or `"center"`) | `{ ids }` |
+| `lock` / `unlock` | `ids` (the selection) | `{ ids }`: the items whose `locked` changed |
 | `panel.crop` | `id`, `crop` (`{ x, y, w, h }` as fractions of the image, or `null` for none; required), `keep` (`"image"`, the default: the image stays put and the box becomes the visible part; or `"box"`: the box stays and the image refits) | `{}` |
 | `panel.crop-reset` | `id` (the selected panel); needs the figure open, as it crops with keep `"image"` | `{}` |
 

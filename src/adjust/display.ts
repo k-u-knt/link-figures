@@ -50,7 +50,7 @@ export function seedDisplay(plane: Plane, range: Range16 | "auto"): DisplayChann
 }
 
 /** `channels[index]` read defensively over `fallback` (params come from the file). */
-function readChannel(value: unknown, fallback: DisplayChannel): DisplayChannel {
+export function readChannel(value: unknown, fallback: DisplayChannel): DisplayChannel {
   if (typeof value !== "object" || value === null) return fallback;
   const v = value as Record<string, unknown>;
   const finite = (x: unknown, d: number): number => (typeof x === "number" && Number.isFinite(x) ? x : d);

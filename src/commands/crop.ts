@@ -43,8 +43,11 @@ function showsNoImageNow(ctx: CommandContext, id: NodeId): boolean {
   return view?.imageStateNow?.(id) === "none";
 }
 
-/** The file panel `id` of the figure, which may be changed; refuses anything else with a message naming `command`. */
-function panel(ctx: CommandContext, command: string, id: NodeId): FileNode {
+/**
+ * The file panel `id` of the figure, showing an image that may be changed; refuses anything else with a message naming
+ * `command`. Shared by the commands that edit a panel's image (`panel.crop`, `panel.display` and the like).
+ */
+export function panelGuard(ctx: CommandContext, command: string, id: NodeId): FileNode {
   const doc = ctx.store.doc;
   const node = doc.nodes.find((n) => n.id === id);
   if (!node) throw new CommandError(`${command}: there is no node "${id}"`);
@@ -60,7 +63,7 @@ function panel(ctx: CommandContext, command: string, id: NodeId): FileNode {
  * box stays and the image refits. One commit, so one undo step.
  */
 function crop(ctx: CommandContext, args: CropArgs): Record<string, never> {
-  const node = panel(ctx, "panel.crop", args.id);
+  const node = panelGuard(ctx, "panel.crop", args.id);
   const next = args.crop ? clampCrop(args.crop) : null;
   let fields: Partial<FileNode> = { crop: next };
   if (args.keep === "image") {
@@ -88,7 +91,7 @@ function selectedCroppedPanel(ctx: CommandContext): FileNode | undefined {
  * The one selected file panel that shows an image and may be changed, if that is what is selected: what `crop.edit`
  * crops on the page. A rotated one counts, so that the command can say why it does not start (see `startCrop`).
  */
-function selectedImagePanel(ctx: CommandContext): FileNode | undefined {
+export function selectedImagePanel(ctx: CommandContext): FileNode | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
   return node?.type === "file" && node.show === "image" && !isLocked(ctx.store.doc, node.id) && !showsNoImageNow(ctx, node.id) ? node : undefined;

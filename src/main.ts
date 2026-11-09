@@ -6,6 +6,7 @@ import { arrangeCommands } from "./commands/arrange";
 import { builtinSnapSources } from "./model/snap";
 import { registerBuiltinCommands, registerPaletteCommand } from "./commands/builtin";
 import { cropCommands } from "./commands/crop";
+import { displayCommands } from "./commands/display";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
 import { groupCommands } from "./commands/groups";
@@ -84,6 +85,11 @@ export default class LinkFiguresPlugin extends Plugin {
     }
     // panel.crop takes arguments (the inspector and crop mode give them); Reset crop is also in the palette.
     for (const command of cropCommands()) {
+      if (command.hidden) this.registries.commands.register(command);
+      else registerPaletteCommand(this, command);
+    }
+    // panel.display and panel.histogram take arguments (the inspector gives them); Auto display range and Reset display are also in the palette.
+    for (const command of displayCommands()) {
       if (command.hidden) this.registries.commands.register(command);
       else registerPaletteCommand(this, command);
     }

@@ -20,10 +20,11 @@ import { createDocument } from "../model/defaults";
 import type { PlacePoint, Pt, Rect } from "../model/geometry";
 import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
-import type { Document, NodeId, Page } from "../model/types";
-import type { Command, CommandContext, DragTargets, ToolPreview, UndoStep } from "../registry/command";
+import type { Document, NodeId, Page, PageId } from "../model/types";
+import type { Command, CommandContext, DragTargets, MenuPlace, ToolPreview, UndoStep } from "../registry/command";
 import type { ImageState } from "../registry/node-type";
 import { DEFAULT_SETTINGS } from "../settings/settings";
+import { showContextMenu } from "./context-menu";
 import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
@@ -83,6 +84,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   enteredGroup: NodeId | null = null;
   /** The tool that the next press on a page places (see `Command.place`), or null. A new document, or none, disarms it. */
   armedTool: Command | null = null;
+
+  /**
+   * The page a right-click on its paper focused (see `openContextMenu`), or null: with nothing selected, page-level
+   * commands, Fit page and the Page inspector act on it rather than on the page nearest the middle of the stage. A pan,
+   * a zoom or a press of the left button lets go of it.
+   */
+  private pinnedPage: PageId | null = null;
 
   /** This view's settings that are not part of the figure (a tool's mode): see `viewOption`. */
   private readonly options = new Map<string, unknown>();
@@ -306,13 +314,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   fitPage(): void {
-    this.fitPageTo(this.currentPage());
+    this.fitPageTo(this.pinned() ?? this.currentPage());
   }
 
-  /** Sets the zoom (1 is 100%) and puts the current page in the middle of the stage. */
+  /** Sets the zoom (1 is 100%) and puts the current page (or the page a right-click focused) in the middle of the stage. */
   zoomTo(z: number): void {
     const stage = this.stageSize();
-    const rect = this.pageRect(this.currentPage());
+    const rect = this.pageRect(this.pinned() ?? this.currentPage());
     if (!rect || stage.width === 0 || stage.height === 0) return;
     this.viewport.centreOn({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, stage, z);
     this.applyViewport();
@@ -323,6 +331,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    * Page section of the inspector and the view commands act on that page (`focusPage`), so the chrome is drawn again too.
    */
   applyViewport(): void {
+    // The page now in the middle is the one in focus, not one a right-click focused before.
+    this.pinnedPage = null;
     this.viewportEl.style.transform = this.viewport.cssTransform();
     // For what is drawn on the pages but is sized in screen pixels (handles, outlines): see the selection rules in styles.css.
     this.viewportEl.style.setProperty("--lf-zoom", String(this.viewport.zoom));
@@ -356,8 +366,36 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** The page of the selected nodes when something is selected, else `currentPage()`: what page-level commands and the Page inspector act on. */
   focusPage(): Page {
-    const nearest = this.currentPage();
+    const nearest = this.pinned() ?? this.currentPage();
     return pageInFocus(this.store.doc, this.selection.ids, nearest) ?? nearest;
+  }
+
+  /** The page a right-click focused (see `pinnedPage`), if it is still a page of the figure. */
+  private pinned(): Page | undefined {
+    const id = this.pinnedPage;
+    return id === null ? undefined : this.store.doc.pages.find((p) => p.id === id);
+  }
+
+  /**
+   * Opens the context menu for `where` (see `MenuPlace`) at `at`, a client point, or at the middle of the stage when
+   * null (from the keyboard). A page menu focuses `page` (else the focus page stays as it is) for the commands it runs.
+   * The pointer controller has already adjusted the selection.
+   */
+  openContextMenu(where: MenuPlace, at: Pt | null, page: PageId | null): void {
+    if (this.readOnly) return;
+    if (where === "page" && page !== null) {
+      this.pinnedPage = page;
+      this.renderChrome();
+    }
+    const box = this.stageEl.getBoundingClientRect();
+    showContextMenu(this, where, at ?? { x: box.left + box.width / 2, y: box.top + box.height / 2 });
+  }
+
+  /** The client point (as a pointer event gives it) of world point `world`. */
+  clientPointOf(world: Pt): Pt {
+    const box = this.stageEl.getBoundingClientRect();
+    const screen = this.viewport.toScreen(world);
+    return { x: box.left + screen.x, y: box.top + screen.y };
   }
 
   /** Whether a figure is loaded (not the blank stand-in, nor a file that could not be read): what the API may act on. */
@@ -599,6 +637,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   private onPointerDown(ev: PointerEvent): void {
+    // A press of the left button is a new focus: the page a right-click focused is let go of.
+    if (ev.button === 0) this.pinnedPage = null;
     if (this.errorEl || this.panning) return;
     if (!this.isPanGesture(ev)) return;
     ev.preventDefault();

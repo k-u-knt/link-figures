@@ -24,6 +24,16 @@ const LINE_HIT_PX = 4;
 /** The radius, in screen pixels, of the points a preview marks (the anchors of the item under the pointer). */
 const MARK_RADIUS_PX = 3.5;
 const SVG_NS = "http://www.w3.org/2000/svg";
+/**
+ * How long (ms) after the keyboard opened the context menu a `contextmenu` event is taken to be the one the same key
+ * sends (the Menu key, Shift+F10), and not to open a second menu.
+ */
+const KEY_MENU_ECHO_MS = 1000;
+
+/** On a Mac a Control-click is a right-click: it opens the context menu and must not also press. */
+function isControlClick(ev: PointerEvent): boolean {
+  return ev.ctrlKey && ev.button === 0 && typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
+}
 
 /** Text being typed into must keep its keys. */
 export function isEditable(target: EventTarget | null): boolean {
@@ -103,6 +113,8 @@ export class PointerController {
   /** The snap guides of the drag under way (see `drawGuides`), in its page's overlay. */
   private guideEls: HTMLElement[] = [];
 
+  /** When the keyboard last opened the context menu (see `KEY_MENU_ECHO_MS`). */
+  private keyMenuAt = -Infinity;
   /** `sync` is under way (see the crop session's `onEnd`). */
   private syncing = false;
   /** Crop mode on the page (see `CropSession`): while a session is under way, presses on its panel go to it. */
@@ -148,6 +160,7 @@ export class PointerController {
       if (this.gesture.kind !== "idle" && ev.button === 0) ev.preventDefault();
     });
     on("dblclick", (ev) => this.onDoubleClick(ev));
+    on("contextmenu", (ev) => this.onContextMenu(ev));
     on("keydown", (ev) => this.onKeyDown(ev));
     on("blur", () => this.endGesture());
     this.unsubscribeSelection = this.view.selection.onChange(() => this.sync());
@@ -252,7 +265,8 @@ export class PointerController {
       if (ev.pointerId !== this.gesture.pointerId) return;
       this.endGesture();
     }
-    if (!ev.isPrimary || ev.button !== 0 || this.view.isPanGesture(ev)) return;
+    // The right button (and a Mac's Control-click) opens the context menu (see `onContextMenu`), and neither drags nor sweeps.
+    if (!ev.isPrimary || ev.button !== 0 || isControlClick(ev) || this.view.isPanGesture(ev)) return;
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     const target = ev.target as Element | null;
     if (isEditable(target) || target?.closest?.(".lf-badge")) return;
@@ -876,6 +890,64 @@ export class PointerController {
     el?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
   }
 
+  /**
+   * A right-click: the context menu at the pointer (see `LinkFiguresView.openContextMenu`), in place of the browser's.
+   * Over an item, its unit at the entered level is selected first (as a click selects it) unless it is already selected,
+   * and the item menu opens; over a page's paper, the selection is cleared and that page's menu opens; over the canvas
+   * outside the pages, the view menu. Text being typed into keeps the browser's own menu. A crop session ignores it.
+   */
+  private onContextMenu(ev: MouseEvent): void {
+    if (this.view.readOnly || isEditable(ev.target)) return;
+    ev.preventDefault();
+    // The Menu key or Shift+F10 has opened the menu already, and this is the event the same key sends after.
+    if (Date.now() - this.keyMenuAt < KEY_MENU_ECHO_MS) return;
+    if (this.cropSession.active) return;
+    // A press that has not become a drag gives way (a Control-click the platform check missed); a drag under way keeps on.
+    if (this.gesture.kind === "pressed") this.endGesture();
+    else if (this.gesture.kind !== "idle") return;
+    this.stage?.focus({ preventScroll: true });
+    const doc = this.store.doc;
+    const selection = this.view.selection;
+    const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    const at = { x: ev.clientX, y: ev.clientY };
+    const drawn = hitTest(this.itemsOnAllPages(doc), world);
+    let entered = this.entered;
+    if (drawn !== null) {
+      // As a click: a node outside the entered group leaves it, and what was selected in it.
+      if (entered !== null && !descendantsOf(doc, entered).includes(drawn)) {
+        this.setEntered(null);
+        entered = null;
+        selection.clear();
+      }
+      const hit = outermostUnit(doc, drawn, entered);
+      if (!selection.has(hit)) selection.set([hit]);
+      this.view.openContextMenu("item", at, null);
+      return;
+    }
+    const page = pageAt(doc, world);
+    if (page) {
+      if (entered !== null) this.setEntered(null);
+      selection.clear();
+      this.view.openContextMenu("page", at, page.id);
+      return;
+    }
+    this.view.openContextMenu("canvas", at, null);
+  }
+
+  /** The Menu key or Shift+F10: the item menu at the centre of the selection, or the page menu when nothing is selected. */
+  private openKeyMenu(): void {
+    const doc = this.store.doc;
+    const selected = new Set(this.view.selection.ids);
+    const nodes = doc.nodes.filter((n) => selected.has(n.id));
+    this.keyMenuAt = Date.now();
+    if (nodes.length === 0) {
+      this.view.openContextMenu("page", null, null);
+      return;
+    }
+    const box = unionRect(nodes.map((n) => nodeWorldRect(doc, n)));
+    this.view.openContextMenu("item", this.view.clientPointOf({ x: box.x + box.width / 2, y: box.y + box.height / 2 }), null);
+  }
+
   // Keyboard
 
   private onKeyDown(ev: KeyboardEvent): void {
@@ -927,6 +999,13 @@ export class PointerController {
 
     let handled = false;
     switch (ev.key) {
+      case "ContextMenu":
+      case "F10":
+        if (ev.key === "F10" && !ev.shiftKey) break;
+        // A crop session ignores it, as it ignores a right-click.
+        if (!this.cropSession.active) this.openKeyMenu();
+        handled = true;
+        break;
       case "ArrowLeft":
       case "ArrowRight":
       case "ArrowUp":

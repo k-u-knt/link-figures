@@ -532,8 +532,12 @@
   position: absolute;
   box-sizing: border-box;
   outline: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
-  cursor: move;
   pointer-events: none;
+}
+
+/* Over the box of the panel being cropped, a drag pans the image (set on the stage by the pointer controller). */
+.lf-stage.lf-crop-pan {
+  cursor: move;
 }
 
 .lf-crop-handle {

@@ -103,6 +103,8 @@ export class PointerController {
   /** The snap guides of the drag under way (see `drawGuides`), in its page's overlay. */
   private guideEls: HTMLElement[] = [];
 
+  /** `sync` is under way (see the crop session's `onEnd`). */
+  private syncing = false;
   /** Crop mode on the page (see `CropSession`): while a session is under way, presses on its panel go to it. */
   readonly cropSession: CropSession;
 
@@ -120,7 +122,11 @@ export class PointerController {
       snapReachPage: () => this.snapReachPage(),
       drawGuides: (snap, guides, moving) => this.drawGuides(snap, guides, moving),
       clearGuides: () => this.clearGuides(),
-      onEnd: () => this.sync(),
+      onEnd: () => {
+        this.stage?.classList?.remove("lf-crop-pan");
+        // A finish from inside `sync` (the selection moved on) is drawn by that `sync` itself.
+        if (!this.syncing) this.sync();
+      },
     });
   }
 
@@ -354,6 +360,7 @@ export class PointerController {
   private onPointerMove(ev: PointerEvent): void {
     let g = this.gesture;
     if (g.kind === "idle") {
+      this.cropHover(ev);
       this.hover(ev);
       return;
     }
@@ -557,6 +564,18 @@ export class PointerController {
   }
 
   // Crop mode
+
+  /** The stage shows the move cursor (`.lf-crop-pan`) while the pointer is over the box of the panel being cropped. */
+  private cropHover(ev: PointerEvent): void {
+    const crop = this.cropSession;
+    let inside = false;
+    if (crop.active) {
+      const origin = pageOriginsPx(this.store.doc).get(crop.pageId() ?? "");
+      const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+      inside = !!origin && crop.contains({ x: world.x - origin.x, y: world.y - origin.y });
+    }
+    this.stage?.classList?.toggle("lf-crop-pan", inside);
+  }
 
   /** Drags the crop session's handle (or pans its image) to the pointer of `ev`, once the press has travelled far enough to be a drag. */
   private cropTo(g: Cropping, ev: PointerEvent): void {
@@ -959,6 +978,15 @@ export class PointerController {
 
   /** Brings the outlines and handles in line with the selection and the document. */
   private sync(): void {
+    this.syncing = true;
+    try {
+      this.syncNow();
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private syncNow(): void {
     const doc = this.store.doc;
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     // Crop mode lasts while its panel alone is selected; meanwhile its handles are the crop's, not the box's.

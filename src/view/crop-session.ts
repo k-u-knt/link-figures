@@ -137,7 +137,17 @@ export class CropSession {
     const crop = cropOf(visible, image);
     const normalised = rectsClose(visible, boxOf(node)) && cropsClose(crop, node.crop ?? { x: 0, y: 0, w: 1, h: 1 });
     const snap = handle === "pan" ? null : this.host.snapLines(node.page, [node.id]);
-    this.grab = { handle, at, image, visible, crop, normalised, snap };
+    // A handle sits on the box, but moves the visible region's edge (they differ on a letterboxed contain panel): the press
+    // is taken as made on that edge, so the dragged edge goes to the pointer and the edges not dragged stay at `visible`.
+    const box = boxOf(node);
+    const from = { ...at };
+    if (handle !== "pan") {
+      if (handle.includes("w")) from.x += visible.x - box.x;
+      if (handle.includes("e")) from.x += visible.x + visible.width - (box.x + box.width);
+      if (handle.includes("n")) from.y += visible.y - box.y;
+      if (handle.includes("s")) from.y += visible.y + visible.height - (box.y + box.height);
+    }
+    this.grab = { handle, at: from, image, visible, crop, normalised, snap };
   }
 
   /**

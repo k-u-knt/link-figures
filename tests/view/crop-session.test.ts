@@ -300,6 +300,35 @@ describe("crop session", () => {
     });
   });
 
+  describe("a contain panel letterboxed along the dragged axis", () => {
+    // The 200×100 image is contained in a 200×200 box at (10, 10): it shows from y 60 to 160, the box reaching 10 to 210.
+    const letterboxed = panel({ fit: "contain", width: 200, height: 200 });
+
+    test("the south handle, on the box, takes the visible edge to the pointer, in one undo step", () => {
+      const { controller, view, pointer, box } = setup(letterboxed);
+      controller.startCrop("p");
+      pointer("pointerdown", 110, 210);
+      pointer("pointermove", 110, 150);
+      expect(box()).toEqual({ x: 10, y: 60, width: 200, height: 90 });
+      pointer("pointermove", 110, 140);
+      expect(box().y + box().height).toBe(140);
+      pointer("pointerup", 110, 140);
+      controller.cropSession.finish();
+      view.store.undo();
+      expect(box()).toEqual({ x: 10, y: 10, width: 200, height: 200 });
+      expect(view.store.canUndo()).toBe(false);
+    });
+
+    test("the first edit keeps the visible image where it was on the page", () => {
+      const { controller, drag, imageOnPage, box } = setup(letterboxed);
+      const image = imageOnPage();
+      controller.startCrop("p");
+      drag([210, 110], [190, 110]);
+      expect(imageOnPage()).toEqual(image);
+      expect(box()).toEqual({ x: 10, y: 60, width: 180, height: 100 });
+    });
+  });
+
   test("a crop handle snaps to another item's edge, with a guide; the panel's own edges are not lines", () => {
     const { controller, drag, box, byClass, pointer } = setup(
       panel({ crop: { x: 0, y: 0, w: 0.5, h: 1 }, width: 100, height: 100 }, (doc) => {

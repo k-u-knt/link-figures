@@ -1,6 +1,6 @@
 {
   "name": "link-figures",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Page-based figure and slide editor where every panel is a live link to its source.",
   "private": true,
   "type": "module",

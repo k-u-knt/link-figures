@@ -71,8 +71,9 @@ function histogramOf(plane: Plane, channel: number, shown: DisplayChannel): Hist
 }
 
 /**
- * The Display section of a file panel (§7): per channel a heading ("Grey", or "Red"/"Green"/"Blue"), its LUT, min and
- * max (native units), gamma, whether it is visible, and its histogram. None for a panel that `shownDisplay` gives nothing for.
+ * The Display section of a file panel (§7): a "Display" heading, then per channel a heading ("Grey", or
+ * "Red"/"Green"/"Blue"), its LUT, min and max (native units), gamma, whether it is visible, and its histogram. None for
+ * a panel that `shownDisplay` gives nothing for.
  */
 export function displayFields(node: FileNode, ctx: InspectorContext): Field[] {
   const shown = shownDisplay(node, ctx);
@@ -80,7 +81,7 @@ export function displayFields(node: FileNode, ctx: InspectorContext): Field[] {
   const names = shown.channels.length === 1 ? ["Grey"] : ["Red", "Green", "Blue"];
   const luts = ctx.registries.luts.all().map((lut) => ({ value: lut.id, label: lut.name }));
   const top = shown.plane ? topValue(shown.plane) : undefined;
-  return shown.channels.flatMap((channel, c): Field[] => {
+  const channelFields = shown.channels.flatMap((channel, c): Field[] => {
     const key = (prop: string) => `display.${c}.${prop}`;
     // A LUT that is not registered (an edited file) is listed as it is: it draws as grey until another is chosen.
     const options = luts.some((l) => l.value === channel.lut) ? luts : [...luts, { value: channel.lut, label: `${channel.lut} (not available)` }];
@@ -94,6 +95,7 @@ export function displayFields(node: FileNode, ctx: InspectorContext): Field[] {
       { kind: "histogram", key: key("histogram"), label: "Histogram" },
     ];
   });
+  return [{ kind: "heading", key: "display", label: "Display" }, ...channelFields];
 }
 
 /**

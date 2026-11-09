@@ -194,9 +194,17 @@ function stopsComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   return composite;
 }
 
-/** The histogram canvas in CSS px; a handle's x maps linearly onto the histogram's [lo, hi]. */
+/**
+ * The histogram canvas in CSS px where it is not laid out (its CSS asks for 220 px, at most the inspector's width); laid
+ * out, it is drawn at the width it has.
+ */
 const HISTOGRAM_WIDTH = 220;
 const HISTOGRAM_HEIGHT = 60;
+/**
+ * A handle's width in CSS px. The bars, and so [lo, hi], lie between insets of one handle width at each edge; min's
+ * handle stands just left of its value and max's just right of it, so neither hides a bin inside [min, max].
+ */
+const HANDLE_WIDTH = 2;
 
 /** `value` if it is a histogram as `panel.histogram` gives it, else null. */
 function asHistogram(value: unknown): HistogramResult | null {
@@ -215,38 +223,62 @@ function themeColor(el: HTMLElement, name: string, fallback: string): string {
 }
 
 /**
- * A `histogram` field (`<channel>.histogram`): a 220×60 canvas of the channel's counts on a log scale over [lo, hi],
- * with its min and max (`<channel>.min`, `<channel>.max`) as two vertical handles and the counts outside them dimmed.
- * A press takes the nearer handle; each move writes it (a "start", then "continue" writes, so the drag is one undo
- * step), never past the other handle; the release ends the step. While a drag lasts the histogram it started on, and
- * so the mapping of x to values, stays as it was.
+ * A `histogram` field (`<channel>.histogram`): a canvas (220×60 CSS px, or as wide as the inspector lets it be) of the
+ * channel's counts on a log scale over [lo, hi], with its min and max (`<channel>.min`, `<channel>.max`) as two
+ * vertical handles and the counts outside them dimmed. Its bitmap is its laid-out width at the device pixel ratio, so
+ * the browser does not stretch it. A press takes the nearer handle; each move writes it (a "start", then "continue" writes,
+ * so the drag is one undo step), never past the other handle; the release ends the step. While a drag lasts the
+ * histogram it started on, and so the mapping of x to values, stays as it was.
  */
 function histogramComposite(holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv): Composite {
   const base = field.key.slice(0, field.key.lastIndexOf("."));
   const keys = { min: `${base}.min`, max: `${base}.max` };
-  const ratio = Math.max(1, Math.round((globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1));
   let canvas: HTMLCanvasElement | null = null;
   let drag: { handle: "min" | "max"; data: HistogramResult; started: boolean } | null = null;
+  /** The canvas's width in CSS px, as last measured (`fit`), and its bitmap's px per CSS px. */
+  let width = HISTOGRAM_WIDTH;
+  let scale = { x: 1, y: 1 };
+  let backing = "";
+
+  /** The canvas's CSS width as laid out (220 where it is not), and its bitmap sized to it at the device pixel ratio. */
+  const fit = (): void => {
+    if (!canvas) return;
+    const measured = canvas.clientWidth;
+    width = measured > 0 ? measured : HISTOGRAM_WIDTH;
+    const dpr = (globalThis as { devicePixelRatio?: number }).devicePixelRatio;
+    const ratio = typeof dpr === "number" && dpr > 0 ? dpr : 1;
+    const w = Math.max(1, Math.round(width * ratio));
+    const h = Math.max(1, Math.round(HISTOGRAM_HEIGHT * ratio));
+    scale = { x: w / width, y: h / HISTOGRAM_HEIGHT };
+    // Set only when it changes: setting a canvas's size clears it.
+    if (backing === `${w}x${h}`) return;
+    backing = `${w}x${h}`;
+    canvas.setAttribute("width", String(w));
+    canvas.setAttribute("height", String(h));
+  };
 
   const data = (): HistogramResult | null => drag?.data ?? asHistogram(read(field.key));
   const numberAt = (key: string): number => {
     const v = read(key);
     return typeof v === "number" && Number.isFinite(v) ? v : NaN;
   };
-  const xOf = (value: number, d: HistogramResult): number => ((value - d.lo) / (d.hi - d.lo)) * HISTOGRAM_WIDTH;
+  const span = (): number => width - 2 * HANDLE_WIDTH;
+  const xOf = (value: number, d: HistogramResult): number => HANDLE_WIDTH + ((value - d.lo) / (d.hi - d.lo)) * span();
   // `+ 0` turns a -0 (a flat plane's span starts at -0.5) into 0.
-  const valueAt = (x: number, d: HistogramResult): number => Math.round(d.lo + (Math.min(HISTOGRAM_WIDTH, Math.max(0, x)) / HISTOGRAM_WIDTH) * (d.hi - d.lo)) + 0;
+  const valueAt = (x: number, d: HistogramResult): number =>
+    Math.round(d.lo + (Math.min(span(), Math.max(0, x - HANDLE_WIDTH)) / span()) * (d.hi - d.lo)) + 0;
   /** The pointer's x across the canvas in CSS px, whatever size the canvas is drawn at. */
   const pointerX = (ev: PointerEvent): number => {
     const rect = typeof canvas?.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
-    return rect && rect.width > 0 ? ((ev.clientX - rect.left) * HISTOGRAM_WIDTH) / rect.width : ev.offsetX;
+    return rect && rect.width > 0 ? ((ev.clientX - rect.left) * width) / rect.width : ev.offsetX;
   };
 
   const paint = (): void => {
+    if (canvas) fit();
     const g = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
     if (!canvas || !g) return;
-    g.setTransform(ratio, 0, 0, ratio, 0, 0);
-    g.clearRect(0, 0, HISTOGRAM_WIDTH, HISTOGRAM_HEIGHT);
+    g.setTransform(scale.x, 0, 0, scale.y, 0, 0);
+    g.clearRect(0, 0, width, HISTOGRAM_HEIGHT);
     const d = data();
     if (!d) return;
     const min = numberAt(keys.min);
@@ -257,8 +289,8 @@ function histogramComposite(holder: HTMLElement, field: Field, read: Read, write
     const peak = Math.log1p(d.counts.reduce((a, b) => Math.max(a, b), 0)) || 1;
     g.fillStyle = themeColor(canvas, "--text-muted", "#888888");
     for (let i = 0; i < bins; i++) {
-      const x0 = (i / bins) * HISTOGRAM_WIDTH;
-      const x1 = ((i + 1) / bins) * HISTOGRAM_WIDTH;
+      const x0 = HANDLE_WIDTH + (i / bins) * span();
+      const x1 = HANDLE_WIDTH + ((i + 1) / bins) * span();
       const centre = (x0 + x1) / 2;
       const h = (Math.log1p(d.counts[i]) / peak) * HISTOGRAM_HEIGHT;
       g.globalAlpha = centre < xMin || centre > xMax ? 0.3 : 1;
@@ -266,7 +298,9 @@ function histogramComposite(holder: HTMLElement, field: Field, read: Read, write
     }
     g.globalAlpha = 1;
     g.fillStyle = themeColor(canvas, "--interactive-accent", "#7f6df2");
-    for (const x of [xMin, xMax]) if (Number.isFinite(x)) g.fillRect(Math.min(HISTOGRAM_WIDTH - 2, Math.max(0, x - 1)), 0, 2, HISTOGRAM_HEIGHT);
+    const handleAt = (x: number) => Math.min(width - HANDLE_WIDTH, Math.max(0, x));
+    if (Number.isFinite(xMin)) g.fillRect(handleAt(xMin - HANDLE_WIDTH), 0, HANDLE_WIDTH, HISTOGRAM_HEIGHT);
+    if (Number.isFinite(xMax)) g.fillRect(handleAt(xMax), 0, HANDLE_WIDTH, HISTOGRAM_HEIGHT);
   };
 
   const end = (ev?: PointerEvent): void => {
@@ -288,11 +322,10 @@ function histogramComposite(holder: HTMLElement, field: Field, read: Read, write
     draw() {
       composite.drawn = composite.shape();
       holder.empty();
-      const el = holder.createEl("canvas", {
-        cls: "lf-histogram",
-        attr: { width: HISTOGRAM_WIDTH * ratio, height: HISTOGRAM_HEIGHT * ratio, "aria-label": `${field.label}: drag the min or max handle` },
-      });
+      const el = holder.createEl("canvas", { cls: "lf-histogram", attr: { "aria-label": `${field.label}: drag the min or max handle` } });
       canvas = el;
+      backing = "";
+      fit();
       el.addEventListener("pointerdown", (e: Event) => {
         const ev = e as PointerEvent;
         if (ev.button !== undefined && ev.button !== 0) return;
@@ -465,6 +498,11 @@ export function syncFields(container: HTMLElement, fields: Field[], read: Read, 
     if (COMPOSITES[field.kind]) syncComposite(control as unknown as HTMLElement);
     else if (!typedInto.has(control)) setControlValue(control, field, read(field.key));
   }
+}
+
+/** What makes a field's controls: its key, and for a select the options it lists. */
+function fieldSignature(field: Field): string {
+  return field.kind === "select" ? `${field.key}[${(field.options ?? []).map((o) => `${o.value}=${o.label}`).join("|")}]` : field.key;
 }
 
 /** What the inspector shows: a titled list of fields and how to read and write them. */
@@ -646,7 +684,8 @@ export class Inspector {
     return {
       title,
       subtitle: ids.length > 1 || members !== null ? undefined : type?.name,
-      signature: `node:${ids.join(",")}:${fields.map((f) => f.key).join(",")}:${title}`,
+      // A select's options are part of its controls: a LUT listed as not available goes once another is chosen.
+      signature: `node:${ids.join(",")}:${fields.map(fieldSignature).join(",")}:${title}`,
       fields,
       read: (key) => {
         const node = live();
@@ -659,6 +698,10 @@ export class Inspector {
       write: (key, value, step) => {
         const route = type?.fieldRoute?.(key);
         if (route) {
+          // A commit of the value the field already reads (a field left after a histogram drag set it) is no edit, and
+          // no undo step. A gesture's writes are kept: its "start" opens the step the rest merge into.
+          const node = live();
+          if (step === undefined && node && Object.is(route.read(node, this.context()), value)) return;
           // One call of the type's command per selected node of the type (or the first only), in one commit, as `node.update` writes are.
           const ctx = this.context();
           const routed = this.view.store.doc.nodes

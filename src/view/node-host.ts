@@ -72,6 +72,12 @@ export class NodeHost {
    * first resolution under way): told when theirs lands.
    */
   private readonly awaitingResolution = new Set<NodeId>();
+  /**
+   * The samples key `samplesNow` was last asked about for each node: what asked (the inspector) shows that file as it
+   * was then. A resolution that lands with another key (the file changed on disk) tells the view once the new samples
+   * can be had. Kept with the node's `fileIdentity` then: a relink is not a change of the file.
+   */
+  private readonly askedKeys = new Map<NodeId, { key: string; identity: string }>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
   private readonly warnedUnknown = new Set<string>();
   private readonly ctx: RenderContext;
@@ -225,6 +231,7 @@ export class NodeHost {
     const { access, decoders } = this.view.plugin;
     const key = samplesKey(file, source, node.pageIndex, access);
     if (key === undefined) return null;
+    this.askedKeys.set(id, { key, identity: fileIdentity(node) });
     const plane = decoders.samples(key);
     if (plane) return plane;
     if (this.samplesPending.has(key) || this.samplesFailed.has(key)) return null;
@@ -300,6 +307,23 @@ export class NodeHost {
     const entry = this.entries.get(node.id);
     if (entry) this.updateEntry(entry, current);
     if (this.awaitingResolution.delete(node.id)) this.notifySamplesLanded();
+    else this.followFileChange(current, resolved);
+  }
+
+  /**
+   * After a resolution of node `node` landed: when what asked for its samples was shown another version of its file
+   * (a change on disk, so a new samples key), the view is told once the new samples can be had: at once when the
+   * resolution left them in the cache (a TIFF, an adjusted raster), else when the decode `samplesNow` starts lands.
+   */
+  private followFileChange(node: Node, resolved: Resolved): void {
+    const asked = this.askedKeys.get(node.id);
+    if (asked === undefined || node.type !== "file" || resolved.kind !== "image" || asked.identity !== fileIdentity(node)) return;
+    const { access } = this.view.plugin;
+    const key = samplesKey(resolved.file, resolved.source, node.pageIndex, access);
+    if (key === undefined || key === asked.key) return;
+    // Starts the decode if the plane is not cached (which tells the view when it lands), and asks with the new key.
+    const plane = this.samplesNow(node.id);
+    if (plane || this.samplesFailed.has(key)) this.notifySamplesLanded();
   }
 
   /** Warns once per view about each enabled adjustment type that is not registered; the drawing skips it. */
@@ -370,6 +394,7 @@ export class NodeHost {
     this.view.resolvedCache.delete(id);
     this.resolvedIdentity.delete(id);
     this.awaitingResolution.delete(id);
+    this.askedKeys.delete(id);
     this.view.index.untrack(id);
   }
 

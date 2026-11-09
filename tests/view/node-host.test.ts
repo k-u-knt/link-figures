@@ -612,6 +612,65 @@ describe("samplesNow", () => {
     expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
   });
 
+  test("a TIFF panel whose file changes on disk: once it is resolved again, the chrome is drawn once, with the new plane (check 16)", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "f.tif" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    const old = t.nodeHost.samplesNow(t.a.id);
+    expect(old).not.toBeNull();
+    const seen: (Plane | null)[] = [];
+    t.view.samplesLanded.mockImplementation(() => void seen.push(t.nodeHost.samplesNow(t.a.id)));
+
+    // What the link watcher does when the file is written: its mtime and size change, and the node is resolved again.
+    t.access.setMtime("f.tif", 2);
+    t.access.setSize("f.tif", 99);
+    await t.nodeHost.resolve([t.a.id]);
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBeNull();
+    expect(seen[0]).not.toBe(old);
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
+  test("a raster panel whose file changes on disk: its new samples are decoded, then the chrome is drawn once with them", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    t.nodeHost.samplesNow(t.a.id);
+    for (let i = 0; i < 3; i++) await settle();
+    const old = t.nodeHost.samplesNow(t.a.id);
+    expect(old).not.toBeNull();
+    const seen: (Plane | null)[] = [];
+    t.view.samplesLanded.mockReset();
+    t.view.samplesLanded.mockImplementation(() => void seen.push(t.nodeHost.samplesNow(t.a.id)));
+
+    t.access.setMtime("e.png", 2);
+    await t.nodeHost.resolve([t.a.id]);
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBeNull();
+    expect(seen[0]).not.toBe(old);
+    expect(t.decoders.decodeSamples).toHaveBeenCalledTimes(2);
+  });
+
+  test("resolved again with the file unchanged, or for a panel whose samples were never asked for, the chrome is not drawn", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "f.tif", [t.b.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    t.nodeHost.samplesNow(t.a.id);
+    await t.nodeHost.resolve([t.a.id]);
+    t.access.setMtime("e.png", 2);
+    await t.nodeHost.resolve([t.b.id]);
+    for (let i = 0; i < 5; i++) await settle();
+    expect(t.view.samplesLanded).not.toHaveBeenCalled();
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
   test("more panels than the cache holds, asked for in one render, do not decode and redraw in a loop", async () => {
     const t = setup();
     t.setCapacity(4);

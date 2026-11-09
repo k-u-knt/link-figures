@@ -18,8 +18,10 @@ import { FakeEl } from "./fake-dom";
 // `obsidian` ships only typings, so the file node type is loaded with it stubbed.
 vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
 
-/** The histogram canvas's width in CSS px, over which a handle's x maps linearly onto [lo, hi]. */
+/** The histogram canvas's width in CSS px where it is not laid out (no measured width). */
 const WIDTH = 220;
+/** The width of a handle, and so how far in from each edge the bars (and [lo, hi]) start. */
+const HANDLE = 2;
 
 /** 16-bit grey, 2×2: values 1000..4000, so a fresh display is 1000..4000 and the histogram spans the same. */
 const grey16: Plane = { width: 2, height: 2, bitsPerSample: 16, samplesPerPixel: 1, data: Uint16Array.from([1000, 2000, 3000, 4000]) };
@@ -31,10 +33,11 @@ const rgb16: Plane = { width: 2, height: 1, bitsPerSample: 16, samplesPerPixel: 
  * An inspector on one panel (`file`), selected, with the view's `samplesNow` answering `samples()` for it: the real file
  * node type and the display, crop and drawing commands, as the plugin registers them.
  */
-function setup(opts: { file?: string; samples?: () => Plane | null; second?: boolean; clock?: { now: number } } = {}) {
+function setup(opts: { file?: string; samples?: () => Plane | null; second?: boolean; clock?: { now: number }; adjustments?: FileNode["adjustments"] } = {}) {
   const doc = createDocument("a4-portrait");
   const page = doc.pages[0];
   const panel = { ...fileNodeDefaults(page, { file: opts.file ?? "cells.tif", subpath: "", show: "image" }, []), id: "p-1" } as FileNode;
+  if (opts.adjustments) panel.adjustments = opts.adjustments;
   doc.nodes.push(panel);
   if (opts.second) doc.nodes.push({ ...fileNodeDefaults(page, { file: "other.tif", subpath: "", show: "image" }, ["p-1"]), id: "p-2" } as FileNode);
   const registries = createRegistries();
@@ -83,10 +86,40 @@ const canvasOf = (el: FakeEl, channel = 0) => {
 /** A pointer event at `x` CSS px across the canvas. */
 const at = (x: number) => ({ offsetX: x, pointerId: 1, button: 0, preventDefault: () => {} });
 
+/** The x in CSS px across a `width` px canvas at which a handle stands for `value`, the histogram spanning [lo, hi] between the insets. */
+const valueX = (value: number, lo = 1000, hi = 4000, width = WIDTH) => HANDLE + ((value - lo) / (hi - lo)) * (width - 2 * HANDLE);
+/** The value a pointer at `x` sets, as the canvas maps it. */
+const valueAt = (x: number, lo = 1000, hi = 4000, width = WIDTH) => Math.round(lo + ((x - HANDLE) / (width - 2 * HANDLE)) * (hi - lo));
+
+/** A 2D context that records the rectangles filled, with the colour each was filled in. */
+function recordingContext() {
+  const rects: { x: number; y: number; w: number; h: number; style: string }[] = [];
+  const g = {
+    fillStyle: "",
+    globalAlpha: 1,
+    transform: [] as number[],
+    setTransform(...m: number[]) {
+      g.transform = m;
+    },
+    clearRect() {
+      rects.length = 0;
+    },
+    fillRect(x: number, y: number, w: number, h: number) {
+      rects.push({ x, y, w, h, style: g.fillStyle });
+    },
+  };
+  return { g, rects };
+}
+
+afterEach(() => {
+  FakeEl.canvas = {};
+  delete (globalThis as { devicePixelRatio?: number }).devicePixelRatio;
+});
+
 describe("the Display section", () => {
   test("shows for a TIFF panel with loaded samples: a header, LUT, min, max, gamma, visible and the histogram", () => {
     const { el } = setup();
-    expect(headings(el)).toEqual(["Grey"]);
+    expect(headings(el)).toEqual(["Display", "Grey"]);
     expect(displayKeys(el)).toEqual(["display.0.lut", "display.0.min", "display.0.max", "display.0.gamma", "display.0.visible", "display.0.histogram"]);
     expect(el.control("display.0.lut").value).toBe("grey");
     expect(el.control("display.0.min").value).toBe("1000");
@@ -129,7 +162,7 @@ describe("the Display section", () => {
 
   test("a 16-bit RGB panel shows 3 channel blocks with seeded values", () => {
     const { el } = setup({ samples: () => rgb16 });
-    expect(headings(el)).toEqual(["Red", "Green", "Blue"]);
+    expect(headings(el)).toEqual(["Display", "Red", "Green", "Blue"]);
     const seed = seedDisplay(rgb16, "auto");
     for (let c = 0; c < 3; c++) {
       expect(el.control(`display.${c}.lut`).value).toBe(seed[c].lut);
@@ -152,6 +185,19 @@ describe("the Display section", () => {
     expect(t.el.control("display.1.lut").value).toBe("fire");
   });
 
+  test("a LUT that is not registered is listed as not available, until a registered one is chosen (check 23)", () => {
+    const t = setup({ adjustments: [{ type: "display", enabled: true, params: { channels: [{ min: 1000, max: 4000, gamma: 1, lut: "nope", visible: true }] } }] });
+    const options = () => t.el.control("display.0.lut").findAll((e) => e.tag === "option").map((e) => e.text);
+    expect(options()).toContain("nope (not available)");
+    const select = t.el.control("display.0.lut");
+    select.value = "fire";
+    select.fire("change");
+    expect(t.channels()?.[0].lut).toBe("fire");
+    expect(options()).not.toContain("nope (not available)");
+    expect(options()).toHaveLength(builtinLuts.length);
+    expect(t.el.control("display.0.lut").value).toBe("fire");
+  });
+
   test("gamma, min and the visible toggle write their channel's property", () => {
     const t = setup();
     t.el.typeInto("display.0.gamma", "2");
@@ -164,7 +210,7 @@ describe("the Display section", () => {
 
   test("with several panels selected it shows the first one's display and writes to it only", () => {
     const t = setup({ second: true });
-    expect(headings(t.el)).toEqual(["Grey"]);
+    expect(headings(t.el)).toEqual(["Display", "Grey"]);
     t.el.typeInto("display.0.max", "3000");
     expect(t.channels("p-1")?.[0].max).toBe(3000);
     expect(t.channels("p-2")).toBeUndefined();
@@ -256,7 +302,7 @@ describe("the histogram", () => {
     canvas.fire("pointermove", at(200));
     canvas.fire("pointermove", at(150));
     canvas.fire("pointerup", at(150));
-    expect(t.channels()?.[0].max).toBe(Math.round(1000 + (150 / WIDTH) * 3000));
+    expect(t.channels()?.[0].max).toBe(valueAt(150));
     t.store.undo();
     expect(t.channels()).toBeUndefined();
   });
@@ -291,6 +337,64 @@ describe("the histogram", () => {
     expect(Object.is(t.channels()?.[0].min, 0)).toBe(true);
   });
 
+  test("Enter in Min, a drag of the Min handle, then leaving Min: no extra undo step (check 13)", () => {
+    const t = setup();
+    const min = t.el.typeOnly("display.0.min", "1500");
+    min.fire("keydown", { key: "Enter", isComposing: false, preventDefault: () => {} });
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(0));
+    canvas.fire("pointermove", at(valueX(2500)));
+    canvas.fire("pointerup", at(valueX(2500)));
+    expect(t.el.control("display.0.min").value).toBe("2500");
+    // The focus leaves Min, which the browser commits as a `change` with the value the drag put there.
+    min.fire("change");
+    min.fire("blur");
+    expect(t.labels).toEqual(["inspect:display.0.min", "inspect:display.0.min"]);
+    t.store.undo();
+    expect(t.channels()?.[0].min).toBe(1500);
+  });
+
+  test("committing a display field with the value it already has writes nothing", () => {
+    const t = setup();
+    t.el.typeInto("display.0.max", "4000");
+    t.el.typeInto("display.0.gamma", "1");
+    const lut = t.el.control("display.0.lut");
+    lut.value = "grey";
+    lut.fire("change");
+    expect(t.labels).toEqual([]);
+    expect(t.channels()).toBeUndefined();
+  });
+
+  test("the canvas's bitmap is its laid-out CSS width at the device pixel ratio (check 11)", () => {
+    FakeEl.canvas = { clientWidth: 206 };
+    (globalThis as { devicePixelRatio?: number }).devicePixelRatio = 2;
+    const t = setup();
+    expect([canvasOf(t.el).attrs.width, canvasOf(t.el).attrs.height]).toEqual(["412", "120"]);
+  });
+
+  test("a pointer maps over the laid-out width: the right edge is the top of the span, the middle half way", () => {
+    FakeEl.canvas = { clientWidth: 206 };
+    const t = setup();
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(206));
+    canvas.fire("pointermove", at(103));
+    canvas.fire("pointerup", at(103));
+    expect(t.channels()?.[0].max).toBe(2500);
+  });
+
+  test("the handles stand outside the bars, so neither hides the first or the last bin (check 11)", () => {
+    const { g, rects } = recordingContext();
+    FakeEl.canvas = { clientWidth: 206, context: () => g };
+    setup();
+    // The shown display is [lo, hi] = [1000, 4000]: min's handle at the left edge, max's at the right.
+    const handles = rects.filter((r) => r.style === "#7f6df2");
+    const bars = rects.filter((r) => r.style !== "#7f6df2");
+    expect(handles.map((r) => [r.x, r.w])).toEqual([[0, HANDLE], [206 - HANDLE, HANDLE]]);
+    expect(Math.min(...bars.map((r) => r.x))).toBeCloseTo(HANDLE);
+    expect(Math.max(...bars.map((r) => r.x + r.w))).toBeCloseTo(206 - HANDLE);
+    expect(g.transform).toEqual([1, 0, 0, 1, 0, 0]);
+  });
+
   test("a move without a press writes nothing", () => {
     const t = setup();
     canvasOf(t.el).fire("pointermove", at(100));
@@ -315,6 +419,6 @@ describe("the histogram", () => {
     expect(decode).not.toHaveBeenCalled();
     expect(get.mock.results.every((r) => r.value === big)).toBe(true);
     expect(t.labels).toHaveLength(3);
-    expect(t.channels()?.[0].max).toBe(Math.round((160 / WIDTH) * 4095));
+    expect(t.channels()?.[0].max).toBe(valueAt(160, 0, 4095));
   });
 });

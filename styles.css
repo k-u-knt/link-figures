@@ -155,7 +155,7 @@
   color: var(--text-normal);
 }
 
-/* A display channel's histogram: 220×60 CSS px whatever its bitmap's pixel ratio; its handles are dragged. */
+/* A display channel's histogram: 220×60 CSS px, or narrower in a narrow inspector (its bitmap follows the laid-out width); its handles are dragged. */
 .lf-histogram {
   width: 220px;
   height: 60px;

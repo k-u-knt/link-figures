@@ -12,6 +12,9 @@ export interface ElInfo {
 }
 
 export class FakeEl {
+  /** How a `<canvas>` is laid out and drawn, for the tests that need it: its CSS width (0, not laid out, by default) and its 2D context (none by default). */
+  static canvas: { clientWidth?: number; context?: (el: FakeEl) => unknown } = {};
+
   cls: string[] = [];
   attrs: Record<string, string> = {};
   children: FakeEl[] = [];
@@ -54,6 +57,14 @@ export class FakeEl {
   /** What the browser does when the user does something to the control. */
   fire(type: string, ev?: object): void {
     for (const fn of this.listeners.get(type) ?? []) fn(ev);
+  }
+
+  get clientWidth(): number {
+    return this.tag === "canvas" ? FakeEl.canvas.clientWidth ?? 0 : 0;
+  }
+
+  getContext(_type: string): unknown {
+    return this.tag === "canvas" ? FakeEl.canvas.context?.(this) ?? null : null;
   }
 
   focus(): void {

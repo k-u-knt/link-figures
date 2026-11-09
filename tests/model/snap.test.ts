@@ -1,8 +1,9 @@
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
-import { createDocument, createPage, groupNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
+import { connectorNodeDefaults, createDocument, createPage, groupNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
 import { mmToPx, pageSizePx } from "../../src/model/geometry";
 import { builtinSnapSources, snapEdges, snapMove } from "../../src/model/snap";
 import type { Document, Node } from "../../src/model/types";
+import { connectorNodeType } from "../../src/nodes/connector-node";
 import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
@@ -76,6 +77,13 @@ describe("snapEdges", () => {
     const r = snapEdges({ x: [line(1)], y: [line(30)] }, rect(0, 28, 10, 10), { top: true }, 6);
     expect(r.rect).toEqual({ x: 0, y: 30, width: 10, height: 8 });
   });
+  test("a snap that would shrink the rect below the minimum is refused", () => {
+    // The right edge at 50 + 20 = 70 would snap to 51, leaving width 1, under MIN_NODE_PX.
+    const r = snapEdges({ x: [line(51)], y: [] }, rect(50, 0, 20, 10), { right: true }, 30);
+    expect(r).toEqual({ rect: rect(50, 0, 20, 10), guides: [] });
+    const l = snapEdges({ x: [line(69)], y: [] }, rect(50, 0, 20, 10), { left: true }, 30);
+    expect(l.rect).toEqual(rect(50, 0, 20, 10));
+  });
   test("out of reach leaves the rect", () => {
     const r = snapEdges({ x: [line(100)], y: [] }, rect(50, 0, 20, 10), { right: true }, 6);
     expect(r).toEqual({ rect: rect(50, 0, 20, 10), guides: [] });
@@ -87,6 +95,7 @@ describe("builtin sources", () => {
   const r = createRegistries();
   r.nodeTypes.register(shapeNodeType);
   r.nodeTypes.register(groupNodeType);
+  r.nodeTypes.register(connectorNodeType);
   for (const p of builtinPaintTypes) r.paints.register(p);
   for (const k of builtinShapeKinds) r.shapes.register(k);
   for (const rt of builtinRoutes) r.routes.register(rt);
@@ -101,7 +110,7 @@ describe("builtin sources", () => {
 
   test("items: each unit's visual left/centre/right and top/middle/bottom", () => {
     const { x, y } = source("items").lines(doc, page, new Set(), r);
-    const c = x.filter((l) => l.source === "c" || l.kind === "item").filter((l) => [300, 305, 310].includes(l.pos));
+    const c = x.filter((l) => l.source === "c").filter((l) => [300, 305, 310].includes(l.pos));
     expect(c).toHaveLength(3);
     expect(c[0]).toMatchObject({ kind: "item", from: 400, to: 410 });
     expect(y.filter((l) => [400, 405, 410].includes(l.pos))).toHaveLength(3);
@@ -114,6 +123,26 @@ describe("builtin sources", () => {
   test("items: excluded units and their descendants give no lines", () => {
     const { x } = source("items").lines(doc, page, new Set(["g", "a", "b"]), r);
     expect(x.map((l) => l.pos).sort((p, q) => p - q)).toEqual([300, 305, 310]);
+  });
+  test("items: a member excluded alone gives no lines from its group, but its sibling and others do", () => {
+    const { x } = source("items").lines(doc, page, new Set(["a"]), r);
+    expect(x.some((l) => l.source === "g")).toBe(false);
+    expect(x.some((l) => l.source === "a")).toBe(false);
+    expect(x.filter((l) => l.source === "b").map((l) => l.pos)).toEqual([100, 125, 150]);
+    expect(x.filter((l) => l.source === "c")).toHaveLength(3);
+  });
+  test("items: excluding only the group gives no lines from its members", () => {
+    const { x } = source("items").lines(doc, page, new Set(["g"]), r);
+    expect(x.some((l) => ["a", "b", "g"].includes(l.source))).toBe(false);
+    expect(x.filter((l) => l.source === "c")).toHaveLength(3);
+  });
+  test("items: a connector attached to an excluded item gives no lines", () => {
+    const withLine: Document = {
+      ...doc,
+      nodes: [...doc.nodes, connectorNodeDefaults(page, { id: "k", ends: [{ kind: "attached", node: "c", snap: "center" }, { kind: "free", x: 500, y: 500 }] }, [])],
+    };
+    expect(source("items").lines(withLine, page, new Set(["c"]), r).x.some((l) => l.source === "k")).toBe(false);
+    expect(source("items").lines(withLine, page, new Set(), r).x.some((l) => l.source === "k")).toBe(true);
   });
   test("page: edges and centre lines", () => {
     const { w, h } = { w: pageSizePx(page).width, h: pageSizePx(page).height };

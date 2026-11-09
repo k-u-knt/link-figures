@@ -2,8 +2,9 @@ import type { Registries } from "../registry";
 import type { SnapLine, SnapSource } from "../registry/snap";
 import { visualBounds } from "./arrange";
 import { mmToPx, pageSizePx, type Rect } from "./geometry";
-import type { Document, NodeId, Page } from "./types";
-import { descendantsOf, unitsOf } from "./groups";
+import { MIN_NODE_PX } from "../constants";
+import type { ConnectorNode, Document, NodeId, Page } from "./types";
+import { ancestorsOf, childrenOf, descendantsOf, unitsOf } from "./groups";
 
 /** The lines a move or resize snaps to, by axis: `x` are vertical lines, `y` horizontal ones. */
 export type SnapLines = { x: SnapLine[]; y: SnapLine[] };
@@ -15,13 +16,24 @@ const items: SnapSource = {
     const skip = new Set<string>(exclude);
     for (const id of exclude) for (const d of descendantsOf(doc, id)) skip.add(d);
     const onPage = doc.nodes.filter((n) => n.page === page.id).map((n) => n.id);
+    // An ancestor of an excluded node has the moving node inside its bounds, so it is walked into, not offered.
+    const ancestors = new Set<string>();
+    for (const id of exclude) for (const a of ancestorsOf(doc, id)) ancestors.add(a);
     const out: SnapLines = { x: [], y: [] };
-    for (const id of unitsOf(doc, onPage, null)) {
-      if (skip.has(id)) continue;
+    const offer = (id: NodeId) => {
+      if (skip.has(id)) return;
+      if (ancestors.has(id)) {
+        for (const child of childrenOf(doc, id)) offer(child);
+        return;
+      }
+      const node = doc.nodes.find((n) => n.id === id);
+      // A connector attached to a moving item is re-resolved as the item moves.
+      if (node?.type === "connector" && (node as ConnectorNode).ends.some((e) => e.kind === "attached" && skip.has(e.node))) return;
       const b = visualBounds(doc, id, registries);
       for (const pos of [b.x, b.x + b.width / 2, b.x + b.width]) out.x.push({ pos, from: b.y, to: b.y + b.height, kind: "item", source: id });
       for (const pos of [b.y, b.y + b.height / 2, b.y + b.height]) out.y.push({ pos, from: b.x, to: b.x + b.width, kind: "item", source: id });
-    }
+    };
+    for (const id of unitsOf(doc, onPage, null)) offer(id);
     return out;
   },
 };
@@ -97,22 +109,37 @@ export function snapMove(lines: SnapLines, moving: Rect, reach: number): { dx: n
 export function snapEdges(lines: SnapLines, rect: Rect, edges: { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean }, reach: number): { rect: Rect; guides: SnapLine[] } {
   let { x, y, width, height } = rect;
   const guides: SnapLine[] = [];
-  const take = (axis: readonly SnapLine[], at: number) => {
-    const s = snapAxis(axis, [at], reach);
-    guides.push(...s.guides);
-    return s.d;
-  };
+  // A snap that would shrink the rect below the minimum size is refused: that edge stays where it was.
+  const ok = (size: number, d: number, grows: 1 | -1) => size + grows * d >= MIN_NODE_PX;
   if (edges.left) {
-    const d = take(lines.x, rect.x);
-    x += d;
-    width -= d;
+    const s = snapAxis(lines.x, [rect.x], reach);
+    if (ok(width, s.d, -1)) {
+      guides.push(...s.guides);
+      x += s.d;
+      width -= s.d;
+    }
   }
-  if (edges.right) width += take(lines.x, rect.x + rect.width);
+  if (edges.right) {
+    const s = snapAxis(lines.x, [rect.x + rect.width], reach);
+    if (ok(width, s.d, 1)) {
+      guides.push(...s.guides);
+      width += s.d;
+    }
+  }
   if (edges.top) {
-    const d = take(lines.y, rect.y);
-    y += d;
-    height -= d;
+    const s = snapAxis(lines.y, [rect.y], reach);
+    if (ok(height, s.d, -1)) {
+      guides.push(...s.guides);
+      y += s.d;
+      height -= s.d;
+    }
   }
-  if (edges.bottom) height += take(lines.y, rect.y + rect.height);
+  if (edges.bottom) {
+    const s = snapAxis(lines.y, [rect.y + rect.height], reach);
+    if (ok(height, s.d, 1)) {
+      guides.push(...s.guides);
+      height += s.d;
+    }
+  }
   return { rect: { x, y, width, height }, guides };
 }

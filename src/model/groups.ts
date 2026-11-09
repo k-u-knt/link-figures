@@ -92,7 +92,7 @@ export function unitsOf(doc: Document, ids: readonly NodeId[], within: NodeId | 
 }
 
 /** `id`'s ancestors, nearest first (not `id` itself); stops at one already seen, so a cyclic parent chain ends. */
-function ancestorsOf(doc: Document, id: NodeId): NodeId[] {
+export function ancestorsOf(doc: Document, id: NodeId): NodeId[] {
   const out: NodeId[] = [];
   let at = parentOf(doc, id);
   while (at !== null && !out.includes(at) && at !== id) {

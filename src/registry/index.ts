@@ -7,6 +7,7 @@ import { PaintRegistry } from "./paint";
 import { RouteRegistry } from "./route";
 import { ShapeKindRegistry } from "./shape-kind";
 import { ShapeOperationRegistry } from "./shape-operation";
+import { SnapSourceRegistry } from "./snap";
 
 export interface Registries {
   commands: CommandRegistry;
@@ -18,6 +19,7 @@ export interface Registries {
   routes: RouteRegistry;
   caps: CapKindRegistry;
   shapeOperations: ShapeOperationRegistry;
+  snaps: SnapSourceRegistry;
 }
 
 export function createRegistries(): Registries {
@@ -31,5 +33,6 @@ export function createRegistries(): Registries {
     routes: new RouteRegistry(),
     caps: new CapKindRegistry(),
     shapeOperations: new ShapeOperationRegistry(),
+    snaps: new SnapSourceRegistry(),
   };
 }

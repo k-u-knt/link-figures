@@ -161,7 +161,7 @@ describe("pptx exporter", () => {
     const slide = slideOf(files[0].bytes);
     expect(treeTags(slide)).toEqual(["p:sp", "p:sp", "p:sp"]);
     expect(all(slide, "p:cNvPr").slice(1).map((c) => c.getAttribute("name"))).toEqual(["a", "c", "b"]);
-    expect(warnings).toEqual(["Group (Page 1): its members are not next to each other in the stacking order, written as separate items"]);
+    expect(warnings).toEqual(['"g" (Page 1): its members are not next to each other in the stacking order, written as separate items']);
   });
 
   it("nests kept groups, and keeps an inner group whose outer group is flattened", async () => {
@@ -251,7 +251,7 @@ describe("pptx exporter", () => {
     expect(one(pic, "a:off").getAttribute("x")).toBe(String(12 * E));
     const entries = unzip(files[0].bytes).map((e) => e.name);
     expect(entries).toContain("ppt/media/image1.png");
-    expect(warnings).toEqual(['Item "widget" (Page 1): written as a picture']);
+    expect(warnings).toEqual(['"w" (Page 1): written as a picture']);
   });
 
   const widgetDoc = () => {
@@ -279,7 +279,7 @@ describe("pptx exporter", () => {
     const { files, warnings } = await run(input(widgetDoc(), { registries }), fake.backend);
     expect(fake.calls).toHaveLength(0);
     expect(all(slideOf(files[0].bytes), "p:pic")).toHaveLength(0);
-    expect(warnings.some((w) => w.includes('Item "widget"') && w.includes("skipped"))).toBe(true);
+    expect(warnings.some((w) => w.includes('"w" (Page 1)') && w.includes("skipped"))).toBe(true);
   });
 
   it("does not fail the export when a type's bounds throw while it is drawn as a picture", async () => {

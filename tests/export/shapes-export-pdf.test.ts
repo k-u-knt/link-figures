@@ -161,6 +161,6 @@ describe("PDF export notice", () => {
     const page = d.pages[0];
     const built = buildPageSvg(d, page, r, assets);
     const result = await pdfExporter.run({ doc: d, pages: [page], svgs: new Map([[page.id, built.svg]]), assets: new Map([[page.id, assets]]), registries: r, warnings: built.warnings, baseName: "figure", dpi: 300 }, {});
-    expect(result.warnings).toEqual([`Panel "plot.svg" (${page.name}): gradient line drawn in one colour in the PDF`]);
+    expect(result.warnings).toEqual([`"f" (${page.name}): gradient line drawn in one colour in the PDF`]);
   });
 });

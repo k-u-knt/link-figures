@@ -57,7 +57,7 @@ describe("connector toPptx", () => {
     const { el, warnings } = await write({ caps: [{ kind: "bar", size: 3 }, { kind: "fishtail", size: 3 }] });
     expect(one(el, "a:headEnd").getAttribute("type")).toBe("none");
     expect(one(el, "a:tailEnd").getAttribute("type")).toBe("none");
-    expect(warnings).toEqual(['Connector (Page 1): the "Bar" cap has no PowerPoint line end, written without one', 'Connector (Page 1): no cap kind "fishtail" is registered, written without it']);
+    expect(warnings).toEqual(['"c1" (Page 1): the "Bar" cap has no PowerPoint line end, written without one', '"c1" (Page 1): no cap kind "fishtail" is registered, written without it']);
   });
 
   it("strokes the line with its paint, a gradient laid over the route, and its width and opacity", async () => {

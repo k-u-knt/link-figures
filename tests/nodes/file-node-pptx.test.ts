@@ -106,9 +106,9 @@ describe("file panel toPptx", () => {
   it("writes a PDF panel's raster and a TIFF panel's PNG, cut as images, each with a warning", async () => {
     const pdf = await write(panel({ file: "a.pdf" }), new Map([["f1", { kind: "pdf", bytes: new ArrayBuffer(0), pageIndex: 0, widthPt: 1, heightPt: 1, raster: PNG_URI, rasterWidth: 200, rasterHeight: 200 }]]));
     expect(one(pdf.doc!, "a:srcRect").getAttribute("t")).toBe("25000");
-    expect(pdf.warnings).toEqual(['Panel "a.pdf" (Page 1): PDF panel written as a picture']);
+    expect(pdf.warnings).toEqual(['"f1" (Page 1): PDF panel written as a picture']);
     const tiff = await write(panel({ file: "scan.tif" }), new Map([["f1", { kind: "image", dataUri: PNG_URI, naturalWidth: 200, naturalHeight: 100 }]]));
-    expect(tiff.warnings).toEqual(['Panel "scan.tif" (Page 1): TIFF panel written as PNG']);
+    expect(tiff.warnings).toEqual(['"f1" (Page 1): TIFF panel written as PNG']);
   });
 
   it("draws an SVG panel over its box, with its clip, as a picture with a warning", async () => {
@@ -118,23 +118,23 @@ describe("file panel toPptx", () => {
     expect(rasterised[0].fragment).toMatch(/^<defs><clipPath id="[^"]+">/);
     expect(rasterised[0].fragment).toContain('fill="#00ff00"');
     expect(one(doc!, "p:pic")).toBeTruthy();
-    expect(warnings).toEqual(['Panel "p.svg" (Page 1): SVG panel written as a picture']);
+    expect(warnings).toEqual(['"f1" (Page 1): SVG panel written as a picture']);
   });
 
   it("writes a content card's snapshot over its box, with a warning", async () => {
     const { doc, media, warnings } = await write(panel({ show: "content", file: "note.md" }), new Map([["f1", { kind: "raster", dataUri: PNG_URI }]]));
     expect(xfrmOf(one(doc!, "p:pic"))).toEqual([100 * E, 50 * E, 200 * E, 100 * E]);
     expect(media).toHaveLength(1);
-    expect(warnings).toEqual(['Panel "note.md" (Page 1): content card written as a picture']);
+    expect(warnings).toEqual(['"f1" (Page 1): content card written as a picture']);
   });
 
   it("leaves out a panel with nothing to draw, saying why", async () => {
     const missing = await write(panel(), new Map());
     expect(missing.part).toBeNull();
-    expect(missing.warnings).toEqual(['Panel "plot.png" (Page 1): link missing, skipped']);
+    expect(missing.warnings).toEqual(['"f1" (Page 1): link missing, skipped']);
     const skipped = await write(panel(), new Map([["f1", { kind: "skipped", reason: "heading or block not found" }]]));
     expect(skipped.part).toBeNull();
-    expect(skipped.warnings).toEqual(['Panel "plot.png" (Page 1): heading or block not found, skipped']);
+    expect(skipped.warnings).toEqual(['"f1" (Page 1): heading or block not found, skipped']);
   });
 
   it("leaves out a panel whose picture cannot be drawn, saying why", async () => {

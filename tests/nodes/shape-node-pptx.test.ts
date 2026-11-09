@@ -89,7 +89,7 @@ describe("shape toPptx", () => {
   it("warns with the shape's label, except the export-wide pattern warning", async () => {
     const { warnings } = await sp(shape({ fill: { type: "pattern", pattern: "dots", fg: "#000000", bg: null }, border: { paint: { type: "plaid" }, width: 1, dash: "solid" } }));
     expect(warnings).toContain(PATTERN_WARNING);
-    expect(warnings.some((w) => w.startsWith('Shape "rect"') && w.includes("plaid"))).toBe(true);
+    expect(warnings.some((w) => w.startsWith('"s1" (Page 1)') && w.includes("plaid"))).toBe(true);
   });
 
   it("has a kind without PowerPoint geometry (or none registered) rasterised", async () => {

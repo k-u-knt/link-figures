@@ -79,6 +79,6 @@ describe("SVG export", () => {
   test("what drawing a frame warns about is said with the panel's label", () => {
     const d = docWith((doc) => ({ ...panel(doc), frame: { paint: { type: "x.glow" }, width: 1, dash: "solid" } }));
     const { warnings } = buildPageSvg(d, d.pages[0], registries(), panelAssets());
-    expect(warnings).toEqual([`Panel "plot.svg" (${d.pages[0].name}): no paint type "x.glow" is registered, drawn without paint`]);
+    expect(warnings).toEqual([`"f" (${d.pages[0].name}): no paint type "x.glow" is registered, drawn without paint`]);
   });
 });

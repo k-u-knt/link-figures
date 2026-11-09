@@ -133,14 +133,14 @@ describe("SVG", () => {
     const d = docWith({ kind: "x.star", params: { points: 5 } });
     const { svg, warnings } = exportOf(d);
     expect(svg).toContain('<path d="M10 20 L110 20 L110 70 L10 70 Z" fill="none" stroke="#888888" stroke-width="1" stroke-dasharray="4 2"/>');
-    expect(warnings).toEqual([`Shape "x.star" (${d.pages[0].name}): no shape kind "x.star" is registered, drawn as a placeholder`]);
+    expect(warnings).toEqual([`"${d.nodes[0].id}" (${d.pages[0].name}): no shape kind "x.star" is registered, drawn as a placeholder`]);
   });
 
   test("an unknown paint is drawn as none, with the node's label on its warning", () => {
     const d = docWith({ fill: { type: "x.glow" } });
     const { svg, warnings } = exportOf(d);
     expect(svg).toContain('fill="none" stroke="#000000"');
-    expect(warnings).toEqual([`Shape "rect" (${d.pages[0].name}): no paint type "x.glow" is registered, drawn without paint`]);
+    expect(warnings).toEqual([`"${d.nodes[0].id}" (${d.pages[0].name}): no paint type "x.glow" is registered, drawn without paint`]);
   });
 });
 

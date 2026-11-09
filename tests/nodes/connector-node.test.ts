@@ -107,8 +107,8 @@ describe("SVG", () => {
     const { svg, warnings } = buildPageSvg(d, page, registries(), new Map());
     expect(svg).toContain('<g opacity="0.5"><path d="');
     expect(warnings).toEqual([
-      `Connector (${page.name}): no route "x.wiggle" is registered, drawn straight`,
-      `Connector (${page.name}): no cap kind "x.star" is registered, drawn without it`,
+      `"c" (${page.name}): no route "x.wiggle" is registered, drawn straight`,
+      `"c" (${page.name}): no cap kind "x.star" is registered, drawn without it`,
     ]);
   });
 });

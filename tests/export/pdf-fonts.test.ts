@@ -409,7 +409,7 @@ describe("PDF export with installed fonts", () => {
     // No subset tag: svg2pdf.js finds the font by the exact family string; the file calls it by its PostScript name.
     expect(out.text).toContain("/BaseFont /Calibri-Regular");
     expect(fontsDrawn(out.text, out.content)).toEqual(["Calibri-Regular"]);
-    expect(nodeLabel(f.doc, node)).toBe('Text "Hello" (Page 1)');
+    expect(nodeLabel(f.doc, node)).toBe(`"${node.id}" (Page 1)`);
   });
 
   test("a missing bold face: the label is drawn in the regular face, with the warning naming the label", async () => {
@@ -578,7 +578,7 @@ describe("PDF export with installed fonts", () => {
     const layerSvg = (svg.mock.calls[drawnLayers.indexOf(registering)][0] as Element).outerHTML;
     expect(layerSvg).toContain("Hello");
     expect(layerSvg).not.toContain("Below");
-    expect(nodeLabel(f.doc, label)).toContain("Hello");
+    expect(nodeLabel(f.doc, label)).toContain(label.id);
   });
 
   test("Review Focus 4: with the font list unavailable, the single warning is given and the PDF is made", async () => {

@@ -74,14 +74,16 @@ test.each([
   ["could not be decoded (too big)", "could not be decoded (too big), skipped"],
 ])("a skipped asset (%s) warns once with its reason and is left to the DOM", (reason, line) => {
   const c = ctx();
-  expect(fileNodeSvg(node(), { kind: "skipped", reason }, c)).toBe("raster");
-  expect(c.warnings).toEqual([`${nodeLabel(c.doc, node())}: ${line}`]);
+  const n = node();
+  expect(fileNodeSvg(n, { kind: "skipped", reason }, c)).toBe("raster");
+  expect(c.warnings).toEqual([`${nodeLabel(c.doc, n)}: ${line}`]);
 });
 
 test("a content card with a skipped asset warns once with the reason, not as unrasterised", () => {
   const c = ctx();
-  expect(fileNodeSvg(node({ show: "content" }), { kind: "skipped", reason: "heading or block not found" }, c)).toBe("raster");
-  expect(c.warnings).toEqual([`${nodeLabel(c.doc, node())}: heading or block not found, skipped`]);
+  const n = node({ show: "content" });
+  expect(fileNodeSvg(n, { kind: "skipped", reason: "heading or block not found" }, c)).toBe("raster");
+  expect(c.warnings).toEqual([`${nodeLabel(c.doc, n)}: heading or block not found, skipped`]);
 });
 
 test.each([
@@ -178,7 +180,7 @@ test("svg asset: what inlining had to drop is warned about, naming the panel", (
   const c = ctx();
   const n = node({ file: "plot.svg" });
   fileNodeSvg(n, { kind: "svg", text: '<svg viewBox="0 0 1 1"><style>@media print{.a{x:y}}</style></svg>', width: 1, height: 1 }, c);
-  expect(c.warnings).toEqual([`Panel "plot.svg" (${page.name}): @media rule in <style> dropped`]);
+  expect(c.warnings).toEqual([`"${n.id}" (${page.name}): @media rule in <style> dropped`]);
 });
 
 test("svg asset: references out of the file, on its root or inside it, are dropped and warned about once each, naming the panel", () => {
@@ -187,7 +189,7 @@ test("svg asset: references out of the file, on its root or inside it, are dropp
   const text = '<svg viewBox="0 0 1 1" style="background:url(http://t/x.png)"><image href="http://t/x.png"/><svg:script>evil()</svg:script></svg>';
   const out = fileNodeSvg(n, { kind: "svg", text, width: 1, height: 1 }, c) as string;
   expect(out).not.toMatch(/http:|script/);
-  expect(c.warnings).toEqual([`Panel "plot.svg" (${page.name}): external reference removed: http://t/x.png`]);
+  expect(c.warnings).toEqual([`"${n.id}" (${page.name}): external reference removed: http://t/x.png`]);
 });
 
 test("ids from uid are used for every clip path in one build", () => {

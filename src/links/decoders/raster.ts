@@ -35,7 +35,8 @@ export async function decodeRaster(bytes: ArrayBuffer, recipe: PixelRecipe, adju
 export async function rasterPlane(bytes: ArrayBuffer, cache?: SampleCache, key?: string): Promise<Plane> {
   const hit = key !== undefined ? cache?.get(key) : undefined;
   if (hit) return hit;
-  const bitmap = await createImageBitmap(new Blob([bytes]));
+  // Turned by the image's EXIF orientation, as an <img> on the stage is: the plane is the upright picture.
+  const bitmap = await createImageBitmap(new Blob([bytes]), { imageOrientation: "from-image" });
   try {
     const { width, height } = bitmap;
     checkDecodeBudget(width, height, "Image");

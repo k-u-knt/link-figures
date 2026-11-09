@@ -137,6 +137,20 @@ describe("raster sources", () => {
     expect(s.warnings).toEqual([]);
   });
 
+  test("a JPEG with an EXIF orientation other than 1 is drawn upright as a PNG (as the stage shows it), not embedded as is", async () => {
+    const { readFileSync } = await import("node:fs");
+    const file = readFileSync(new URL("./fixtures/exif6.jpg", import.meta.url));
+    const s = setup([{ resolved: image("fig/turned.jpg", "raster") }, { resolved: image("fig/upright.jpg", "raster") }]);
+    s.files["fig/turned.jpg"] = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+    s.files["fig/upright.jpg"] = bytes(0xff, 0xd8, 0xff, 0xd9);
+    mocks.raster.mockResolvedValue({ dataUrl: "data:image/png;base64,UFVQ", width: 12, height: 20, pageCount: 1 });
+    const assets = await s.run();
+    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: "data:image/png;base64,UFVQ", naturalWidth: 12, naturalHeight: 20 });
+    expect(mocks.raster).toHaveBeenCalledTimes(1);
+    expect(mocks.raster.mock.calls[0][0]).toBe(s.files["fig/turned.jpg"]);
+    expect((assets.get(s.nodes[1].id) as { dataUri: string }).dataUri).toBe("data:image/jpeg;base64,/9j/2Q==");
+  });
+
   test("an AVIF image is embedded, with a warning that the PDF export cannot show it", async () => {
     const s = setup([{ resolved: image("fig/a.avif", "raster") }, { resolved: image("fig/b.webp", "raster") }]);
     s.files["fig/a.avif"] = bytes(1, 2, 3);

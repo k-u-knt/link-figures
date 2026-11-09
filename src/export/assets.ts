@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 import { MAX_DECODE_MEGAPIXELS } from "../constants";
 import { DecodeLimitError } from "../links/decoders/budget";
+import { jpegOrientation } from "../links/decoders/exif";
 import { decodePdf, pdfPageSizePt } from "../links/decoders/pdf";
 import { recipeOf } from "../adjust/render";
 import type { Decoders, Resolved } from "../links/types";
@@ -118,7 +119,15 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
       }
       const mime = MIME_BY_EXTENSION[extensionOf(path)];
       if (!mime) throw new Error(`"${path}" is not an image type that can be embedded`);
-      const dataUri = bytesToDataUri(await deps.readBinary(path), mime);
+      const data = await deps.readBinary(path);
+      if (mime === "image/jpeg" && jpegOrientation(data) !== 1) {
+        // The stage (the browser) draws a JPEG turned by its EXIF orientation; a PDF, a slide or another SVG viewer
+        // may draw the stored pixels as they are. Drawn upright as a PNG by the browser, so every export matches the
+        // stage. With no recipe: unadjusted, the stage draws the file's pixels as they are.
+        const decoded = await deps.decoders.raster(data, { range: "auto", adjustments: [] });
+        return { kind: "image", dataUri: decoded.dataUrl, naturalWidth: decoded.width, naturalHeight: decoded.height };
+      }
+      const dataUri = bytesToDataUri(data, mime);
       const natural = await loadNaturalSize(dataUri);
       // svg2pdf.js leaves an AVIF image out of the PDF with nothing but a console message; the SVG export keeps it.
       if (mime === "image/avif") deps.warnings.push(`${nodeLabel(doc, node)}: AVIF is not supported by the PDF export`);

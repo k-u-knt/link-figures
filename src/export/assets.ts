@@ -10,6 +10,7 @@ import type { Document, FileNode, NodeId, Page } from "../model/types";
 import { skippedReason } from "../nodes/file-node-svg";
 import type { AssetMap, FileAsset, RasterAsset } from "./asset-types";
 import { svgIntrinsicSize } from "./inline-svg";
+import { withLaidOut } from "./laid-out";
 
 export type { AssetMap, FileAsset, ImageAsset, PdfAsset, RasterAsset, SkippedAsset, SvgAsset } from "./asset-types";
 
@@ -84,8 +85,8 @@ async function snapshotBody(el: HTMLElement | undefined, dpi: number): Promise<R
   if (!body) throw new Error("the node is not drawn on the stage, so it cannot be rasterised");
   // Loaded when first needed: most figures have no content card, and the library is large.
   const { snapdom } = await import("@zumer/snapdom");
-  const capture = await snapdom(body, { scale: dpi / CSS_DPI, dpr: 1 });
-  const image = await capture.toPng();
+  // A figure in a tab that is not shown has no layout, and its snapshot would be blank: laid out while it is taken.
+  const image = await withLaidOut(body, async () => (await snapdom(body, { scale: dpi / CSS_DPI, dpr: 1 })).toPng());
   if (!image.src.startsWith("data:image/")) throw new Error("the snapshot is not an image");
   return { kind: "raster", dataUri: image.src };
 }

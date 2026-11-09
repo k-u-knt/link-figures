@@ -102,14 +102,27 @@ export function collectionFaces(bytes: Uint8Array): Uint8Array[] {
   return faces;
 }
 
-/** The tables of a standalone font, or of a collection's first face. */
-const faceTables = (bytes: Uint8Array): SfntTable[] => {
+/**
+ * One table of a standalone font, or of a collection's first face; undefined when the font has none. Only that table
+ * is bounds-checked, so a truncated table the caller does not read (a short `DSIG`, say) does not make it throw.
+ */
+const table = (bytes: Uint8Array, tag: string): Uint8Array | undefined => {
   const flavour = sfntFlavour(bytes);
   if (flavour === "unknown") throw new Error("not an sfnt font");
-  return sfntTables(bytes, flavour === "collection" ? view(bytes).getUint32(12) : 0);
+  const v = view(bytes);
+  const offset = flavour === "collection" ? v.getUint32(12) : 0;
+  const count = v.getUint16(offset + 4);
+  for (let i = 0; i < count; i++) {
+    const record = offset + 12 + 16 * i;
+    if (record + 16 > bytes.length) throw new Error("sfnt table directory is truncated");
+    if (tagAt(bytes, record) !== tag) continue;
+    const start = v.getUint32(record + 8);
+    const length = v.getUint32(record + 12);
+    if (start + length > bytes.length) throw new Error(`sfnt table "${tag}" is out of bounds`);
+    return bytes.subarray(start, start + length);
+  }
+  return undefined;
 };
-
-const table = (bytes: Uint8Array, tag: string) => faceTables(bytes).find((t) => t.tag === tag)?.data;
 
 const utf16be = (bytes: Uint8Array) => {
   let text = "";
@@ -182,6 +195,8 @@ export function cmapCovers(bytes: Uint8Array): (codePoint: number) => boolean {
   }
   if (sub < 0) return () => false;
   const segments = v.getUint16(sub + 6) / 2;
+  // Check the four segment arrays now, so a caller's try/catch around this call sees a malformed table.
+  if (sub + 14 + 8 * segments + 2 > data.length) throw new Error("cmap format-4 subtable is truncated");
   const ends = sub + 14;
   const starts = ends + 2 * segments + 2;
   const deltas = starts + 2 * segments;

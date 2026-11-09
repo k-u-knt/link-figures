@@ -131,3 +131,58 @@ describe("jsPDF round trip", () => {
     expect(errors).toHaveBeenCalled();
   });
 });
+
+describe("malformed input", () => {
+  // The table directory record for `tag`, so a test can corrupt one entry.
+  const record = (bytes: Uint8Array, tag: string) => {
+    const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const count = v.getUint16(4);
+    for (let i = 0; i < count; i++) {
+      const at = 12 + 16 * i;
+      if (String.fromCharCode(...bytes.subarray(at, at + 4)) === tag) return { v, at };
+    }
+    throw new Error(`no ${tag}`);
+  };
+  const withHugeTable = (tag: string) => {
+    const bytes = regular().slice();
+    const { v, at } = record(bytes, tag);
+    v.setUint32(at + 12, 0x7fffffff);
+    return bytes;
+  };
+  const garbage = new TextEncoder().encode("this is not a font at all, just text");
+
+  test("an out-of-range table the helper does not read is ignored", () => {
+    const bytes = withHugeTable("post");
+    expect(faceNames(bytes).family).toBe("Test Sans");
+    expect(hasVariations(bytes)).toBe(false);
+    expect(missingChars(bytes, "abd")).toEqual(["d"]);
+  });
+
+  test("an out-of-range table the helper reads throws", () => {
+    expect(() => faceNames(withHugeTable("name"))).toThrow(/out of bounds/);
+    expect(() => cmapCovers(withHugeTable("cmap"))).toThrow(/out of bounds/);
+  });
+
+  test("a truncated font throws", () => {
+    const truncated = regular().subarray(0, 40);
+    expect(() => faceNames(truncated)).toThrow();
+    expect(() => cmapCovers(truncated)).toThrow();
+    expect(() => hasVariations(truncated)).toThrow();
+  });
+
+  test("a non-sfnt throws, has no variations and no collection faces", () => {
+    expect(() => faceNames(garbage)).toThrow(/not an sfnt/);
+    expect(() => cmapCovers(garbage)).toThrow(/not an sfnt/);
+    expect(hasVariations(garbage)).toBe(false);
+    expect(collectionFaces(garbage)).toEqual([]);
+  });
+
+  test("cmapCovers checks the segment arrays when called, not when the result is used", () => {
+    const bytes = regular().slice();
+    const { v, at } = record(bytes, "cmap");
+    const cmap = v.getUint32(at + 8);
+    const sub = cmap + v.getUint32(cmap + 8); // the first encoding record's offset
+    v.setUint16(sub + 6, 0xfffe); // segCountX2 far beyond the table
+    expect(() => cmapCovers(bytes)).toThrow(/cmap/);
+  });
+});

@@ -165,6 +165,31 @@ await api.run(path, "align", { ids: ["legend", "box-c"], edge: "top" })
 await api.run(path, "panel.crop", { id: "p-aaaa", crop: { x: 0.1, y: 0.1, w: 0.6, h: 0.5 }, keep: "image" })
 ```
 
+## Image display
+
+Select a TIFF or raster panel and the inspector gets a **Display** section: for each channel (Grey, or Red, Green and Blue) a LUT (grey, inverted, red, green, blue, cyan, magenta, yellow, fire, viridis), Min and Max in the image's own sample values, Gamma, a Visible toggle, and a histogram. Drag the two handles on the histogram to set Min and Max (a handle stops at the other one; the whole drag is one undo step). The histogram is a log scale of the channel's values; the part outside Min and Max is dimmed. The toolbar and command palette have "Auto display range" (stretches each channel to its 0.35% and 99.65% percentiles, as ImageJ's Auto does) and "Reset display" (back to how the panel looked before). Channels add up (colour by colour, clamped at white), so a three-channel TIFF can be shown with any LUTs or with one channel hidden. The adjustment is stored on the panel and drawn the same on the stage and in SVG and PDF export; the linked file is never changed. A panel with no adjustment draws as before. SVG and PDF panels have no display.
+
+The first edit starts from what the panel shows now, so only what you change changes. A TIFF's Min and Max are 0..255 for 8 bit and 0..65535 for 16 bit; a white-is-zero TIFF is shown, ranged and counted in the values you see.
+
+| Id | Arguments (defaults in brackets) | Result |
+|---|---|---|
+| `panel.display` | `id` (required), `channel` (0), `set` (required): any of `min`, `max`, `gamma` (0.1 to 10), `lut` (a registered id), `visible` | `{}` |
+| `panel.display-auto` | `id` (the selected panel), `channel` (all), `saturation` (0.35, below 50) | `{}` |
+| `panel.display-reset` | `id` (the selected panel) | `{}` |
+| `panel.histogram` | `id` (required), `channel` (0), `bins` (256, up to 4096) | `{ dataMin, dataMax, lo, hi, bitsPerSample, counts }` |
+
+`panel.display` creates the adjustment when the panel has none and otherwise patches one channel; it needs the figure open the first time (the image's samples are read), and then works on a closed figure too. `panel.display-auto` and `panel.histogram` always need the figure open, and the image decoded; if they answer `the image is not loaded; open the figure`, try again a moment later. `panel.histogram` changes nothing: `counts` are bin counts over `[lo, hi]`, the span of the data and the shown range together.
+
+```js
+// Show channel 1 (green) of a 16-bit RGB TIFF in the Fire palette, brighter, over 1000 to 15000.
+await api.run(path, "panel.display", { id: "p-aaaa", channel: 1, set: { lut: "fire", gamma: 1.5, min: 1000, max: 15000 } })
+// => {}
+
+// Count the values of an 8-bit white-is-zero TIFF in 4 bins.
+await api.run(path, "panel.histogram", { id: "p-gggg", bins: 4 })
+// => { dataMin: 35, dataMax: 235, lo: 0, hi: 255, bitsPerSample: 8, counts: [9216, 20992, 20736, 14592] }
+```
+
 ## Settings
 
 | Setting | Default | Meaning |

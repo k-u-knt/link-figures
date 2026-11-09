@@ -151,3 +151,10 @@ test("rotation and crop together: the box is the crop, the turn is about the nod
   expect(pl.x + (pl.width / 2) * Math.cos(angle) - (pl.height / 2) * Math.sin(angle)).toBeCloseTo(100 + 75);
   expect(pl.y + (pl.width / 2) * Math.sin(angle) + (pl.height / 2) * Math.cos(angle)).toBeCloseTo(PAGE_HEIGHT_PT - 100 - 100);
 });
+
+test("a container (a group) draws nothing, so it opens no layer, even when its z sorts after a PDF panel", () => {
+  const group = { id: "g", z: 1, type: "group" } as any;
+  const nodes = [n("a", 0), { ...n("p", 1, true), parent: "g" }, { ...n("b", 0), parent: "g" }, group];
+  const isContainer = (node: Node) => node.type === "group";
+  expect(splitLayers(nodes, isPdf, isContainer)).toEqual([{ kind: "svg", nodeIds: ["a", "b"] }, { kind: "pdf", nodeId: "p" }]);
+});

@@ -3,6 +3,7 @@ import { MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
+import { expandUnits, isGroup, isLocked } from "../model/groups";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import type { End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
@@ -79,40 +80,73 @@ export function targetPage(ctx: CommandContext, command: string, args: { page?: 
 const PAGE_PARAMS: ParamSpec = { page: { type: "string" } };
 
 /**
- * The new `z` of the nodes that move one place up (`forward`) or down (`backward`) the stack of one page: each
- * selected node trades places with the nearest node past it that is not selected, so a selected block moves as a
- * block. `nodes` are one page's, in document order, which settles the order of nodes that share a `z`. Empty when
- * nothing moves (the selection is already at that end of the stack).
+ * The new `z` of the nodes that move one place up (`forward`) or down (`backward`) the stack of one page. The stack is
+ * a tree of units: the nodes at top level, and in each container (`isContainer`: a group, whose own `z` is derived from
+ * its members and is not restacked) its members, each unit placed by its topmost node. Each selected unit trades places
+ * with the nearest unit past it among its siblings that is not selected, so a selected block moves as a block, a group
+ * moves as one block with its members in their order, and a member moves among its group's members only. `nodes` are
+ * one page's, in document order, which settles the order of nodes that share a `z`. When something moves, the page is
+ * laid out again unit by unit, which also gathers a group whose members had come apart (after `group.add`) into one
+ * block at its topmost member. Empty when nothing moves (the selection is already at that end of its stack).
  */
 export function restack(
-  nodes: readonly Pick<Node, "id" | "z">[],
+  nodes: readonly Pick<Node, "id" | "z" | "parent">[],
   selected: ReadonlySet<NodeId>,
   direction: "forward" | "backward",
+  isContainer: (id: NodeId) => boolean = () => false,
 ): Map<NodeId, number> {
   const order = nodes.map((n, index) => ({ id: n.id, z: n.z, index })).sort((a, b) => a.z - b.z || a.index - b.index);
-  const zs = order.map((n) => n.z);
-  let moved = false;
-  const swap = (i: number, j: number): void => {
-    [order[i], order[j]] = [order[j], order[i]];
-    moved = true;
-  };
-  if (direction === "forward") {
-    for (let i = order.length - 2; i >= 0; i--) if (selected.has(order[i].id) && !selected.has(order[i + 1].id)) swap(i, i + 1);
-  } else {
-    for (let i = 1; i < order.length; i++) if (selected.has(order[i].id) && !selected.has(order[i - 1].id)) swap(i, i - 1);
+  const leaves = order.filter((n) => !isContainer(n.id));
+  const zs = leaves.map((n) => n.z);
+  const ids = new Set(nodes.map((n) => n.id));
+  const parentOf = new Map(nodes.map((n) => [n.id, n.parent !== undefined && n.parent !== n.id && ids.has(n.parent) ? n.parent : null] as const));
+  const children = new Map<NodeId | null, NodeId[]>();
+  for (const n of nodes) {
+    const parent = parentOf.get(n.id) ?? null;
+    children.set(parent, [...(children.get(parent) ?? []), n.id]);
   }
+  // Each unit's place: its topmost leaf's place in the stack.
+  const rank = new Map(leaves.map((n, i) => [n.id, i] as const));
+  const top = (id: NodeId, seen = new Set<NodeId>()): number => {
+    if (seen.has(id)) return -1;
+    seen.add(id);
+    return Math.max(rank.get(id) ?? -1, ...(children.get(id) ?? []).map((c) => top(c, seen)));
+  };
+  let moved = false;
+  const visited = new Set<NodeId>();
+  const flatten = (parent: NodeId | null): NodeId[] => {
+    const list = (children.get(parent) ?? []).filter((id) => !visited.has(id));
+    for (const id of list) visited.add(id);
+    const units = list.map((id) => ({ id, top: top(id) })).sort((a, b) => a.top - b.top).map((u) => u.id);
+    const swap = (i: number, j: number): void => {
+      [units[i], units[j]] = [units[j], units[i]];
+      moved = true;
+    };
+    if (direction === "forward") {
+      for (let i = units.length - 2; i >= 0; i--) if (selected.has(units[i]) && !selected.has(units[i + 1])) swap(i, i + 1);
+    } else {
+      for (let i = 1; i < units.length; i++) if (selected.has(units[i]) && !selected.has(units[i - 1])) swap(i, i - 1);
+    }
+    return units.flatMap((id) => [...(rank.has(id) ? [id] : []), ...flatten(id)]);
+  };
+  const sequence = flatten(null);
   const changes = new Map<NodeId, number>();
   if (!moved) return changes;
+  const zOf = new Map(leaves.map((n) => [n.id, n.z] as const));
   // The places keep the `z` they had, so a swap trades two values; places that shared one are pulled apart, or moving past a tie would show nothing.
   let previous = -Infinity;
-  order.forEach((n, i) => {
+  sequence.forEach((id, i) => {
     const z = zs[i] > previous ? zs[i] : previous + 1;
     previous = z;
-    if (z !== n.z) changes.set(n.id, z);
+    if (z !== zOf.get(id)) changes.set(id, z);
   });
   return changes;
 }
 
+/**
+ * Bring forward and send backward: the units named (`args.ids`, else the selection) that are not effectively locked
+ * move one place in their stack (see `restack`), a group with all its members.
+ */
 function stackCommand(id: string, name: string, icon: string, direction: "forward" | "backward"): Command<NodesArgs> {
   return {
     id,
@@ -122,11 +156,13 @@ function stackCommand(id: string, name: string, icon: string, direction: "forwar
     params: NODES_PARAMS,
     applies: (ctx) => ctx.selection.length > 0,
     run(ctx, args) {
-      const { pages, nodes } = ctx.store.doc;
-      const selected = new Set(targetIds(ctx, id, args));
+      const doc = ctx.store.doc;
+      const { pages, nodes } = doc;
+      const selected = new Set(targetIds(ctx, id, args).filter((n) => !isLocked(doc, n)));
+      const container = (n: NodeId) => isGroup(doc, n, ctx.registries);
       const changes = new Map<NodeId, number>();
       for (const page of pages) {
-        for (const [nodeId, z] of restack(nodes.filter((n) => n.page === page.id), selected, direction)) changes.set(nodeId, z);
+        for (const [nodeId, z] of restack(nodes.filter((n) => n.page === page.id), selected, direction, container)) changes.set(nodeId, z);
       }
       if (changes.size === 0) return;
       ctx.store.commit(id, (draft) => {
@@ -164,15 +200,17 @@ function pageLike(current: Page | undefined, existingIds: string[], limitMm: num
 }
 
 /**
- * Copies the nodes (`args.ids`, else the selection) a little down and to the right, above everything on their pages;
- * from the selection, the copies become the selection. A copied connector's end that is attached to a node copied in
+ * Copies the nodes (`args.ids`, else the selection), a group with everything in it, a little down and to the right,
+ * above everything on their pages; from the selection, the copies become the selection. A copy's `parent` is the copy of
+ * its group when that is copied too, else its own group. A copied connector's end that is attached to a node copied in
  * the same call is attached to that node's copy; one attached to a node that is not copied becomes a free end where it
  * is drawn now, moved by the same offset as the copies.
  */
 function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   const doc = ctx.store.doc;
   const { nodes } = doc;
-  const selected = new Set(targetIds(ctx, "duplicate", args));
+  // A group is copied with everything in it.
+  const selected = new Set(expandUnits(doc, targetIds(ctx, "duplicate", args)));
   // In stacking order, so the copies keep their order among themselves.
   const originals = nodes.filter((n) => selected.has(n.id)).sort((a, b) => a.z - b.z);
   if (originals.length === 0) return { ids: [] };
@@ -192,6 +230,9 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   const copyOf = new Map(originals.map((original, i) => [original.id, copies[i].id]));
   copies.forEach((copy, i) => {
     const original = originals[i];
+    // A copy of a member of a group that is copied too is a member of that group's copy; a member copied alone (in a
+    // group that is entered) joins its own group.
+    if (original.parent !== undefined) copy.parent = copyOf.get(original.parent) ?? original.parent;
     if (copy.type !== "connector" || original.type !== "connector") return;
     const resolved = resolveConnector(doc, original, ctx.registries);
     copy.ends = copy.ends.map((end, which): End => {
@@ -211,10 +252,13 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   return { ids };
 }
 
-/** Removes the nodes (`args.ids`, else the selection) that are not locked; a locked node stays, as with the Delete key. */
+/**
+ * Removes the nodes (`args.ids`, else the selection) that are not effectively locked, a group with everything in it (a
+ * locked member too); an effectively locked node stays, as with the Delete key.
+ */
 function deleteNodes(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
-  const named = new Set(targetIds(ctx, "delete", args));
-  const ids = ctx.store.doc.nodes.filter((n) => named.has(n.id) && !n.locked).map((n) => n.id);
+  const doc = ctx.store.doc;
+  const ids = expandUnits(doc, targetIds(ctx, "delete", args).filter((id) => !isLocked(doc, id)));
   if (ids.length === 0) return { ids };
   const gone = new Set(ids);
   // The node host lets go of the removed nodes' links.
@@ -344,7 +388,7 @@ function builtinCommands(): Command[] {
       icon: "trash",
       group: "edit",
       params: NODES_PARAMS,
-      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !n.locked),
+      applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !isLocked(ctx.store.doc, n.id)),
       run: deleteNodes,
     },
     { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", params: NODES_PARAMS, applies: (ctx) => ctx.selection.length > 0, run: duplicate },

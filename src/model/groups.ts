@@ -1,5 +1,8 @@
+import { current, isDraft } from "immer";
 import type { Registries } from "../registry";
-import type { Document, NodeId } from "./types";
+import { nodeSizePx, roundPx } from "../view/pointer-math";
+import type { Pt } from "./geometry";
+import type { Document, Node, NodeId } from "./types";
 
 /**
  * Containment: a node's `parent` names the group it is a member of. Code that acts on whole units (a group with all its
@@ -86,4 +89,36 @@ export function expandUnits(doc: Document, ids: readonly NodeId[]): NodeId[] {
 /** The outermost unit (see `outermostUnit`) of each of `ids`, each once, in the order `ids` first reach it. */
 export function unitsOf(doc: Document, ids: readonly NodeId[], within: NodeId | null): NodeId[] {
   return [...new Set(ids.map((id) => outermostUnit(doc, id, within)))];
+}
+
+/**
+ * Scales the units `ids` (each with all its descendants) of `draft` by (`sx`, `sy`) about `origin` (page px), in place:
+ * what resizing a group does to its members. Each node is scaled by its type's `scale` hook, else by the default: the
+ * offset of its top-left from `origin` and its size are scaled, rounded as `roundPx` rounds and kept to `nodeSizePx`;
+ * nothing else (text size, stroke width, corner radius) changes. A container's own box is left to the group normaliser,
+ * which derives it from its members. Only fields that change are written.
+ */
+export function scaleUnits(draft: Document, ids: readonly NodeId[], sx: number, sy: number, origin: Pt, registries: Registries): void {
+  const doc: Document = isDraft(draft) ? current(draft) : structuredClone(draft);
+  const wanted = new Set(expandUnits(doc, ids));
+  const ctx = { registries, doc };
+  for (const target of draft.nodes) {
+    if (!wanted.has(target.id)) continue;
+    const node = doc.nodes.find((n) => n.id === target.id) as Node;
+    const type = registries.nodeTypes.get(node.type);
+    let next: Record<string, unknown>;
+    if (type?.scale) next = type.scale(node, sx, sy, origin, ctx) as Record<string, unknown>;
+    else if (type?.members) continue;
+    else {
+      next = {
+        x: roundPx(origin.x + (node.x - origin.x) * sx),
+        y: roundPx(origin.y + (node.y - origin.y) * sy),
+        width: nodeSizePx(roundPx(node.width * sx)),
+        height: nodeSizePx(roundPx(node.height * sy)),
+      };
+    }
+    const before = node as unknown as Record<string, unknown>;
+    const out = target as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(next)) if (value !== before[key]) out[key] = value;
+  }
 }

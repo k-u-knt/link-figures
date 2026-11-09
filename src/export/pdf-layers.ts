@@ -8,11 +8,13 @@ export type Layer = { kind: "svg"; nodeIds: NodeId[] } | { kind: "pdf"; nodeId: 
 /**
  * The page's nodes by `z` (the SVG builder's order: nodes with the same `z` keep their order) cut at each PDF panel.
  * The first layer is always an SVG layer, empty when a PDF panel is the lowest node or there are no nodes, so the paper
- * rectangle, which only the first layer draws, always has a layer to be drawn in.
+ * rectangle, which only the first layer draws, always has a layer to be drawn in. A container (`isContainer`: a group,
+ * whose members draw for it) draws nothing of its own, so it is left out and never opens a layer.
  */
-export function splitLayers(nodes: Node[], isPdfPanel: (n: Node) => boolean): Layer[] {
+export function splitLayers(nodes: Node[], isPdfPanel: (n: Node) => boolean, isContainer: (n: Node) => boolean = () => false): Layer[] {
   const layers: Layer[] = [{ kind: "svg", nodeIds: [] }];
   for (const node of [...nodes].sort((a, b) => a.z - b.z)) {
+    if (isContainer(node)) continue;
     const last = layers[layers.length - 1];
     if (isPdfPanel(node)) layers.push({ kind: "pdf", nodeId: node.id });
     else if (last.kind === "svg") last.nodeIds.push(node.id);

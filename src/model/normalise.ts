@@ -114,17 +114,35 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
  * - a cycle of parents is broken by removing one `parent` in it: one this edit changed (compared with `before`), else
  *   the last one met walking up from the node first in the document;
  * - a group with no members is deleted, and one with a single member is dissolved (the member takes the group's
- *   `parent`), until every group has two members or more;
+ *   `parent`, and its lock when the group was locked), until every group has two members or more;
  * - a group's page is the page of its first member by z, and each node in it (at any depth) goes to its outermost
- *   group's page, keeping its coordinates;
+ *   group's page, keeping its coordinates; when that takes a node to another page, the connector rules
+ *   (`connectorNormaliser`) are applied again in the same commit, so a connector attached to it from its old page is
+ *   freed there and then;
  * - a group's box is the union of its members' unrotated boxes, its `z` the highest member's, its rotation 0 and its
  *   opacity 1. Nested groups are worked out first, so a group's box takes in its member groups' boxes as they now are.
  * A document without parents or groups is left alone, and a value is written only when it differs.
  */
 export function groupNormaliser(registries: Registries): Normaliser {
+  const once = groupPass(registries);
+  const connectors = connectorNormaliser(registries);
+  return (draft, before) => {
+    // A member this pass took to its group's page may have a connector attached to it from its old page; the connector
+    // rule (an end attached to an item on another page is freed) is applied again at once, in this same commit, and the
+    // boxes are then worked out again from the connectors as they now are.
+    if (once(draft, before)) {
+      connectors(draft, before);
+      once(draft, before);
+    }
+  };
+}
+
+/** One pass of `groupNormaliser`; true when it took a node to another page. */
+function groupPass(registries: Registries): (draft: Document, before: Document) => boolean {
   const isGroupNode = (n: Node) => registries.nodeTypes.get(n.type)?.members !== undefined;
   return (draft, before) => {
-    if (!draft.nodes.some((n) => n.parent !== undefined || isGroupNode(n))) return;
+    if (!draft.nodes.some((n) => n.parent !== undefined || isGroupNode(n))) return false;
+    let paged = false;
 
     let byId = new Map(draft.nodes.map((n) => [n.id, n] as const));
     for (const node of draft.nodes) {
@@ -140,9 +158,12 @@ export function groupNormaliser(registries: Registries): Normaliser {
       const index = draft.nodes.findIndex((n) => isGroupNode(n) && (members.get(n.id)?.length ?? 0) < 2);
       if (index < 0) break;
       const group = draft.nodes[index];
-      for (const member of members.get(group.id) ?? []) {
+      const list = members.get(group.id) ?? [];
+      for (const member of list) {
         if (group.parent === undefined) delete member.parent;
         else member.parent = group.parent;
+        // A locked group's lock stays with what is left of it, so dissolving it frees nothing that was locked.
+        if (group.locked && !member.locked) member.locked = true;
       }
       draft.nodes.splice(index, 1);
     }
@@ -169,7 +190,10 @@ export function groupNormaliser(registries: Registries): Normaliser {
     };
     const toPage = (id: NodeId, page: PageId): void => {
       for (const m of members.get(id) ?? []) {
-        if (m.page !== page) m.page = page;
+        if (m.page !== page) {
+          m.page = page;
+          paged = true;
+        }
         toPage(m.id, page);
       }
     };
@@ -191,6 +215,7 @@ export function groupNormaliser(registries: Registries): Normaliser {
       if (group.rotation !== 0) group.rotation = 0;
       if (group.opacity !== 1) group.opacity = 1;
     }
+    return paged;
   };
 }
 

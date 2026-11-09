@@ -177,6 +177,11 @@ function moveEnd(end: End, dx: number, dy: number): End {
   return end.kind === "free" ? { kind: "free", x: roundPx(end.x + dx), y: roundPx(end.y + dy) } : end;
 }
 
+/** `end` scaled by (`sx`, `sy`) about `origin` when it is free; an attached end is left to follow its item. */
+function scaleEnd(end: End, sx: number, sy: number, origin: Pt): End {
+  return end.kind === "free" ? { kind: "free", x: roundPx(origin.x + (end.x - origin.x) * sx), y: roundPx(origin.y + (end.y - origin.y) * sy) } : end;
+}
+
 /**
  * A line between two ends, each free or attached to an item, drawn by any registered route and capped by any registered
  * cap kinds (all found through the context's registries). Its box is the area it draws and it is never rotated: the
@@ -300,6 +305,12 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
   translate(node: ConnectorNode, dx: number, dy: number): ConnectorNode {
     if (node.ends.every((e) => e.kind !== "free")) return node;
     return { ...node, ends: [moveEnd(node.ends[0], dx, dy), moveEnd(node.ends[1], dx, dy)] };
+  },
+
+  /** Only its free ends scale; its attached ends follow their items, and its box is worked out from what it draws. */
+  scale(node: ConnectorNode, sx: number, sy: number, origin: Pt): Partial<ConnectorNode> {
+    if (node.ends.every((e) => e.kind !== "free")) return {};
+    return { ends: [scaleEnd(node.ends[0], sx, sy, origin), scaleEnd(node.ends[1], sx, sy, origin)] };
   },
 
   /**

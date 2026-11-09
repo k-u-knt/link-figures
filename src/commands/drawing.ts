@@ -9,6 +9,8 @@ import { COLOR_PATTERN, isCap, paramError, type ParamSpec } from "../registry/pa
 import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
 import { writePageField } from "../view/page-fields";
 import { editor, targetIds, targetPage, whenCommitted } from "./builtin";
+import { descendantsOf, expandUnits, isGroup, isLocked, scaleUnits } from "../model/groups";
+import { current } from "immer";
 
 /**
  * The commands that draw: create shapes and connectors, change any node's or page's attributes, move a connector's end,
@@ -217,6 +219,7 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   if ("parent" in patch && patch.parent !== node.parent) {
     throw new CommandError(`${command}: a node's "parent" is changed by group.add and group.remove`);
   }
+  if (isGroup(ctx.store.doc, node.id, ctx.registries)) return updateGroup(ctx, node, patch);
   const before = node as unknown as Record<string, unknown>;
   let after: Record<string, unknown> = { ...before };
   for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
@@ -245,6 +248,58 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
       if (key === "name" && after[key] === "") delete target.name;
       else target[key] = after[key];
     }
+  });
+  return { id: node.id };
+}
+
+/** What `node.update` may write on a group; everything else about a group is worked out from its members. */
+const GROUP_FIELDS = new Set(["id", "type", "parent", "x", "y", "width", "height", "name", "locked"]);
+
+/**
+ * `node.update` on a group (a node whose type has `members`): its `name` and `locked` are written; `x` and `y` move its
+ * members and `width` and `height` scale them about the group's top-left (`scaleUnits`), so its box lands where the
+ * patch says. Its other fields (rotation, opacity, z, page…) are worked out from its members, so a patch that changes
+ * one is refused. One commit, as for any node.
+ */
+function updateGroup(ctx: CommandContext, node: Node, patch: Record<string, unknown>): { id: NodeId } {
+  const command = "node.update";
+  const before = node as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) {
+    if (!GROUP_FIELDS.has(key) && !sameValue(mergePatch(before[key], value), before[key])) {
+      throw new CommandError(`${command}: a group's "${key}" cannot be set; it is worked out from its members (only x, y, width, height, name and locked can)`);
+    }
+  }
+  for (const key of ["x", "y", "width", "height", "name", "locked"]) {
+    if (!(key in patch)) continue;
+    const error = paramError(key, BASE_FIELDS[key], patch[key]);
+    if (error !== null) throw new CommandError(`${command}: ${error}`);
+  }
+  const num = (key: "x" | "y" | "width" | "height"): number => (key in patch ? (patch[key] as number) : node[key]);
+  const width = "width" in patch ? nodeSizePx(num("width")) : node.width;
+  const height = "height" in patch ? nodeSizePx(num("height")) : node.height;
+  const sx = node.width > 0 ? width / node.width : 1;
+  const sy = node.height > 0 ? height / node.height : 1;
+  const dx = num("x") - node.x;
+  const dy = num("y") - node.y;
+  const name = "name" in patch && patch.name !== (node.name ?? "") ? (patch.name as string) : undefined;
+  const locked = "locked" in patch && patch.locked !== node.locked ? (patch.locked as boolean) : undefined;
+  if (sx === 1 && sy === 1 && dx === 0 && dy === 0 && name === undefined && locked === undefined) return { id: node.id };
+  const members = descendantsOf(ctx.store.doc, node.id);
+  ctx.store.commit(command, (draft) => {
+    if (sx !== 1 || sy !== 1) scaleUnits(draft, members, sx, sy, { x: node.x, y: node.y }, ctx.registries);
+    if (dx !== 0 || dy !== 0) {
+      const scaled = new Map(current(draft).nodes.map((n) => [n.id, n] as const));
+      const moving = new Set(members);
+      for (const target of draft.nodes) {
+        const origin = scaled.get(target.id);
+        if (origin && moving.has(target.id)) translateInto(ctx.registries, target, origin, dx, dy);
+      }
+    }
+    const group = draft.nodes.find((n) => n.id === node.id);
+    if (!group) return;
+    if (name === "") delete group.name;
+    else if (name !== undefined) group.name = name;
+    if (locked !== undefined) group.locked = locked;
   });
   return { id: node.id };
 }
@@ -381,17 +436,17 @@ export function translateInto(registries: Registries, target: Node, origin: Node
 type MoveArgs = { ids?: unknown[]; dx: number; dy: number; pages: boolean };
 
 /**
- * Moves the nodes `ids` (else the selection) that are not locked by (`dx`, `dy`) page px, each as its type moves (see
- * `translateInto`). With `pages` (the default), each moved node then goes to the page under the centre of its box,
- * keeping its place on the canvas, unless its type places it otherwise (`NodeType.pageAfterMove`: a connector follows
- * its items); a node whose centre is over no page stays on its own. One undo step; its result names the nodes moved.
+ * Moves the nodes `ids` (else the selection) that are not effectively locked, a group with everything in it (a locked
+ * member too), by (`dx`, `dy`) page px, each as its type moves (see `translateInto`). With `pages` (the default), each
+ * moved unit then goes to the page under the centre of its box, keeping its place on the canvas, unless its type places
+ * it otherwise (`NodeType.pageAfterMove`: a connector follows its items); a group takes everything in it along, and a
+ * unit whose centre is over no page stays on its own. One undo step; its result names the nodes moved.
  */
 function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
   const command = "node.move";
   if (!Number.isFinite(args.dx) || !Number.isFinite(args.dy)) throw new CommandError(`${command}: "dx" and "dy" must be finite numbers`);
-  const named = new Set(targetIds(ctx, command, args));
   const before = ctx.store.doc;
-  const ids = new Set(before.nodes.filter((n) => named.has(n.id) && !n.locked).map((n) => n.id));
+  const ids = new Set(expandUnits(before, targetIds(ctx, command, args).filter((id) => !isLocked(before, id))));
   if (ids.size === 0) return { ids: [] };
   if (args.dx !== 0 || args.dy !== 0) {
     const byId = new Map(before.nodes.map((n) => [n.id, n] as const));
@@ -409,9 +464,10 @@ function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
 }
 
 /**
- * Each of `ids` to the page its move ends on, as `moveNodes` says: the page under the centre of its box, unless its
- * type says otherwise (`NodeType.pageAfterMove`). Nodes whose type has no such hook are placed first, so a hook can
- * read where they go (a connector follows its items).
+ * Each of `ids` to the page its move ends on, as `moveNodes` says. The page is decided per outermost unit of the move (a
+ * node whose group is not moving with it): the page under the centre of its box, unless its type says otherwise
+ * (`NodeType.pageAfterMove`); everything in a unit goes where the unit goes. Units whose type has no such hook are
+ * placed first, so a hook can read where they go (a connector follows its items).
  */
 function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<NodeId>): void {
   const doc = ctx.store.doc;
@@ -427,13 +483,18 @@ function placeOnPages(ctx: CommandContext, command: string, ids: ReadonlySet<Nod
     return under?.id ?? node.page;
   };
   const moving = doc.nodes.filter((n) => ids.has(n.id));
+  const units = moving.filter((n) => n.parent === undefined || !ids.has(n.parent));
   const hookOf = (node: Node) => ctx.registries.nodeTypes.get(node.type)?.pageAfterMove;
   const destination = new Map<NodeId, PageId>();
-  for (const node of moving) if (!hookOf(node)) destination.set(node.id, centrePage(node));
+  const place = (unit: Node, page: PageId): void => {
+    destination.set(unit.id, page);
+    for (const id of descendantsOf(doc, unit.id)) if (ids.has(id)) destination.set(id, page);
+  };
+  for (const unit of units) if (!hookOf(unit)) place(unit, centrePage(unit));
   const pageOf = (id: NodeId): PageId | undefined => destination.get(id) ?? doc.nodes.find((n) => n.id === id)?.page;
-  for (const node of moving) {
-    const hook = hookOf(node);
-    if (hook) destination.set(node.id, hook(node, { moving: ids, pageOf, centrePage: centrePage(node) }));
+  for (const unit of units) {
+    const hook = hookOf(unit);
+    if (hook) place(unit, hook(unit, { moving: ids, pageOf, centrePage: centrePage(unit) }));
   }
   const moves = new Map<NodeId, { page: PageId; dx: number; dy: number }>();
   for (const node of moving) {

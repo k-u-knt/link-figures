@@ -254,7 +254,7 @@ export const pdfExporter: Exporter = {
       const nodes = input.doc.nodes.filter((n) => n.page === page.id);
       fonts.push(...fontWarnings(input.doc, nodes));
       const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
-      return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id)) };
+      return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id), (n) => input.registries.nodeTypes.get(n.type)?.members !== undefined) };
     });
 
     // Loaded here, not at the top, so the editor does not pay for any of the libraries until someone exports a PDF.

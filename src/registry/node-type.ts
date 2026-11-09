@@ -146,6 +146,13 @@ export interface NodeType<N extends Node = Node> {
    */
   translate?(node: N, dx: number, dy: number): N;
   /**
+   * The node scaled by (`sx`, `sy`) about `origin` (page px), as resizing a group scales its members: the fields that
+   * change. Without it the box's position (its offset from `origin`) and size are scaled, rounded as a drag rounds them
+   * and kept to the least size a node may have; text sizes, stroke widths and corner radii are left as they are
+   * (`scaleUnits` in model/groups.ts). A connector scales only its free ends: its attached ends follow their items.
+   */
+  scale?(node: N, sx: number, sy: number, origin: Pt, ctx: InteractionContext | UpdateContext): Partial<N>;
+  /**
    * The page the node is on once a move (`node.move`) that took it along has ended. Without it, the node goes to
    * `ctx.centrePage`, the page under the centre of its box. A connector follows its items: it stays while an end is
    * attached to an item that is not moving, goes with its items when they all go to one page, and otherwise goes to

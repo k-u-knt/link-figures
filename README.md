@@ -203,6 +203,43 @@ await api.run(path, "panel.histogram", { id: "p-gggg", bins: 4 })
 // => { dataMin: 35, dataMax: 235, lo: 0, hi: 255, bitsPerSample: 8, counts: [9216, 20992, 20736, 14592] }
 ```
 
+## Linking a place in a note
+
+Select text in a note's editor and drag it onto a figure's stage: the panel links the place the text came from, not a copy of it, so it follows the note when the note changes. One content panel is made at the pointer. The link is to the block that holds the start of the selection:
+
+- a heading is linked by its name (`note#Heading`);
+- a paragraph, list item, quote or callout, table or code block is linked by a block id (`note#^fig-3k9x`). When the block has no id, one is added to the note: ` ^id` at the end of a paragraph or list item, and `^id` on a line of its own after a table, a code block or math block, a quote or a callout (after the closing fence or last row inside a list item that ends in one). A block that has an id keeps it, also one you typed. The id is added through the note's editor when the note is open, so Undo there takes it back, and it is the only change to the note;
+- a selection over several blocks links the smallest heading section that holds them all, and with no such heading it links the first block and a Notice says so;
+- a selection of nothing but links (`[[plot.png]] [[cells.tif]]`) is read as the links, one panel each, as before.
+
+An image dragged out of a note's editor makes an image panel on the note's block that holds it, showing that image (for a block with several images, the one you dragged). If the note embeds the image more than once, the first is used and a Notice says so.
+
+Only text dragged out of a note's editor is matched to a place, and only against the editor the drag started in; text dragged in from another app, from a popout window or from Reading view is handled as any dropped text (links in it are linked, a path is resolved, anything else is ignored), and never writes into a note. A drop shows at most one Notice. If a block id has to be written and the note has just changed, so that Obsidian has not caught up with it, nothing is written and the Notice says `the note has changed; try again`: drop it again. Each drop is one undo step in the figure.
+
+**Settings.** In Settings → Link Figures:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| Drop from a note | Block (adds a block id) | Block: as above. Heading: the block's id when it has one, otherwise the nearest heading above it (the whole note, with a Notice, when there is none); the note is never changed. Direct: no place in the note is linked: links in the dragged text are linked and an image's own file is linked, as before this setting. |
+| Block id prefix | `fig` | New ids are this prefix, a dash and four letters or digits (`fig-3k9x`), not already in the note. Letters, digits and dashes only. |
+
+A heading whose text occurs twice is linked through the headings above it (`#Results#Details`). Where that cannot tell it from an earlier one, Block mode links the first block of the selection by its id and Heading mode the whole note, with a Notice.
+
+**Scripting.** Two additions, described with the others under Scripting:
+
+| Call | What it does |
+|---|---|
+| `panel.create` (command) | Makes a panel linking `file` + `subpath`. Arguments (defaults in brackets): `file` (required; a note without `.md`, else the vault path), `subpath` (`""`), `show` (`"image"` or `"content"`; an image for an image, PDF or TIFF file, else content), `imageIndex` (whole number from 0), `x`, `y` (page px; required), `width`, `height` (page px above 0; the default size), `page` (the page in view, or required when the figure is closed), `id`. Result `{ id }`. It does not check that the link resolves: a link that leads nowhere makes a panel with a red badge. Drops use it. |
+| `await api.blockId(notePath, line)` | The block id of the block that holds `line` (from 0) of the note, as `{ id, subpath }` (`subpath` is `#^id`): the id it has, or a new one written into the note (through its editor when it is open, else into the file). It writes whatever the setting above says, as it is a call you made. It rejects for a heading line (link a heading by its name), a line in no block, a block that cannot hold an id (front matter, a rule, HTML), a note that is not there and a note that has just changed. It is not a figure command, so it is not in `api.commands()`. |
+
+```js
+const api = app.plugins.plugins["link-figures"].api;
+// A panel on the block at line 4 of a note.
+const { subpath } = await api.blockId("Notes/Methods", 4);   // => { id: "fig-3k9x", subpath: "#^fig-3k9x" }
+await api.run("Notes/My figure.lnkfig.md", "panel.create", { file: "Notes/Methods", subpath, x: 20, y: 20 });
+// => { id: "p-aaaa" }
+```
+
 ## Settings
 
 | Setting | Default | Meaning |
@@ -212,6 +249,8 @@ await api.run(path, "panel.histogram", { id: "p-gggg", bins: 4 })
 | Attachment folder | empty | Folder for images dropped or pasted into a figure. Empty uses Obsidian's own attachment setting. |
 | Export folder | empty | Folder for exported files. Empty saves them next to the figure. |
 | Export resolution | 300 dpi | Dots per inch for what is drawn as pixels, from 72 to 1200. |
+| Drop from a note | Block (adds a block id) | What a panel dragged out of a note's editor links to: Block, Heading or Direct. See Linking a place in a note. |
+| Block id prefix | `fig` | The start of a block id written into a note. |
 
 ## Security
 

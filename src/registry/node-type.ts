@@ -251,8 +251,11 @@ export interface NodeType<N extends Node = Node> {
    * For a type a plugin registers (not one this plugin builds in): validates one of its nodes as a figure file holds it,
    * and gives the node back, completed with what is missing. `raw` has the base fields checked (`id`, `type`, `page`, a
    * numeric box) and the common defaults filled in (`z`, `rotation`, `opacity`, `locked`); every other key is as the
-   * file has it. Throw to refuse the file (the message is shown, naming the node); the node given back keeps `raw`'s `id`
-   * and `type`. Without it, a node of the type is loaded as it is.
+   * file has it. The node given back keeps `raw`'s `id` and `type`. Throw when the node cannot be read: the rest of the
+   * file still loads, and this node is kept as it is in the file and saved back unchanged, drawn as an "Unreadable"
+   * placeholder, skipped by an export, and never handed to this type's hooks (see `loadDocument`'s `unreadable`). The
+   * failure is reported as a `HookFailure` (the message is shown when the figure opens, naming the node). Without it, a
+   * node of the type is loaded as it is.
    */
   migrate?(raw: Record<string, unknown>): N;
 }

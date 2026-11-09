@@ -40,6 +40,7 @@ function panel(ctx: CommandContext, command: string, id: NodeId): FileNode {
   const node = doc.nodes.find((n) => n.id === id);
   if (!node) throw new CommandError(`${command}: there is no node "${id}"`);
   if (node.type !== "file") throw new CommandError(`${command}: "${id}" is not a file panel`);
+  if (node.show !== "image") throw new CommandError(`${command}: "${id}" shows no image`);
   if (isLocked(doc, id)) throw new CommandError(`${command}: "${id}" is locked`);
   return node;
 }
@@ -69,7 +70,7 @@ function crop(ctx: CommandContext, args: CropArgs): Record<string, never> {
 function selectedCroppedPanel(ctx: CommandContext): FileNode | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
-  return node?.type === "file" && node.crop !== null && !isLocked(ctx.store.doc, node.id) ? node : undefined;
+  return node?.type === "file" && node.show === "image" && node.crop !== null && !isLocked(ctx.store.doc, node.id) ? node : undefined;
 }
 
 /** `panel.crop` and `panel.crop-reset`. */

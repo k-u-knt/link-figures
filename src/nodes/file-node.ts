@@ -352,6 +352,7 @@ function cropRoute(key: string): FieldRoute<FileNode> | undefined {
   if (!side) return undefined;
   return {
     read: (node) => cropInset(node.crop, side) * 100,
+    applies: (node) => node.show === "image",
     call: (node, value) => ({
       id: "panel.crop",
       args: { id: node.id, crop: cropWithInset(node.crop, side, Number(value) / 100), keep: "image" },

@@ -2,7 +2,7 @@ import { cropCommands } from "../../src/commands/crop";
 import { drawingCommands } from "../../src/commands/drawing";
 import { prepareCall, runCall } from "../../src/commands/headless";
 import { createDocument, fileNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
-import { cropKeepingImage } from "../../src/model/geometry";
+import { cropKeepingImage, cropPlacement } from "../../src/model/geometry";
 import { createFigureStore } from "../../src/model/normalise";
 import type { Document, FileNode, Node } from "../../src/model/types";
 import { fileNodeType } from "../../src/nodes/file-node";
@@ -121,6 +121,25 @@ describe("panel.crop", () => {
     );
   });
 
+  test("a file panel that shows no image is refused", async () => {
+    const { call } = setup({ show: "content" });
+    await expect(call("panel.crop", { id: "p-1", crop: null, keep: "box" })).rejects.toThrow('panel.crop: "p-1" shows no image');
+  });
+
+  test("keep image on a cover panel whose box aspect differs from its crop leaves the image where it is on the page", async () => {
+    const { call, node, box } = setup({ fit: "cover", width: 100, height: 100 });
+    const imageOnPage = () => {
+      const n = node();
+      const { image } = cropPlacement(n, { width: 200, height: 100 }, n.crop, n.fit);
+      return { x: n.x + image.x, y: n.y + image.y, width: image.width, height: image.height };
+    };
+    const before = imageOnPage();
+    await call("panel.crop", { id: "p-1", crop: { x: 0, y: 0, w: 0.5, h: 1 } });
+    expect(node().crop).toEqual({ x: 0, y: 0, w: 0.5, h: 1 });
+    expect(box()).toEqual({ x: -40, y: 10, width: 100, height: 100 });
+    expect(imageOnPage()).toEqual(before);
+  });
+
   test("each call is one undo step", async () => {
     const { call, store, box, node } = setup();
     await call("panel.crop", { id: "p-1", crop: { x: 0.5, y: 0, w: 0.5, h: 1 } });
@@ -177,7 +196,7 @@ describe("inspector crop fields", () => {
     store.subscribe(() => inspector.render());
     selection.onChange(() => inspector.render());
     selection.set(["p-1"]);
-    return { el, store, node, box, notices };
+    return { el, store, node, box, notices, selection };
   }
 
   test("a file panel shows the four insets, in %", () => {
@@ -200,6 +219,18 @@ describe("inspector crop fields", () => {
     expect(seen).toEqual(["inspect:crop.left"]);
     store.undo();
     expect(node().crop).toBeNull();
+  });
+
+  test("a routed crop write skips selected panels that show no image", () => {
+    const { el, store, node, notices, selection } = inspect();
+    store.commit("add", (d) => {
+      d.nodes.push({ ...(d.nodes[0] as FileNode), id: "p-2", show: "content", x: 300, crop: null });
+    });
+    selection.set(["p-1", "p-2"]);
+    el.typeInto("crop.left", "25");
+    expect(notices).toEqual([]);
+    expect(node().crop).toEqual({ x: 0.25, y: 0, w: 0.75, h: 1 });
+    expect((store.doc.nodes.find((n) => n.id === "p-2") as FileNode).crop).toBeNull();
   });
 
   test("writing one side leaves the others as they are", () => {

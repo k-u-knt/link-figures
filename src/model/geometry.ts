@@ -145,13 +145,23 @@ export function cropInset(crop: Crop | null, side: CropSide): number {
   return 1 - c.y - c.h;
 }
 
-/** `crop` with the inset of `side` set to `inset` (a share, 0–1) and the other three sides where they were. */
+/**
+ * `crop` with the inset of `side` set to `inset` (a share, 0–1) and the other three sides where they were. The inset is
+ * kept from 0 to `MIN_CROP` short of the opposite side, so writing one side never moves another.
+ */
 export function cropWithInset(crop: Crop | null, side: CropSide, inset: number): Crop {
   const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
-  if (side === "left") return { ...c, x: inset, w: c.x + c.w - inset };
-  if (side === "top") return { ...c, y: inset, h: c.y + c.h - inset };
-  if (side === "right") return { ...c, w: 1 - c.x - inset };
-  return { ...c, h: 1 - c.y - inset };
+  const clamp = (v: number, hi: number) => Math.min(Math.max(v, 0), Math.max(hi, 0));
+  if (side === "left") {
+    const x = clamp(inset, c.x + c.w - MIN_CROP);
+    return { ...c, x, w: c.x + c.w - x };
+  }
+  if (side === "top") {
+    const y = clamp(inset, c.y + c.h - MIN_CROP);
+    return { ...c, y, h: c.y + c.h - y };
+  }
+  if (side === "right") return { ...c, w: 1 - c.x - clamp(inset, 1 - c.x - MIN_CROP) };
+  return { ...c, h: 1 - c.y - clamp(inset, 1 - c.y - MIN_CROP) };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect } from "../../src/model/geometry";
+import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect, cropWithInset } from "../../src/model/geometry";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -60,4 +60,26 @@ test("cropPlacement: an image without a size gives the box as region", () => {
 test("imagePlacement is the whole image of cropPlacement", () => {
   const args = [{ width: 200, height: 100 }, { width: 300, height: 90 }, { x: 0.25, y: 0.1, w: 0.5, h: 0.8 }] as const;
   for (const fit of ["cover", "contain"] as const) expect(imagePlacement(...args, fit)).toEqual(cropPlacement(...args, fit).image);
+});
+
+describe("cropWithInset", () => {
+  test("writing one side never moves the opposite side: the inset stops 1 % before it", () => {
+    const c = { x: 0.2, y: 0.1, w: 0.5, h: 0.6 };
+    const left = cropWithInset(c, "left", 0.9);
+    expect(left.x + left.w).toBeCloseTo(0.7, 10);
+    expect(left.w).toBeCloseTo(0.01, 10);
+    const right = cropWithInset(c, "right", 0.95);
+    expect(right.x).toBeCloseTo(0.2, 10);
+    expect(right.w).toBeCloseTo(0.01, 10);
+    const top = cropWithInset(c, "top", 1);
+    expect(top.y + top.h).toBeCloseTo(0.7, 10);
+    expect(top.h).toBeCloseTo(0.01, 10);
+    const bottom = cropWithInset(c, "bottom", 1);
+    expect(bottom.y).toBeCloseTo(0.1, 10);
+    expect(bottom.h).toBeCloseTo(0.01, 10);
+  });
+
+  test("an inset below 0 is 0", () => {
+    expect(cropWithInset({ x: 0.2, y: 0, w: 0.5, h: 1 }, "left", -0.5)).toEqual({ x: 0, y: 0, w: 0.7, h: 1 });
+  });
 });

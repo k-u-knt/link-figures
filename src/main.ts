@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { createApi, type LinkFiguresApi } from "./api";
+import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
 import { builtinSnapSources } from "./model/snap";
 import { registerBuiltinCommands, registerPaletteCommand } from "./commands/builtin";
@@ -68,6 +69,7 @@ export default class LinkFiguresPlugin extends Plugin {
     for (const route of builtinRoutes) this.registries.routes.register(route);
     for (const cap of builtinCapKinds) this.registries.caps.register(cap);
     for (const source of builtinSnapSources) this.registries.snaps.register(source);
+    for (const lut of builtinLuts) this.registries.luts.register(lut);
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
     for (const command of drawingCommands()) this.registries.commands.register(command);

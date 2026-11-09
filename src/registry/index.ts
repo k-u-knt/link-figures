@@ -2,6 +2,7 @@ import { AdjustmentRegistry } from "./adjustment";
 import { CapKindRegistry } from "./cap";
 import { CommandRegistry } from "./command";
 import { ExporterRegistry } from "./exporter";
+import { LutRegistry } from "./lut";
 import { NodeTypeRegistry } from "./node-type";
 import { PaintRegistry } from "./paint";
 import { RouteRegistry } from "./route";
@@ -20,6 +21,7 @@ export interface Registries {
   caps: CapKindRegistry;
   shapeOperations: ShapeOperationRegistry;
   snaps: SnapSourceRegistry;
+  luts: LutRegistry;
 }
 
 export function createRegistries(): Registries {
@@ -34,5 +36,6 @@ export function createRegistries(): Registries {
     caps: new CapKindRegistry(),
     shapeOperations: new ShapeOperationRegistry(),
     snaps: new SnapSourceRegistry(),
+    luts: new LutRegistry(),
   };
 }

@@ -20,6 +20,13 @@ export class CommandError extends Error {
 /** The slice of the figure view that commands may use; keeps commands testable without a real view. */
 export interface FigureViewLike {
   file: { path: string } | null;
+  /**
+   * The nodes their plugin's `migrate` hook could not read when the figure was loaded (see `loadDocument`), and their
+   * copies since: drawn as placeholders and skipped by an export. It only grows, so undoing and redoing a copy keeps it.
+   */
+  unreadableNodes?: ReadonlySet<NodeId>;
+  /** Adds `ids` (copies of unreadable nodes) to `unreadableNodes`. */
+  markUnreadable?(ids: NodeId[]): void;
   selectedIds(): NodeId[];
   currentPage(): Page;
   setSelection(ids: NodeId[]): void;

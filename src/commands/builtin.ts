@@ -318,6 +318,12 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
       return { kind: "free", x: roundPx(pt.x + offset), y: roundPx(pt.y + offset) };
     }) as [End, End];
   });
+  // A copy of a node its plugin could not read cannot be read either: it is marked before it is drawn, so the stage
+  // shows it as a placeholder and an export skips it. Headless the copy is saved as the original is, and its plugin's
+  // hook fails on it too when the figure is next loaded.
+  const unreadable = ctx.view?.unreadableNodes;
+  const unreadableCopies = unreadable ? copies.filter((_, i) => unreadable.has(originals[i].id)).map((c) => c.id) : [];
+  if (unreadableCopies.length > 0) ctx.view?.markUnreadable?.(unreadableCopies);
   ctx.store.commit("duplicate", (draft) => {
     draft.nodes.push(...copies);
   });

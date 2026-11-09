@@ -102,9 +102,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /**
    * The nodes a plugin's `migrate` hook could not read when the figure was loaded (see `HookFailure`): drawn, inspected
-   * and pressed as placeholders, whatever type is registered for them, and saved as the file has them.
+   * and pressed as placeholders, whatever type is registered for them, and saved as the file has them; copies of them
+   * join it (`markUnreadable`), and it only grows until the next load, so undo and redo of a copy keep it right.
    */
-  unreadableNodes: ReadonlySet<NodeId> = new Set();
+  unreadableNodes: Set<NodeId> = new Set();
 
   /** The file text as `setViewData` received it. */
   private rawText = "";
@@ -206,7 +207,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
-    this.unreadableNodes = loaded.unreadable;
+    this.unreadableNodes = new Set(loaded.unreadable);
     // Said once per type as the figure opens, not again each time the file is read back.
     if (!reload) {
       for (const report of hookFailureReports(loaded.hookFailures)) {
@@ -418,6 +419,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** Whether a figure is loaded (not the blank stand-in, nor a file that could not be read): what the API may act on. */
   hasDocument(): boolean {
     return this.loaded;
+  }
+
+  /** Adds copies of unreadable nodes to `unreadableNodes` (see `FigureViewLike.markUnreadable`). */
+  markUnreadable(ids: NodeId[]): void {
+    for (const id of ids) this.unreadableNodes.add(id);
   }
 
   commandContext(): CommandContext {

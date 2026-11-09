@@ -7,6 +7,7 @@ import type { TextNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { COLOR_PATTERN, fieldError, type ParamSpec } from "../registry/params";
+import { textNodePptx } from "./text-node-pptx";
 import { textNodeSvg } from "./text-node-svg";
 
 export { textNodeSvg };
@@ -249,4 +250,6 @@ export const textNodeType: NodeType<TextNode> = {
   toSvg(node: TextNode, ctx: SvgContext): string {
     return textNodeSvg(node, ctx);
   },
+
+  toPptx: textNodePptx,
 };

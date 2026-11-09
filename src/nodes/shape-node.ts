@@ -8,6 +8,7 @@ import type { Field } from "../registry/fields";
 import type { AttachContext, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
 import { fieldError, type ParamSpec } from "../registry/params";
+import { shapeNodePptx } from "./shape-node-pptx";
 
 /**
  * What drawing a shape needs: the registries (its kind's outline, its paints) and the SVG it goes into. Warnings are
@@ -157,4 +158,6 @@ export const shapeNodeType: NodeType<ShapeNode> = {
     for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
     return fragment;
   },
+
+  toPptx: shapeNodePptx,
 };

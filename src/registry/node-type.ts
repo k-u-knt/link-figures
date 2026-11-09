@@ -42,6 +42,40 @@ export interface SvgContext {
   uid(prefix: string): string;
 }
 
+/**
+ * What a node type's `toPptx` may depend on besides the node: one slide of an editable PowerPoint export. Positions are
+ * page px from the page's top-left corner; `px` turns them into the slide's EMU.
+ */
+export interface PptxContext {
+  /** The plugin's registries, as in `RenderContext` (the paints a fill is written with). */
+  registries: Registries;
+  doc: Document;
+  /** The page the slide is made of. */
+  page: Page;
+  /** How much the slide is scaled from the page: 1, unless the page is outside PowerPoint's slide sizes. */
+  scale: number;
+  /** `value` page px as EMU on the slide (scaled), rounded to a whole EMU. */
+  px(value: number): number;
+  /** The export's resolution, for what is written as a picture. */
+  dpi: number;
+  /** Adds a picture to the slide's media; returns the relationship id an `a:blip r:embed` names it by. */
+  addMedia(bytes: Uint8Array, ext: "png" | "jpeg"): string;
+  /** A shape id not yet used on the slide (`p:cNvPr id`). */
+  nextId(): number;
+  /** `svgFragment` (page px, as `toSvg` writes) drawn over `box` (page px) as PNG bytes at `dpi`. */
+  rasterise(svgFragment: string, box: Rect): Promise<Uint8Array>;
+  /** Says what the slide could not keep; the same message is reported once per export. Say which item it is about. */
+  warn(message: string): void;
+}
+
+/**
+ * A node as PresentationML: `xml` is one or more shape-tree elements (`p:sp`, `p:pic`, `p:cxnSp`, `p:grpSp`) whose
+ * pictures were added with `PptxContext.addMedia`.
+ */
+export interface PptxPart {
+  xml: string;
+}
+
 /** What a node type's `attachable` may depend on besides the node. */
 export interface AttachContext {
   registries: Pick<Registries, "shapes">;
@@ -115,6 +149,11 @@ export interface NodeType<N extends Node = Node> {
   inspector(node: N, ctx: InspectorContext): Field[];
   /** An SVG fragment, or `"raster"` to have the node rendered by the DOM and embedded as an image. */
   toSvg(node: N, ctx: SvgContext): string | "raster";
+  /**
+   * The node as editable PowerPoint shapes; `"raster"` to have it written as a picture of its SVG drawing (as is a type
+   * without the hook), null to leave it out. May be async.
+   */
+  toPptx?(node: N, ctx: PptxContext): PptxPart | "raster" | null | Promise<PptxPart | "raster" | null>;
   /**
    * An SVG fragment drawn over the node's own drawing, whether that is `toSvg`'s fragment, a raster the DOM made of the
    * node, or a PDF panel's page embedded as vectors (a file panel's frame). The empty string draws nothing.

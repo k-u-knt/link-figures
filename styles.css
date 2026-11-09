@@ -155,6 +155,15 @@
   color: var(--text-normal);
 }
 
+/* A section's heading (the Display section): larger, with a rule above, so its channels' headings read as within it. */
+.lf-field-heading.lf-field-heading-section {
+  margin-top: var(--size-4-4);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-bold);
+}
+
 /* A display channel's histogram: 220×60 CSS px, or narrower in a narrow inspector (its bitmap follows the laid-out width); its handles are dragged. */
 .lf-histogram {
   width: 220px;

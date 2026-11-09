@@ -3,7 +3,8 @@
  * dotted path into the value (`"border.width"`, `"stroke.paint"`). A `paint` field is a paint-type select plus the chosen
  * type's own fields (keys relative to the paint); a `stops` field is a gradient's list of stops, with add and remove.
  *
- * A `heading` is a line of text that heads the fields after it (a display channel's name); it has no value. A
+ * A `heading` is a line of text that heads the fields after it (a display channel's name); it has no value. A heading
+ * with `level` 1 heads a whole section (the Display section) and is drawn more strongly than the level-2 default. A
  * `histogram` is a display channel's histogram with its min and max handles (keys relative to the channel: its key is
  * `<channel>.histogram`, and it reads `<channel>.histogram` for the counts and writes `<channel>.min` and `<channel>.max`).
  *
@@ -22,4 +23,6 @@ export type Field = {
   options?: { value: string; label: string }[];
   onValue?: unknown;
   nullable?: boolean;
+  /** For a `heading`: 1 for a section's heading, 2 (the default) for a heading within a section. */
+  level?: 1 | 2;
 };

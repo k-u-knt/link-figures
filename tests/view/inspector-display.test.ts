@@ -120,6 +120,9 @@ describe("the Display section", () => {
   test("shows for a TIFF panel with loaded samples: a header, LUT, min, max, gamma, visible and the histogram", () => {
     const { el } = setup();
     expect(headings(el)).toEqual(["Display", "Grey"]);
+    // The section's heading looks unlike its channels' headings (m2c R5).
+    const sections = el.findAll((e) => e.hasClass("lf-field-heading-section")).map((e) => e.text);
+    expect(sections).toEqual(["Display"]);
     expect(displayKeys(el)).toEqual(["display.0.lut", "display.0.min", "display.0.max", "display.0.gamma", "display.0.visible", "display.0.histogram"]);
     expect(el.control("display.0.lut").value).toBe("grey");
     expect(el.control("display.0.min").value).toBe("1000");

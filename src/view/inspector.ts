@@ -386,7 +386,7 @@ const COMPOSITES: Partial<Record<Field["kind"], (holder: HTMLElement, field: Fie
 export function renderFields(container: HTMLElement, fields: Field[], read: Read, write: Write, env: FieldEnv = {}): void {
   for (const field of fields) {
     if (field.kind === "heading") {
-      container.createDiv({ cls: "lf-field-heading", text: field.label });
+      container.createDiv({ cls: field.level === 1 ? ["lf-field-heading", "lf-field-heading-section"] : "lf-field-heading", text: field.label });
       continue;
     }
     const makeComposite = COMPOSITES[field.kind];

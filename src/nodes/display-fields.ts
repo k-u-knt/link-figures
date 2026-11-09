@@ -95,7 +95,7 @@ export function displayFields(node: FileNode, ctx: InspectorContext): Field[] {
       { kind: "histogram", key: key("histogram"), label: "Histogram" },
     ];
   });
-  return [{ kind: "heading", key: "display", label: "Display" }, ...channelFields];
+  return [{ kind: "heading", key: "display", label: "Display", level: 1 }, ...channelFields];
 }
 
 /**

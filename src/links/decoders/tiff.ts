@@ -4,6 +4,7 @@ import type { AdjustmentRegistry } from "../../registry/adjustment";
 import type { DecodedImage } from "../types";
 import { checkDecodeBudget } from "./budget";
 import type { SampleCache } from "./sample-cache";
+import { tiffPageIndex } from "./tiff-page";
 import { rgbaToPngDataUrl } from "./raster";
 import { ifdToPlane, type Plane } from "./tiff-convert";
 
@@ -14,7 +15,7 @@ import { ifdToPlane, type Plane } from "./tiff-convert";
 export function decodeTiffPage(bytes: ArrayBuffer, pageIndex: number): { plane: Plane; pageCount: number } {
   const ifds = UTIF.decode(bytes);
   if (ifds.length === 0) throw new Error("TIFF contains no images");
-  const index = Math.min(Math.max(Math.trunc(pageIndex) || 0, 0), ifds.length - 1);
+  const index = tiffPageIndex(pageIndex, ifds.length);
   const ifd = ifds[index];
   checkDecodeBudget(ifd.t256?.[0] ?? 0, ifd.t257?.[0] ?? 0, `TIFF page ${index + 1}`);
   UTIF.decodeImage(bytes, ifd);

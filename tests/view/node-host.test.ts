@@ -56,6 +56,7 @@ function recordingType() {
 }
 
 const PATHS = ["a.pdf", "b.pdf", "c.pdf"];
+const RASTERS = ["e.png", "e2.png", "e3.png", "e4.png", "e5.png"];
 
 function setup() {
   const doc: Document = createDocument("a4-portrait");
@@ -64,7 +65,7 @@ function setup() {
   const label = textNodeDefaults(page, {}, doc.nodes.map((n) => n.id));
   doc.nodes.push(label);
 
-  const access = new FakeAccess({ files: Object.fromEntries([...PATHS, "d.pdf", "e.png", "f.tif"].map((p) => [p, "BINARY"])), mtimes: { "e.png": 1, "f.tif": 1 } });
+  const access = new FakeAccess({ files: Object.fromEntries([...PATHS, "d.pdf", ...RASTERS, "f.tif"].map((p) => [p, "BINARY"])), mtimes: Object.fromEntries([...RASTERS, "f.tif"].map((p) => [p, 1])) });
   const reads: string[] = [];
   const readBinary = access.readBinary.bind(access);
   access.readBinary = (file: FileRef) => {
@@ -75,6 +76,12 @@ function setup() {
   let hold = false;
   /** The decoders' samples cache, and the `decodeSamples` calls held back while `holdSamples` is on. */
   const planes = new Map<string, Plane>();
+  /** Set to make the fake cache keep only this many planes, dropping the oldest first. */
+  let capacity = Infinity;
+  const keep = (key: string, plane: Plane) => {
+    planes.set(key, plane);
+    while (planes.size > capacity) planes.delete(planes.keys().next().value as string);
+  };
   const sampleDecodes: { release: () => void }[] = [];
   let holdSamples = false;
   const decoders: Decoders = {
@@ -82,14 +89,19 @@ function setup() {
       if (hold) await new Promise<void>((release) => decodes.push({ release }));
       return { dataUrl: `data:page-${pageIndex}`, width: 10, height: 10, pageCount: 2 };
     }),
-    tiff: vi.fn(async () => ({ dataUrl: "data:tiff", width: 2, height: 1, pageCount: 1 })),
+    tiff: vi.fn(async (_bytes, _pageIndex, _recipe, key) => {
+      if (hold) await new Promise<void>((release) => decodes.push({ release }));
+      // As the real decoder does: a keyed decode leaves its plane in the cache.
+      if (key !== undefined) planes.set(key, { width: 2, height: 1, bitsPerSample: 16, samplesPerPixel: 1, data: new Uint16Array(2) });
+      return { dataUrl: "data:tiff", width: 2, height: 1, pageCount: 1 };
+    }),
     raster: vi.fn(),
     adjusts: () => false,
     samples: (key) => planes.get(key),
     decodeSamples: vi.fn(async (_bytes, _source, _pageIndex, key) => {
       if (holdSamples) await new Promise<void>((release) => sampleDecodes.push({ release }));
       const plane: Plane = { width: 2, height: 1, bitsPerSample: 8, samplesPerPixel: 4, data: new Uint8Array(8) };
-      planes.set(key, plane);
+      keep(key, plane);
       return plane;
     }),
   };
@@ -123,7 +135,8 @@ function setup() {
   };
   return {
     doc, view, nodeHost, access, reads, decoders, decodes, hold: (on: boolean) => (hold = on), recording, planes, sampleDecodes,
-    holdSamples: (on: boolean) => (holdSamples = on), a, b, c, label, relink, host: hosts.get(page.id)!,
+    holdSamples: (on: boolean) => (holdSamples = on),
+    setCapacity: (n: number) => (capacity = n), a, b, c, label, relink, host: hosts.get(page.id)!,
     ids: doc.nodes.map((n) => n.id),
     fileIds: [a.id, b.id, c.id],
   };
@@ -451,5 +464,68 @@ describe("samplesNow", () => {
     t.planes.set(key as string, plane);
     expect(t.nodeHost.samplesNow(t.a.id)).toBe(plane);
     expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
+  test("after a relink it answers for the new file only: null and no decode until the new resolution lands, then the chrome is drawn again", async () => {
+    const t = setup();
+    const first = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(first);
+    await t.nodeHost.resolveStale();
+    t.nodeHost.samplesNow(t.a.id);
+    await settle();
+    expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
+    vi.mocked(t.decoders.decodeSamples).mockClear();
+    t.view.samplesLanded.mockClear();
+    t.reads.length = 0;
+
+    t.hold(true);
+    const next = t.relink({ [t.a.id]: "f.tif" });
+    t.nodeHost.applyChange(next, new Set([t.a.id]));
+    await settle();
+    // e.png's resolution is still the one shown, and its plane is cached, but it is not this panel's file any more.
+    expect(t.view.resolvedCache.get(t.a.id)).toMatchObject({ file: { path: "e.png" } });
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await settle();
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+    expect(t.reads).toEqual(["f.tif"]);
+    expect(t.view.samplesLanded).not.toHaveBeenCalled();
+
+    for (const d of t.decodes) d.release();
+    await settle();
+    expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
+    const plane = t.nodeHost.samplesNow(t.a.id);
+    expect(plane?.bitsPerSample).toBe(16);
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
+  test("a drag of the range or the adjustments still answers from the shown resolution", async () => {
+    const t = setup();
+    const first = t.relink({ [t.a.id]: "f.tif" });
+    t.nodeHost.renderAll(first);
+    await t.nodeHost.resolveStale();
+    t.hold(true);
+    const next: Document = { ...first, nodes: first.nodes.map((n) => (n.id === t.a.id ? ({ ...n, range: { min: 1, max: 9 } } as Node) : n)) };
+    t.view.store = new DocumentStore(next);
+    t.nodeHost.applyChange(next, new Set([t.a.id]));
+    expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
+  });
+
+  test("more panels than the cache holds, asked for in one render, do not decode and redraw in a loop", async () => {
+    const t = setup();
+    t.setCapacity(4);
+    const [page] = t.doc.pages;
+    const doc: Document = { ...t.doc, nodes: [] };
+    for (const file of RASTERS) doc.nodes.push(fileNodeDefaults(page, { file, subpath: "", show: "image" }, doc.nodes.map((n) => n.id)));
+    t.view.store = new DocumentStore(doc);
+    t.nodeHost.renderAll(doc);
+    await t.nodeHost.resolveStale();
+    // The inspector asks for every panel each time the chrome is drawn.
+    const askAll = () => doc.nodes.map((n) => t.nodeHost.samplesNow(n.id));
+    t.view.samplesLanded.mockImplementation(askAll);
+
+    askAll();
+    for (let i = 0; i < 20; i++) await settle();
+    expect(t.decoders.decodeSamples).toHaveBeenCalledTimes(RASTERS.length);
+    expect(t.view.samplesLanded.mock.calls.length).toBeLessThanOrEqual(RASTERS.length);
   });
 });

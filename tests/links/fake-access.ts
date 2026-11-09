@@ -6,8 +6,10 @@ export interface FakeVault {
   headings?: Record<string, Record<string, Range>>;
   blocks?: Record<string, Record<string, Range>>;
   embeds?: Record<string, { link: string; offset: number }[]>;
-  /** Path to modification time; a file not listed has none (`mtime` gives null). */
+  /** Path to modification time; a file not listed has none (`stat` gives null). */
   mtimes?: Record<string, number | null>;
+  /** Path to size in bytes; 0 when not listed. */
+  sizes?: Record<string, number>;
 }
 
 const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -58,12 +60,18 @@ export class FakeAccess implements VaultAccess {
     return "app://" + file.path;
   }
 
-  mtime(file: FileRef): number | null {
-    return this.vault.mtimes?.[file.path] ?? null;
+  stat(file: FileRef): { mtime: number; size: number } | null {
+    const mtime = this.vault.mtimes?.[file.path];
+    return mtime === undefined || mtime === null ? null : { mtime, size: this.vault.sizes?.[file.path] ?? 0 };
   }
 
   /** As a write to the file on disk changes its modification time. */
   setMtime(path: string, mtime: number | null): void {
     this.vault.mtimes = { ...this.vault.mtimes, [path]: mtime };
+  }
+
+  /** As a write to the file on disk may change its size and not its mtime (a coarse clock). */
+  setSize(path: string, size: number): void {
+    this.vault.sizes = { ...this.vault.sizes, [path]: size };
   }
 }

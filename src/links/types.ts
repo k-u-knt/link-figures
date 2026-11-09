@@ -22,8 +22,11 @@ export interface VaultAccess {
   readText(file: FileRef): Promise<string>;
   readBinary(file: FileRef): Promise<ArrayBuffer>;
   resourcePath(file: FileRef): string;
-  /** When the file was last modified (ms), for keying its decoded samples (see `samplesKey`); null or absent when unknown, which caches nothing. */
-  mtime?(file: FileRef): number | null;
+  /**
+   * When the file was last modified (ms) and its size (bytes), for keying its decoded samples (see `samplesKey`); null
+   * or absent when unknown, which caches nothing.
+   */
+  stat?(file: FileRef): { mtime: number; size: number } | null;
 }
 
 export type SourceKind = "raster" | "svg" | "pdf" | "tiff";

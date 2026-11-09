@@ -2,7 +2,7 @@ import UTIF from "utif";
 import { createDecoders } from "../../src/links/decoders";
 import { SampleCache } from "../../src/links/decoders/sample-cache";
 import type { Plane } from "../../src/links/decoders/tiff-convert";
-import { resolveFileNode } from "../../src/links/resolver";
+import { resolveFileNode, samplesKey } from "../../src/links/resolver";
 import type { FileRef } from "../../src/links/types";
 import { createPage, fileNodeDefaults } from "../../src/model/defaults";
 import type { FileNode } from "../../src/model/types";
@@ -136,11 +136,37 @@ describe("the resolver keys the samples by path and mtime", () => {
     expect(t.decode).toHaveBeenCalledTimes(2);
   });
 
+  test("a different size with the same mtime misses too", async () => {
+    const t = setup();
+    await resolveFileNode(t.node("auto"), "f.lnkfig.md", t.access, t.decoders);
+    t.access.setSize("cells.tif", 99);
+    await resolveFileNode(t.node("auto"), "f.lnkfig.md", t.access, t.decoders);
+    expect(t.reads).toHaveLength(2);
+  });
+
   test("without an mtime nothing is cached", async () => {
     const t = setup();
     t.access.setMtime("cells.tif", null);
     await resolveFileNode(t.node("auto"), "f.lnkfig.md", t.access, t.decoders);
     await resolveFileNode(t.node("auto"), "f.lnkfig.md", t.access, t.decoders);
     expect(t.reads).toHaveLength(2);
+  });
+});
+
+describe("samplesKey", () => {
+  const access = new FakeAccess({ files: { "a.tif": "BINARY", "a.png": "BINARY" }, mtimes: { "a.tif": 5, "a.png": 5 }, sizes: { "a.tif": 10 } });
+  const tif = { path: "a.tif", extension: "tif" };
+
+  test("a TIFF page index is truncated and clamped at 0 as decodeTiffPage does", () => {
+    const zero = samplesKey(tif, "tiff", 0, access);
+    expect([-3, 0.7, Number.NaN].map((i) => samplesKey(tif, "tiff", i, access))).toEqual([zero, zero, zero]);
+    expect(samplesKey(tif, "tiff", 1.9, access)).toBe(samplesKey(tif, "tiff", 1, access));
+    expect(samplesKey(tif, "tiff", 1, access)).not.toBe(zero);
+  });
+
+  test("a raster key ignores the page; other sources have none", () => {
+    const png = { path: "a.png", extension: "png" };
+    expect(samplesKey(png, "raster", 3, access)).toBe(samplesKey(png, "raster", 0, access));
+    expect(samplesKey(png, "pdf", 0, access)).toBeUndefined();
   });
 });

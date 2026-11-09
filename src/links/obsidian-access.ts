@@ -41,8 +41,9 @@ export class ObsidianVaultAccess implements VaultAccess {
     return target ? this.app.vault.getResourcePath(target) : "";
   }
 
-  mtime(file: FileRef): number | null {
-    return this.fileOf(file)?.stat.mtime ?? null;
+  stat(file: FileRef): { mtime: number; size: number } | null {
+    const stat = this.fileOf(file)?.stat;
+    return stat ? { mtime: stat.mtime, size: stat.size } : null;
   }
 
   private fileOf(ref: FileRef): TFile | null {

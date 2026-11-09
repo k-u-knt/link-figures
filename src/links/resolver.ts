@@ -1,6 +1,7 @@
 import { recipeOf } from "../adjust/render";
 import { PANEL_EXTENSIONS, PDF_SCREEN_DPI } from "../constants";
 import { joinLinktext, splitLinktext } from "../format/links-section";
+import { tiffPageIndex } from "./decoders/tiff-page";
 import type { FileNode } from "../model/types";
 import type { Decoders, FileRef, Resolved, SourceKind, VaultAccess } from "./types";
 
@@ -29,15 +30,16 @@ function splitWithoutAlias(linktext: string): { file: string; subpath: string } 
 }
 
 /**
- * The key a file's decoded samples are cached under: its path and modification time, and for a TIFF the page. A file
- * changed on disk has a new mtime, so its old samples are never served for it. Undefined (nothing cached) for a source
- * that has no samples, or a file whose mtime is unknown.
+ * The key a file's decoded samples are cached under: its path, modification time and size, and for a TIFF the page
+ * (truncated and clamped at 0, as `decodeTiffPage` does). A file changed on disk has a new mtime or size, so its old
+ * samples are never served for it. Undefined (nothing cached) for a source that has no samples, or a file whose stat
+ * is unknown.
  */
-export function samplesKey(file: FileRef, source: SourceKind, pageIndex: number, access: Pick<VaultAccess, "mtime">): string | undefined {
+export function samplesKey(file: FileRef, source: SourceKind, pageIndex: number, access: Pick<VaultAccess, "stat">): string | undefined {
   if (source !== "tiff" && source !== "raster") return undefined;
-  const mtime = access.mtime?.(file);
-  if (mtime === null || mtime === undefined) return undefined;
-  return JSON.stringify(source === "tiff" ? [file.path, mtime, pageIndex] : [file.path, mtime]);
+  const stat = access.stat?.(file);
+  if (!stat) return undefined;
+  return JSON.stringify(source === "tiff" ? [file.path, stat.mtime, stat.size, tiffPageIndex(pageIndex)] : [file.path, stat.mtime, stat.size]);
 }
 
 function missing(reason: "file" | "subpath" | "no-image" | "decode", deps: string[]): Resolved {

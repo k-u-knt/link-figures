@@ -35,6 +35,11 @@ function linkKey(node: FileNode): string {
   return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex, node.pageIndex, node.range, node.adjustments]);
 }
 
+/** Which file (and which image in it) a file node shows; not what it draws it with (page, range, adjustments). */
+function fileIdentity(node: FileNode): string {
+  return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex]);
+}
+
 /**
  * Keeps the nodes drawn on the pages in step with the document, and resolves file nodes' links into what they show.
  * The document is the view's `store`; resolutions are kept in the view's `resolvedCache` and `index`.
@@ -50,6 +55,14 @@ export class NodeHost {
   private readonly samplesPending = new Set<string>();
   /** Samples keys whose `samplesNow` decode failed: not tried again (a changed file has a new key). */
   private readonly samplesFailed = new Set<string>();
+  /** Samples keys `samplesNow` has decoded: a redraw that their landing caused does not decode them again. */
+  private readonly samplesDecoded = new Set<string>();
+  /** Whether the view is drawing its chrome because samples or a resolution landed (`notifySamplesLanded`). */
+  private inLandedRedraw = false;
+  /** The `fileIdentity` each node's resolution in `resolvedCache` was made for. */
+  private readonly resolvedIdentity = new Map<NodeId, string>();
+  /** Nodes `samplesNow` said null for because their resolution was for another file: told when theirs lands. */
+  private readonly awaitingResolution = new Set<NodeId>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
   private readonly warnedUnknown = new Set<string>();
   private readonly ctx: RenderContext;
@@ -183,7 +196,13 @@ export class NodeHost {
   samplesNow(id: NodeId): Plane | null {
     const node = this.view.store.doc.nodes.find((n) => n.id === id);
     const resolved = this.view.resolvedCache.get(id);
-    if (node?.type !== "file" || resolved?.kind !== "image") return null;
+    if (node?.type !== "file") return null;
+    // A resolution kept on screen while the node's new link resolves is for another file: its samples are not this node's.
+    if (resolved && this.resolvedIdentity.get(id) !== fileIdentity(node)) {
+      this.awaitingResolution.add(id);
+      return null;
+    }
+    if (resolved?.kind !== "image") return null;
     const { file, source } = resolved;
     if (source !== "tiff" && source !== "raster") return null;
     const { access, decoders } = this.view.plugin;
@@ -192,7 +211,10 @@ export class NodeHost {
     const plane = decoders.samples(key);
     if (plane) return plane;
     if (this.samplesPending.has(key) || this.samplesFailed.has(key)) return null;
+    // More panels than the cache holds would otherwise evict each other and redraw for ever.
+    if (this.inLandedRedraw && this.samplesDecoded.has(key)) return null;
     this.samplesPending.add(key);
+    this.samplesDecoded.add(key);
     void (async () => {
       let landed = false;
       try {
@@ -203,9 +225,20 @@ export class NodeHost {
         console.error(`Link Figures: could not decode the samples of ${file.path}`, error);
       }
       this.samplesPending.delete(key);
-      if (landed) this.view.samplesLanded();
+      if (landed) this.notifySamplesLanded();
     })();
     return null;
+  }
+
+  /** Tells the view that samples it may have asked for can now be had: it draws its chrome again. */
+  private notifySamplesLanded(): void {
+    if (this.inLandedRedraw) return;
+    this.inLandedRedraw = true;
+    try {
+      this.view.samplesLanded();
+    } finally {
+      this.inLandedRedraw = false;
+    }
   }
 
   /**
@@ -244,9 +277,11 @@ export class NodeHost {
     if (!current) return;
 
     this.view.resolvedCache.set(node.id, resolved);
+    this.resolvedIdentity.set(node.id, fileIdentity(node));
     this.view.index.track(node.id, resolved.deps);
     const entry = this.entries.get(node.id);
     if (entry) this.updateEntry(entry, current);
+    if (this.awaitingResolution.delete(node.id)) this.notifySamplesLanded();
   }
 
   /** Warns once per view about each enabled adjustment type that is not registered; the drawing skips it. */
@@ -315,6 +350,8 @@ export class NodeHost {
     this.resolvedKeys.delete(id);
     this.tokens.delete(id);
     this.view.resolvedCache.delete(id);
+    this.resolvedIdentity.delete(id);
+    this.awaitingResolution.delete(id);
     this.view.index.untrack(id);
   }
 

@@ -1,4 +1,4 @@
-import { Notice, TextFileView, TFile, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { Notice, TextFileView, TFile, type Menu, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
 import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
@@ -94,6 +94,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** A context menu is open (see `showContextMenu`): the stage's Escape leaves the selection alone. */
   contextMenuOpen = false;
+  /** The menu that set `contextMenuOpen` (see `showContextMenu`). */
+  contextMenu: Menu | null = null;
 
   /** This view's settings that are not part of the figure (a tool's mode): see `viewOption`. */
   private readonly options = new Map<string, unknown>();

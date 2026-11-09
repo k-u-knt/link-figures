@@ -11,6 +11,8 @@ export interface MenuHost {
   runCommandById(id: string): void;
   /** True while a context menu is open, and for the rest of the task in which it closed (see `showContextMenu`). */
   contextMenuOpen: boolean;
+  /** The menu that set `contextMenuOpen`: only it clears the flag, so a menu that hid does not clear a newer one's. */
+  contextMenu?: Menu | null;
 }
 
 /**
@@ -34,7 +36,14 @@ export function showContextMenu(host: MenuHost, where: MenuPlace, at: Pt): Menu 
   // An on-page Menu does not take the focus: the key that closes it (Escape) also reaches the stage. So the stage is told
   // a menu is open, and for the rest of the task in which it hid, which is the task of that keydown.
   host.contextMenuOpen = true;
-  menu.onHide(() => setTimeout(() => (host.contextMenuOpen = false), 0));
+  host.contextMenu = menu;
+  menu.onHide(() =>
+    setTimeout(() => {
+      if (host.contextMenu !== menu) return;
+      host.contextMenu = null;
+      host.contextMenuOpen = false;
+    }, 0),
+  );
   menu.showAtPosition(at);
   return menu;
 }

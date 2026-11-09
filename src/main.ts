@@ -11,8 +11,8 @@ import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
 import { panelCommands } from "./commands/panels";
 import { blockIdPrefix } from "./links/block-id";
-import { noteBlockId, type NoteHost } from "./links/note-block-id";
-import { EditorDragTracker, listenForEditorDrags } from "./links/editor-drag";
+import { noteBlockId, writableEditor, type NoteHost } from "./links/note-block-id";
+import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
@@ -87,17 +87,15 @@ export default class LinkFiguresPlugin extends Plugin {
     void localFonts.prime();
     // Where a drag starts in an editor, in the main window and in each popout (removed when the popout closes).
     this.register(listenForEditorDrags(document, this.editorDrag));
-    const popouts = new Map<Document, () => void>();
-    this.registerEvent(this.app.workspace.on("window-open", (win) => popouts.set(win.doc, listenForEditorDrags(win.doc, this.editorDrag))));
-    this.registerEvent(
-      this.app.workspace.on("window-close", (win) => {
-        popouts.get(win.doc)?.();
-        popouts.delete(win.doc);
-      }),
-    );
-    this.register(() => {
-      for (const off of popouts.values()) off();
-      popouts.clear();
+    const popouts = new PopoutDragListeners(document, (doc) => listenForEditorDrags(doc, this.editorDrag));
+    this.registerEvent(this.app.workspace.on("window-open", (win) => popouts.add(win.doc)));
+    this.registerEvent(this.app.workspace.on("window-close", (win) => popouts.remove(win.doc)));
+    this.register(() => popouts.clear());
+    // The popouts already open when the plugin loads (restored with the workspace) open no window-open of their own.
+    this.app.workspace.onLayoutReady(() => {
+      const leaves: WorkspaceLeaf[] = [];
+      this.app.workspace.iterateAllLeaves((leaf) => void leaves.push(leaf));
+      popouts.addLeaves(leaves);
     });
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") void localFonts.prime();
@@ -190,11 +188,12 @@ export default class LinkFiguresPlugin extends Plugin {
       const file = vault.getAbstractFileByPath(path);
       return file instanceof TFile ? file : null;
     };
+    const markdownViews = (path: string): MarkdownView[] =>
+      workspace.getLeavesOfType("markdown").flatMap((leaf) => (leaf.view instanceof MarkdownView && leaf.view.file?.path === path ? [leaf.view] : []));
+    // The view whose editor `editor` gives (one not in Reading view), so that the editor saved is the one written through.
     const markdownView = (path: string): MarkdownView | null => {
-      for (const leaf of workspace.getLeavesOfType("markdown")) {
-        if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) return leaf.view;
-      }
-      return null;
+      const views = markdownViews(path);
+      return views.find((view) => view.getMode() !== "preview") ?? views[0] ?? null;
     };
     return {
       resolve: (path) => (note(path) ?? note(`${path}.md`))?.path ?? null,
@@ -203,7 +202,8 @@ export default class LinkFiguresPlugin extends Plugin {
         return file ? metadataCache.getFileCache(file) : null;
       },
       read: (path) => vault.cachedRead(this.vaultFile(path)),
-      editor: (path) => markdownView(path)?.editor ?? null,
+      // Not through a Reading view's editor: the file is written with process instead (`writableEditor`).
+      editor: (path) => writableEditor(markdownViews(path)),
       saveAndReindex: (path, timeoutMs) =>
         new Promise<boolean>((resolve) => {
           // Listening before the save, so the event cannot come first.

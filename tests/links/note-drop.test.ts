@@ -37,6 +37,20 @@ function setup(options: { text?: string; cache?: ReturnType<typeof parseNote> | 
   return host;
 }
 
+/** Obsidian's cache for a list: each item's range takes in the items nested in it (by indent). */
+function obsidianNested(text: string): ReturnType<typeof parseNote> {
+  const cache = parseNote(text);
+  const lines = text.split("\n");
+  const indent = (n: number) => lines[n].length - lines[n].trimStart().length;
+  for (const item of cache.listItems ?? []) {
+    const start = item.position.start.line;
+    let end = start;
+    while (end + 1 < lines.length && lines[end + 1].trim() !== "" && indent(end + 1) > indent(start)) end++;
+    item.position = { start: item.position.start, end: { line: end, col: lines[end].length, offset: text.split("\n").slice(0, end).join("\n").length + (end > 0 ? 1 : 0) + lines[end].length } };
+  }
+  return cache;
+}
+
 describe("matchSelection", () => {
   const range = (fromLine: number, fromCh: number, toLine: number, toCh: number) => ({ anchor: { line: fromLine, ch: fromCh }, head: { line: toLine, ch: toCh } });
 
@@ -102,6 +116,31 @@ describe("parseNote", () => {
     ]);
     expect(parseNote(text).headings).toEqual([]);
     expect(parseNote(text).embeds).toEqual([]);
+  });
+
+  test("a list item's range takes in the items nested in it, as Obsidian's cache does", () => {
+    const text = ["- a", "  - b", "    - c", "  - d", "- e"].join("\n");
+    expect(parseNote(text).listItems!.map((i) => [i.position.start.line, i.position.end.line])).toEqual([
+      [0, 3],
+      [1, 2],
+      [2, 2],
+      [3, 3],
+      [4, 4],
+    ]);
+  });
+
+  test("a list item starts a new block after a paragraph line, without a blank line", () => {
+    for (const marker of ["- ", "* ", "1. ", "1) "]) {
+      const text = ["Para line.", `${marker}item`, `${marker}item`].join("\n");
+      const cache = parseNote(text);
+      expect(cache.sections!.map((s) => [s.type, s.position.start.line, s.position.end.line])).toEqual([
+        ["paragraph", 0, 0],
+        ["list", 1, 2],
+      ]);
+      expect(cache.listItems!.map((i) => i.position.start.line)).toEqual([1, 2]);
+    }
+    // As CommonMark has it: an ordered item from another number, or an empty item, goes on the paragraph.
+    for (const line of ["2020. was a year", "-"]) expect(parseNote(`Para line.\n${line}`).sections!.map((s) => s.type)).toEqual(["paragraph"]);
   });
 });
 
@@ -221,6 +260,33 @@ describe("linkForText", () => {
   test("a heading's characters that a link cannot hold are made spaces, as Obsidian does", async () => {
     const host = setup({ text: "# Fig. 2: a|b [c]\n\ntext" });
     expect((await linkForText(host, "heading", PATH, 2, 2))?.subpath).toBe("#Fig. 2 a b c");
+  });
+
+  test("a list item with its own nested items is one block: the parent item, by its own line", async () => {
+    const text = ["# Fig", "", "- parent", "  - child", "  - child two", "- sibling"].join("\n");
+    for (const cache of [parseNote(text), obsidianNested(text)]) {
+      const host = setup({ text, cache });
+      const link = await linkForText(host, "block-id", PATH, 2, 4);
+      expect(link).toEqual({ subpath: "#^fig-new1", notices: [] });
+      expect(host.blockId).toHaveBeenCalledWith(PATH, 2);
+    }
+    // In heading mode it is one block too: the heading above it, without the several-blocks message.
+    expect(await linkForText(setup({ text }), "heading", PATH, 2, 3)).toEqual({ subpath: "#Fig", notices: [] });
+  });
+
+  test("a list item with its nested items: the parent's id, when it has one", async () => {
+    const text = ["- parent ^p1", "  - child"].join("\n");
+    const host = setup({ text });
+    expect(await linkForText(host, "block-id", PATH, 0, 1)).toEqual({ subpath: "#^p1", notices: [] });
+    expect(host.blockId).not.toHaveBeenCalled();
+  });
+
+  test("a list item and its sibling are still several blocks", async () => {
+    const text = ["- parent", "  - child", "- sibling"].join("\n");
+    const host = setup({ text });
+    const link = await linkForText(host, "block-id", PATH, 0, 2);
+    expect(link?.notices).toEqual([expect.stringMatching(/spans several blocks/)]);
+    expect(host.blockId).toHaveBeenCalledWith(PATH, 0);
   });
 
   test("a selection of blank lines only links nothing", async () => {

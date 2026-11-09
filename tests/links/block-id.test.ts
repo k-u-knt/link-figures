@@ -73,6 +73,12 @@ describe("blockAt", () => {
     expect(blockAt(CACHE, 8)).toMatchObject({ type: "listItem", start: 8, end: 8 });
   });
 
+  test("a list item also gives its whole range, with the items nested in it (itemEnd)", () => {
+    expect(blockAt(CACHE, 6)).toMatchObject({ start: 6, end: 6, itemEnd: 7 });
+    expect(blockAt(CACHE, 7)).toMatchObject({ start: 7, end: 7, itemEnd: 7 });
+    expect(blockAt(CACHE, 2)).not.toHaveProperty("itemEnd");
+  });
+
   test("a blank line between blocks, a line past the end, and a cache without sections are in no block", () => {
     expect(blockAt(CACHE, 1)).toBeNull();
     expect(blockAt(CACHE, 99)).toBeNull();

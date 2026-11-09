@@ -56,6 +56,7 @@ const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const MATH = /^\s*\$\$/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+const INTERRUPTING_ITEM = /^\s*(?:[-*+]|0*1[.)])[ \t]+\S/;
 const EMBED = /!\[\[([^[\]\r\n]*)\]\]/g;
 
 const blank = (line: string) => line.trim() === "";
@@ -80,6 +81,9 @@ export function parseNote(text: string): NoteCache {
   const cache: Required<Pick<NoteCache, "sections" | "listItems" | "headings" | "embeds">> = { sections: [], listItems: [], headings: [], embeds: [] };
   const section = (type: string, start: number, end: number) => cache.sections.push({ type, position: pos(start, end) });
   const startsBlock = (line: string) => HEADING.test(line) || FENCE.test(line) || MATH.test(line);
+  // A list item also ends a paragraph without a blank line (CommonMark: a list may interrupt a paragraph, when the item
+  // is not empty and, ordered, starts at 1).
+  const endsParagraph = (line: string) => startsBlock(line) || INTERRUPTING_ITEM.test(line);
 
   let i = 0;
   if (lines[0]?.trim() === "---") {
@@ -118,8 +122,15 @@ export function parseNote(text: string): NoteCache {
     const first = line.trimStart();
     // A table runs while its lines are rows; anything else runs to a blank line or a heading, fence or math.
     const isTable = first.startsWith("|");
+    const isParagraph = !isTable && !first.startsWith(">") && !LIST_ITEM.test(line);
     let end = i;
-    while (end + 1 < lines.length && !blank(lines[end + 1]) && !startsBlock(lines[end + 1]) && (!isTable || lines[end + 1].includes("|"))) end++;
+    while (
+      end + 1 < lines.length &&
+      !blank(lines[end + 1]) &&
+      !(isParagraph ? endsParagraph : startsBlock)(lines[end + 1]) &&
+      (!isTable || lines[end + 1].includes("|"))
+    )
+      end++;
     const type = isTable
       ? "table"
       : first.startsWith(">")
@@ -132,7 +143,12 @@ export function parseNote(text: string): NoteCache {
     if (type === "list") {
       const items: number[] = [];
       for (let j = i; j <= end; j++) if (LIST_ITEM.test(lines[j])) items.push(j);
-      items.forEach((start, n) => cache.listItems.push({ position: pos(start, n + 1 < items.length ? items[n + 1] - 1 : end) }));
+      // As Obsidian's cache: an item's range runs to the next item at its indent or less, taking in the items nested in it.
+      const indent = (n: number) => lines[n].length - lines[n].trimStart().length;
+      items.forEach((start, n) => {
+        const next = items.slice(n + 1).find((j) => indent(j) <= indent(start));
+        cache.listItems.push({ position: pos(start, next !== undefined ? next - 1 : end) });
+      });
     }
     section(type, i, end);
     i = end + 1;
@@ -327,7 +343,7 @@ const oneNotice = (notices: string[]) => (notices.length > 0 ? [notices.join(" "
 
 /**
  * The link for text selected on lines `from`..`to` of the note at `path` and dropped (mode `"block-id"` or
- * `"heading"`): the block that holds it; over several blocks, the smallest heading section that holds them all, else
+ * `"heading"`): the block that holds it (a list item with the items nested in it is one block, the item); over several blocks, the smallest heading section that holds them all, else
  * the first block with a Notice. Null when the lines hold no block (blank lines only) or the note cannot be read.
  * Rejects when `blockId` does (the note changed under the drop).
  */
@@ -340,6 +356,9 @@ export async function linkForText(host: NoteDropHost, mode: DropFromNote, path: 
     if (block && !blocks.some((b) => b.start === block.start)) blocks.push(block);
   }
   if (blocks.length === 0) return null;
+  // A list item with items nested in it is one block (its id covers them): a selection over it and them is the item.
+  const [head] = blocks;
+  if (head.type === "listItem" && head.itemEnd !== undefined && blocks.every((b) => b.start >= head.start && b.end <= head.itemEnd!)) blocks.splice(1);
   const notices: string[] = [];
   if (blocks.length > 1) {
     const headings = headingsOf(state.cache);

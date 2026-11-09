@@ -1,4 +1,4 @@
-import { EditorDragTracker, listenForEditorDrags } from "../../src/links/editor-drag";
+import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "../../src/links/editor-drag";
 
 /** An element that is inside the elements `ancestors` lists (its own `closest` and each container's `contains`). */
 function element(inEditor: boolean) {
@@ -80,5 +80,45 @@ describe("listenForEditorDrags", () => {
     expect(tracker.source).toBeNull();
     off();
     expect(doc.listeners).toEqual([]);
+  });
+});
+
+describe("PopoutDragListeners", () => {
+  const main = { name: "main" } as unknown as Document;
+  const popA = { name: "a" } as unknown as Document;
+  const popB = { name: "b" } as unknown as Document;
+  const leafIn = (doc: Document | undefined) => ({ view: { containerEl: { ownerDocument: doc } } });
+
+  function setup() {
+    const listening: Document[] = [];
+    const removed: Document[] = [];
+    const popouts = new PopoutDragListeners(main, (doc) => {
+      listening.push(doc);
+      return () => void removed.push(doc);
+    });
+    return { popouts, listening, removed };
+  }
+
+  test("at load: listens once per popout document the open leaves are in, never on the main document", () => {
+    const { popouts, listening } = setup();
+    popouts.addLeaves([leafIn(main), leafIn(popA), leafIn(popA), leafIn(popB), leafIn(undefined), {}]);
+    expect(listening).toEqual([popA, popB]);
+    // A window-open for a popout already listened to adds nothing.
+    popouts.add(popA);
+    expect(listening).toEqual([popA, popB]);
+  });
+
+  test("a closed popout's listeners are removed; on unload, all of them", () => {
+    const { popouts, listening, removed } = setup();
+    popouts.add(popA);
+    popouts.add(popB);
+    popouts.remove(popA);
+    expect(removed).toEqual([popA]);
+    popouts.add(popA);
+    expect(listening).toEqual([popA, popB, popA]);
+    popouts.clear();
+    expect(removed).toEqual([popA, popB, popA]);
+    popouts.clear();
+    expect(removed).toHaveLength(3);
   });
 });

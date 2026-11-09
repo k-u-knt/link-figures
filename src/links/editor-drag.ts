@@ -2,7 +2,7 @@
  * Which Markdown view a drag started in, so that a drop of text is matched only against the selection of the editor
  * it was dragged out of (spec `2026-11-10-drop-from-note-design.md` §3). A selection left standing in some note must
  * not claim text dragged in from another app. `listenForEditorDrags` wires a tracker to a window's document (the main
- * one and each popout's).
+ * one and each popout's, through `PopoutDragListeners`).
  */
 
 /** The slice of a workspace leaf the tracker reads: its view's container element. */
@@ -58,4 +58,39 @@ export function listenForEditorDrags(doc: Document, tracker: EditorDragTracker):
     doc.removeEventListener("dragend", clear, { capture: true });
     doc.removeEventListener("drop", clear);
   };
+}
+
+/**
+ * The drag listeners on the popout windows' documents (`listenForEditorDrags`), once per document: added when a popout
+ * opens, and at load for the popouts already open (`addLeaves`); removed when it closes, and all of them on unload. The
+ * main window's document is left to the caller.
+ */
+export class PopoutDragListeners {
+  private readonly offs = new Map<Document, () => void>();
+
+  constructor(
+    private readonly main: Document,
+    private readonly listen: (doc: Document) => () => void,
+  ) {}
+
+  /** Listens on `doc`, unless it is the main document or is listened on already. */
+  add(doc: Document | null | undefined): void {
+    if (!doc || doc === this.main || this.offs.has(doc)) return;
+    this.offs.set(doc, this.listen(doc));
+  }
+
+  /** Listens on the document of each leaf's view (its container element's), for the popouts open before the plugin. */
+  addLeaves(leaves: readonly LeafLike[]): void {
+    for (const leaf of leaves) this.add((leaf.view as { containerEl?: { ownerDocument?: Document } } | undefined)?.containerEl?.ownerDocument);
+  }
+
+  remove(doc: Document): void {
+    this.offs.get(doc)?.();
+    this.offs.delete(doc);
+  }
+
+  clear(): void {
+    for (const off of this.offs.values()) off();
+    this.offs.clear();
+  }
 }

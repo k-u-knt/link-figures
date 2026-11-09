@@ -182,6 +182,24 @@ describe("showContextMenu", () => {
     expect(ran).toEqual(["lock"]);
   });
 
+  test("a menu that hid does not clear the flag while a second menu is open", () => {
+    vi.useFakeTimers();
+    try {
+      const { view } = setup();
+      view.selection.set(["x"]);
+      const first = showContextMenu(view as never, "item", { x: 0, y: 0 }) as unknown as FakeMenu;
+      first.hide();
+      const second = showContextMenu(view as never, "item", { x: 0, y: 0 }) as unknown as FakeMenu;
+      vi.runAllTimers();
+      expect(view.contextMenuOpen).toBe(true);
+      second.hide();
+      vi.runAllTimers();
+      expect(view.contextMenuOpen).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a menu with nothing in it is not shown", () => {
     const { view } = setup();
     const empty = { ...view, plugin: { registries: createRegistries() } };

@@ -1,4 +1,4 @@
-import { noteBlockId, REINDEX_TIMEOUT_MS, type NoteHost } from "../../src/links/note-block-id";
+import { noteBlockId, REINDEX_TIMEOUT_MS, writableEditor, type NoteHost } from "../../src/links/note-block-id";
 
 const TEXT = ["# Results", "", "The cells divide.", "", "| a |", "| - |", "", "Has one ^old-1"].join("\n");
 
@@ -107,6 +107,15 @@ describe("noteBlockId", () => {
     expect(s.process).not.toHaveBeenCalled();
   });
 
+  test("a note open only in Reading view is written with process, not through that view's editor", async () => {
+    const s = setup({ open: true });
+    s.host.editor = () => writableEditor([{ getMode: () => "preview", editor: s.editor! }]);
+    const { id } = await noteBlockId(s.host, "Notes/a.md", 2, "fig", s.random);
+    expect(s.editor!.transaction).not.toHaveBeenCalled();
+    expect(s.process).toHaveBeenCalledTimes(1);
+    expect(s.files.get("Notes/a.md")!.split("\n")[2]).toBe(`The cells divide. ^${id}`);
+  });
+
   test("an id in the editor's text is returned and nothing is written", async () => {
     const edited = TEXT.replace("The cells divide.", "The cells divide. ^ed-1");
     const s = setup({ open: true, editorText: edited, reindexTo: cacheOf(edited) });
@@ -182,5 +191,16 @@ describe("noteBlockId", () => {
   test("refuses a note that is not there, and one that is not indexed yet", async () => {
     await expect(noteBlockId(setup().host, "Notes/none.md", 2, "fig")).rejects.toThrow(/no note/);
     await expect(noteBlockId(setup({ indexed: false }).host, "Notes/a.md", 2, "fig")).rejects.toThrow(/not indexed yet/);
+  });
+});
+
+describe("writableEditor", () => {
+  test("the editor of the first view of the note that is not in Reading view; null when every one is", () => {
+    const a = { getValue: () => "a", transaction: () => undefined };
+    const b = { getValue: () => "b", transaction: () => undefined };
+    expect(writableEditor([])).toBeNull();
+    expect(writableEditor([{ getMode: () => "preview", editor: a }])).toBeNull();
+    expect(writableEditor([{ getMode: () => "source", editor: a }])).toBe(a);
+    expect(writableEditor([{ getMode: () => "preview", editor: a }, { getMode: () => "source", editor: b }])).toBe(b);
   });
 });

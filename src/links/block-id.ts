@@ -55,6 +55,8 @@ export interface Block {
   start: number;
   end: number;
   id?: string;
+  /** For a list item: the last line of its whole range, with the items nested in it (an id on the item covers them). */
+  itemEnd?: number;
   /** The cache's own places for the block (its section's, and its list item's), to check against the text (`blockMatchesText`). */
   locs?: Loc[];
 }
@@ -90,7 +92,7 @@ export function blockAt(cache: BlocksCache, line: number): Block | null {
       const next = Math.min(...items.map((i) => i.position.start.line).filter((s) => s > start));
       const end = Math.min(item.position.end.line, next - 1);
       const locs = [section.position.start, section.position.end, item.position.start, item.position.end];
-      return { type: "listItem", start, end, locs, ...(item.id ? { id: item.id } : {}) };
+      return { type: "listItem", start, end, itemEnd: item.position.end.line, locs, ...(item.id ? { id: item.id } : {}) };
     }
   }
   const locs = [section.position.start, section.position.end];

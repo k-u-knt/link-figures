@@ -26,6 +26,21 @@ export interface NoteEditorLike {
   transaction(tx: { changes: { from: { line: number; ch: number }; text: string }[] }): void;
 }
 
+/** The slice of a Markdown view `writableEditor` reads: its mode (`"source"` or `"preview"`) and its editor. */
+export interface MarkdownViewLike<E> {
+  getMode(): string;
+  editor: E;
+}
+
+/**
+ * The editor to write a note through, of the views that have it open: the first that is not in Reading view
+ * (`"preview"`). A Reading view's editor is not what the user sees, so an id written through it may not be saved; null
+ * then, and the file is written with `process`.
+ */
+export function writableEditor<E>(views: readonly MarkdownViewLike<E>[]): E | null {
+  return views.find((view) => view.getMode() !== "preview")?.editor ?? null;
+}
+
 /** What `noteBlockId` needs of Obsidian, so that it can be tested without it. */
 export interface NoteHost {
   /** The vault path of the note `path` names (with or without `.md`), or null when there is none. */
@@ -34,7 +49,7 @@ export interface NoteHost {
   cache(path: string): NoteCache | null;
   /** The note's text as the vault last read or wrote it (`vault.cachedRead`): what the cache was made from, once it has caught up. */
   read(path: string): Promise<string>;
-  /** The editor of a Markdown view that has the note open, or null when none has. */
+  /** The editor of a Markdown view that has the note open, not in Reading view (`writableEditor`), or null when none has. */
   editor(path: string): NoteEditorLike | null;
   /**
    * Saves the open view of the note and waits for the metadata cache to index it again (its "changed" event for the

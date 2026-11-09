@@ -3,6 +3,7 @@ import { createApi, type LinkFiguresApi } from "./api";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
+import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE, normalisePageLimit } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
@@ -66,6 +67,7 @@ export default class LinkFiguresPlugin extends Plugin {
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
     for (const command of drawingCommands()) this.registries.commands.register(command);
+    for (const command of groupCommands()) this.registries.commands.register(command);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     this.registerEvent(

@@ -8,7 +8,7 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const ID_LENGTH = 4;
 
 /** `p` for nodes, `pg` for pages: `<prefix>-<4 chars of [a-z0-9]>`, not already in `existing`. */
-export function newId(prefix: "p" | "pg", existing: Iterable<string>): string {
+export function newId(prefix: "p" | "pg" | "g", existing: Iterable<string>): string {
   const taken = new Set(existing);
   let id: string;
   do {

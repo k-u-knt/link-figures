@@ -131,12 +131,7 @@ export const rasteriseSvg: Rasterise = (svg, widthPx, heightPx, background) =>
 export const renderPngOnCanvas: RenderPng = (svg, widthPx, heightPx, background) =>
   drawPage(svg, widthPx, heightPx, background, async (canvas, context) => {
     checkDrawn(context, widthPx, heightPx);
-    const blob =
-      "convertToBlob" in canvas
-        ? await canvas.convertToBlob({ type: "image/png" })
-        : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-    if (!blob) throw new Error(`a ${widthPx} × ${heightPx} px image is too large to encode as a PNG`);
-    return new Uint8Array(await blob.arrayBuffer());
+    return encodePng(canvas, widthPx, heightPx);
   });
 
 /** The PNG of a canvas, encoded straight from it. */

@@ -157,6 +157,46 @@ describe("pptx exporter", () => {
     expect(outer.kind === "group" && outer.children.map((c) => `${c.kind}:${c.node.id}`)).toEqual(["group:inner", "item:c"]);
   });
 
+  it("writes a group of zero width or height with an extent of at least 1 EMU, children in slide coordinates", async () => {
+    const doc = createDocument("nature-double");
+    const page = doc.pages[0];
+    doc.nodes.push(
+      { id: "g", type: "group", page: page.id, x: 10, y: 10, width: 0, height: 0, z: 5, rotation: 0, opacity: 1, locked: false } as Node,
+      shape(page, { id: "a", z: 1, parent: "g", x: 10, y: 10, width: 0, height: 0 }),
+    );
+    const { files } = await run(input(doc));
+    const xfrm = one(one(slideOf(files[0].bytes), "p:grpSp"), "p:grpSpPr");
+    expect(one(xfrm, "a:ext").getAttribute("cx")).toBe("1");
+    expect(one(xfrm, "a:ext").getAttribute("cy")).toBe("1");
+    expect(one(xfrm, "a:chExt").getAttribute("cx")).toBe("1");
+    expect(one(xfrm, "a:chExt").getAttribute("cy")).toBe("1");
+    expect(one(xfrm, "a:chOff").getAttribute("x")).toBe(one(xfrm, "a:off").getAttribute("x"));
+  });
+
+  it("writes an item whose toPptx hook throws as a picture, with a warning", async () => {
+    const doc = createDocument("nature-double");
+    const page = doc.pages[0];
+    doc.nodes.push({ id: "w", type: "widget", page: page.id, x: 20, y: 30, width: 40, height: 20, z: 0, rotation: 0, opacity: 1, locked: false } as unknown as Node);
+    const registries = pptxRegistries();
+    registries.nodeTypes.register({
+      type: "widget",
+      name: "Widget",
+      icon: "",
+      mount: () => ({ update() {}, unmount() {} }),
+      bounds: (n: Node) => ({ x: n.x, y: n.y, width: n.width, height: n.height }),
+      inspector: () => [],
+      toSvg: (n: Node) => `<rect x="${n.x}" y="${n.y}" width="${n.width}" height="${n.height}" fill="#00f"/>`,
+      toPptx: () => {
+        throw new Error("boom");
+      },
+    } as unknown as NodeType);
+    const fake = fakeBackend();
+    const { files, warnings } = await run(input(doc, { registries }), fake.backend);
+    expect(fake.calls).toHaveLength(1);
+    expect(all(slideOf(files[0].bytes), "p:pic")).toHaveLength(1);
+    expect(warnings.some((w) => w.includes("boom"))).toBe(true);
+  });
+
   it("writes an item whose type has no hook as a clear picture of its drawing, with a warning", async () => {
     const doc = createDocument("nature-double");
     const page = doc.pages[0];

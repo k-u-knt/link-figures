@@ -2,9 +2,10 @@ import { MM_TO_PX } from "../../constants";
 import type { Rect } from "../../model/geometry";
 import { ancestorsOf, isGroup } from "../../model/groups";
 import { nodeLabel } from "../../model/labels";
+import { isTransparentPaper } from "../../model/paper";
 import type { Document, Node, NodeId, Page } from "../../model/types";
 import type { Exporter, ExportInput } from "../../registry/exporter";
-import type { PptxContext } from "../../registry/node-type";
+import type { PptxContext, PptxPart } from "../../registry/node-type";
 import type { AssetMap } from "../asset-types";
 import { EMU_PER_MM, EMU_PER_PX, hexColor, nvPrXml, xfrmXml } from "../pptx/drawingml";
 import { pictureXml } from "../pptx/media";
@@ -203,12 +204,12 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
             warn(`${nodeLabel(input.doc, node)}: no node type "${node.type}" is registered, skipped`);
             return "";
           }
-          let part;
+          let part: PptxPart | "raster" | null | undefined;
           try {
             part = type.toPptx ? await type.toPptx(node, ctx) : "raster";
           } catch (error) {
-            warn(`${nodeLabel(input.doc, node)}: could not be written (${message(error)}), skipped`);
-            return "";
+            warn(`${nodeLabel(input.doc, node)}: could not be written as shapes (${message(error)})`);
+            part = "raster";
           }
           if (part === "raster") return (await asPicture(node)) ?? "";
           return part?.xml ?? "";
@@ -225,7 +226,8 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
             if (inside === "") continue;
             const g = t.node;
             const off = { x: ctx.px(g.x), y: ctx.px(g.y) };
-            const ext = { cx: Math.max(0, ctx.px(g.width)), cy: Math.max(0, ctx.px(g.height)) };
+            // At least 1 EMU: a zero extent (and chExt) makes the group, and its members' scaling, undefined.
+            const ext = { cx: Math.max(1, ctx.px(g.width)), cy: Math.max(1, ctx.px(g.height)) };
             // Child offset and extent equal to the group's own: its members' coordinates are the slide's.
             const xfrm = xfrmXml({ x: off.x, y: off.y, cx: ext.cx, cy: ext.cy }, 0).replace(
               "</a:xfrm>",
@@ -243,9 +245,8 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
           warn(`${nodeLabel(input.doc, group)}: its members are not next to each other in the stacking order, written as separate items`);
         }
         const xml = await write(tree);
-        const paper = page.paper.trim().toLowerCase();
         let background: string | undefined;
-        if (!["", "none", "transparent"].includes(paper)) {
+        if (!isTransparentPaper(page.paper)) {
           const rgb = hexColor(page.paper);
           if (rgb) background = `#${rgb}`;
           else warn(`"${page.name}": the paper colour ${JSON.stringify(page.paper)} is not one PowerPoint can take, left white`);

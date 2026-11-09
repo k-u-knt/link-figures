@@ -1,5 +1,5 @@
 import { newId, groupNodeDefaults } from "../model/defaults";
-import { expandUnits, isGroup, isLocked, parentOf, unitsOf } from "../model/groups";
+import { childrenOf, expandUnits, isGroup, isLocked, parentOf, unitsOf } from "../model/groups";
 import type { Document, Node, NodeId } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
@@ -27,6 +27,13 @@ function commonParent(doc: Document, ids: readonly NodeId[]): NodeId | null {
 function createUnits(doc: Document, ids: readonly NodeId[]): { within: NodeId | null; units: NodeId[] } {
   const within = commonParent(doc, ids);
   return { within, units: unitsOf(doc, ids, within) };
+}
+
+/** Whether `units` are all the members of `within`: grouping them would only dissolve that group again. */
+function isWholeGroup(doc: Document, within: NodeId | null, units: readonly NodeId[]): boolean {
+  if (within === null) return false;
+  const members = childrenOf(doc, within);
+  return members.length === units.length && members.every((m) => units.includes(m));
 }
 
 const node = (doc: Document, id: NodeId): Node => doc.nodes.find((n) => n.id === id) as Node;
@@ -65,6 +72,7 @@ function create(ctx: CommandContext, args?: CreateArgs): { id: NodeId } {
   const ids = targetIds(ctx, "group.create", args);
   const { within, units } = createUnits(doc, ids);
   if (units.length < 2) throw new CommandError("group.create: it needs two nodes or more (or groups) to group");
+  if (isWholeGroup(doc, within, units)) throw new CommandError(`group.create: those nodes are already a group ("${within}")`);
   const first = node(doc, units[0]);
   if (units.some((u) => node(doc, u).page !== first.page)) throw new CommandError("group.create: the nodes are on different pages");
   const locked = units.find((u) => isLocked(doc, u));
@@ -178,7 +186,10 @@ export function groupCommands(): Command[] {
       icon: "group",
       group: "arrange",
       params: { ids: { type: "array" }, id: { type: "string" } },
-      applies: (ctx) => createUnits(ctx.store.doc, ctx.selection).units.length >= 2,
+      applies: (ctx) => {
+        const { within, units } = createUnits(ctx.store.doc, ctx.selection);
+        return units.length >= 2 && !isWholeGroup(ctx.store.doc, within, units);
+      },
       run: create,
     },
     {

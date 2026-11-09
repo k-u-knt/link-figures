@@ -94,7 +94,28 @@ describe("group.create", () => {
   });
 });
 
+describe("group.create within a group", () => {
+  test("refuses units that are all the members of their group", async () => {
+    const { call, command, ctx } = setup([shape("a", 0, 0, 0, { parent: "g" }), shape("b", 20, 0, 1, { parent: "g" }), grp("g")]);
+    await expect(call("group.create", { ids: ["a", "b"] })).rejects.toThrow(/^group\.create: .*already a group/);
+    expect(command("group.create").applies(ctx(["a", "b"]))).toBe(false);
+  });
+  test("a strict subset of a group's members still groups (nested)", async () => {
+    const { store, call } = setup([shape("a", 0, 0, 0, { parent: "g" }), shape("b", 20, 0, 1, { parent: "g" }), shape("c", 40, 0, 2, { parent: "g" }), grp("g")]);
+    const { id } = (await call("group.create", { ids: ["a", "b"] })) as { id: string };
+    expect(at(store.doc, id)?.parent).toBe("g");
+    expect(at(store.doc, "g")).toBeDefined();
+  });
+});
+
 describe("group.ungroup", () => {
+  test("from the selection it selects the freed children once committed", async () => {
+    const { ctx, command } = setup([shape("a", 0, 0, 0, { parent: "g" }), shape("b", 20, 0, 1, { parent: "g" }), grp("g")]);
+    const sel: string[][] = [];
+    const view = { setSelection: (ids: string[]) => sel.push(ids) } as never;
+    await command("group.ungroup").run(ctx(["g"], view), {});
+    expect(sel).toEqual([["a", "b"]]);
+  });
   test("children take the group's parent; one undo restores it", async () => {
     const { store, call, ctx, command } = setup([shape("a", 0, 0, 0, { parent: "g" }), shape("b", 20, 0, 1, { parent: "g" }), grp("g"), shape("c", 50, 0, 2)]);
     expect(command("group.ungroup").applies(ctx(["g"]))).toBe(true);
@@ -122,8 +143,7 @@ describe("group.add and group.remove", () => {
     expect(at(store.doc, "c")?.parent).toBe("g");
   });
   test("add refuses a cycle, another page, a locked target", async () => {
-    const { call } = setup([...nodes(), grp("h", { parent: undefined }), shape("d", 90, 0, 5, { parent: "h" }), shape("e", 95, 0, 6, { parent: "h" })]);
-    await call("group.add", { group: "g", ids: ["c"] });
+    const { call } = setup(nodes());
     await expect(call("group.add", { group: "g", ids: ["g"] })).rejects.toThrow(/^group\.add:/);
     await expect(call("group.add", { group: "g", ids: ["p2"] })).rejects.toThrow(/^group\.add:/);
     const locked = setup([...nodes().filter((n) => n.id !== "g"), grp("g", { locked: true })]);

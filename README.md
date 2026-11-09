@@ -255,6 +255,20 @@ await api.run("Notes/My figure.lnkfig.md", "panel.create", { file: "Notes/Method
 // => { id: "p-aaaa" }
 ```
 
+## PowerPoint
+
+Format "PowerPoint (editable)" in the Export dialog (and `api.export(path, { format: "pptx" })`) writes `.pptx` files with one slide per page, the slide as large as the page and its background the page's paper colour.
+
+**Editable in PowerPoint and Keynote:** rectangles, rounded rectangles and ellipses (solid, gradient and pattern fills, borders and dashes, rotation, opacity); text labels, as text boxes with the label's font, size, style, alignment and line spacing; connectors, as lines with arrowheads (they are not attached to the shapes they join, so moving a shape leaves the line where it was); PNG and JPEG image panels, as pictures with a crop you can drag; frames, as the picture's outline; groups, as groups.
+
+**Written as a picture** (at the export dpi, with a note in the export report): TIFF, SVG and PDF panels, content cards, images with a display adjustment, and anything a plugin draws that has no PowerPoint form. A bar cap on a connector is drawn without its cap, with a note, and a pattern fill's scale and angle are matched to the nearest PowerPoint pattern.
+
+**Crops** are trimmed: a crop reaching beyond the image keeps only the part inside the image, so the crop PowerPoint shows is never past the picture's edge.
+
+**Groups** stay groups when their members are next to each other in the stacking order; a group with another item between its members is written as separate items, with a note.
+
+**One file per page size.** A figure whose pages differ in size gives one file per size: the first is `<figure>.pptx`, the others `<figure> (<width>×<height> mm).pptx`. A page larger than 1422.4 mm or smaller than 25.4 mm on a side is scaled to PowerPoint's limits, with a note.
+
 ## Settings
 
 | Setting | Default | Meaning |

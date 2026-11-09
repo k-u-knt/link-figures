@@ -10,6 +10,7 @@ import { cropCommands } from "./commands/crop";
 import { displayCommands } from "./commands/display";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
+import { FigureWrites } from "./commands/figure-writes";
 import { panelCommands } from "./commands/panels";
 import { blockIdPrefix } from "./links/block-id";
 import { BlockIdQueue, writableEditor, type NoteHost } from "./links/note-block-id";
@@ -56,11 +57,13 @@ export default class LinkFiguresPlugin extends Plugin {
     () => this.noteHost(),
     () => blockIdPrefix(this.settings.blockIdPrefix),
   );
-  /** Figure files by vault path, as the API and an export of a closed figure read them. */
-  private readonly figureFiles: FigureFiles = {
+  /** The plugin's writes of figure files in flight: a figure view that starts to load waits for those of its file. */
+  readonly figureWrites = new FigureWrites();
+  /** Figure files by vault path, as the API and an export of a closed figure read them; every write is in `figureWrites`. */
+  private readonly figureFiles: FigureFiles = this.figureWrites.wrap({
     read: (path) => this.app.vault.read(this.vaultFile(path)),
     process: async (path, edit) => void (await this.app.vault.process(this.vaultFile(path), edit)),
-  };
+  });
   /** The API for other plugins and scripts (the Obsidian CLI's `eval`): see `LinkFiguresApi`. */
   api: LinkFiguresApi = createApi({
     app: this.app,

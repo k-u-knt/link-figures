@@ -188,12 +188,23 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     return !this.closed && this.file !== null && this.loadedFile !== this.file;
   }
 
-  /** As Obsidian's (it reads the file and calls `setViewData`), and the loading ends whatever happens, a failed read too. */
+  /** An `onLoadFile` is running: the loading ends when it does, not at a `setViewData` that comes in during it. */
+  private loadingFile = 0;
+
+  /**
+   * As Obsidian's (it reads the file and calls `setViewData`), once the plugin's own writes of the file that are in flight
+   * have landed (an API call that went to the file just before this view opened): read before one lands, the view would
+   * hold the text it replaces, and its next edit would be saved over it. The loading ends whatever happens, a failed read
+   * too, and only then, so no API call runs in the view before the text it keeps is loaded.
+   */
   async onLoadFile(file: TFile): Promise<void> {
+    this.loadingFile++;
     try {
+      await this.plugin.figureWrites.settled(file.path);
       await super.onLoadFile(file);
     } finally {
-      this.settleLoad();
+      this.loadingFile--;
+      if (this.loadingFile === 0) this.settleLoad();
     }
   }
 
@@ -235,11 +246,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   setViewData(data: string, clear: boolean): void {
-    // Whatever happens in it, a throw included, the loading ends: an API call waiting for it goes on.
+    // Whatever happens in it, a throw included, the loading ends (unless an `onLoadFile` that ends it is still running):
+    // an API call waiting for it goes on.
     try {
       this.takeUpViewData(data, clear);
     } finally {
-      this.settleLoad();
+      if (this.loadingFile === 0) this.settleLoad();
     }
   }
 

@@ -902,8 +902,11 @@ export class PointerController {
     ev.preventDefault();
     // The Menu key or Shift+F10 has opened the menu already, and this is the event the same key sends after.
     // It is one-shot: a real right-click after the echo is not taken for one.
+    // Obsidian's Menu hides on any window-level contextmenu, so the echo must not reach the window either.
     if (Date.now() - this.keyMenuAt < KEY_MENU_ECHO_MS) {
       this.keyMenuAt = -Infinity;
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
       return;
     }
     if (this.cropSession.active) return;
@@ -958,6 +961,8 @@ export class PointerController {
   // Keyboard
 
   private onKeyDown(ev: KeyboardEvent): void {
+    // An open context menu owns Escape: it closes itself, and the stage keeps its selection, group and tool.
+    if (ev.key === "Escape" && this.view.contextMenuOpen) return;
     // Escape takes the snap guides of a drag away (the drag goes on, and draws them again where it snaps next).
     if (ev.key === "Escape" && this.guideEls.length > 0) {
       ev.preventDefault();

@@ -27,9 +27,13 @@ class FakeMenuItem {
 class FakeMenu {
   entries: (FakeMenuItem | "|")[] = [];
   shownAt: { x: number; y: number } | null = null;
+  private hideHandler: (() => void) | null = null;
   constructor() { menus.push(this); }
   addItem(fn: (item: FakeMenuItem) => void) { const item = new FakeMenuItem(); fn(item); this.entries.push(item); return this; }
   addSeparator() { this.entries.push("|"); return this; }
+  onHide(fn: () => void) { this.hideHandler = fn; return this; }
+  /** What the Menu does on Escape or an outside click. */
+  hide() { this.hideHandler?.(); }
   showAtPosition(at: { x: number; y: number }) { this.shownAt = at; return this; }
   /** The titles, `|` for a separator, `(title)` for a disabled entry. */
   get titles(): string[] { return this.entries.map((e) => (e === "|" ? "|" : e.disabled ? `(${e.title})` : e.title)); }
@@ -109,6 +113,7 @@ function setup() {
     selection: new SelectionState(),
     viewport: new Viewport(),
     readOnly: false,
+    contextMenuOpen: false,
     enteredGroup: null as NodeId | null,
     plugin: { registries },
     viewOption: () => undefined,
@@ -144,7 +149,9 @@ function setup() {
   view.store = createFigureStore(doc, registries, () => controller.commitTime());
   controller.attach(stage as never);
   let prevented = 0;
-  const ev = (extra: object = {}) => ({ pointerId: 1, isPrimary: true, button: 0, shiftKey: false, target: {}, preventDefault: () => void prevented++, ...extra });
+  let stopped = 0;
+  let stoppedImmediate = 0;
+  const ev = (extra: object = {}) => ({ pointerId: 1, isPrimary: true, button: 0, shiftKey: false, target: {}, preventDefault: () => void prevented++, stopPropagation: () => void stopped++, stopImmediatePropagation: () => void stoppedImmediate++, ...extra });
   const pointer = (type: string, x: number, y: number, extra: object = {}) => stage.fire(type, ev({ clientX: x, clientY: y, ...extra }));
   /** A right-click as the browser sends it: the press and release of the right button, then the contextmenu event. */
   const rightClick = (x: number, y: number, extra: object = {}) => {
@@ -154,7 +161,7 @@ function setup() {
   };
   const key = (name: string, extra: object = {}) =>
     stage.fire("keydown", { key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false, target: {}, preventDefault: () => void prevented++, ...extra });
-  return { view, controller, opened, ran, disarmed: () => disarmed, pointer, rightClick, key, prevented: () => prevented, nodeOf: (id: string) => view.store.doc.nodes.find((n) => n.id === id)! };
+  return { view, controller, opened, ran, disarmed: () => disarmed, pointer, rightClick, key, prevented: () => prevented, stopped: () => stopped, stoppedImmediate: () => stoppedImmediate, nodeOf: (id: string) => view.store.doc.nodes.find((n) => n.id === id)! };
 }
 
 const ON_A: [number, number] = [50, 30];
@@ -347,6 +354,37 @@ describe("the keyboard", () => {
     key("ContextMenu");
     pointer("contextmenu", 0, 0, { button: 0 });
     expect(opened).toHaveLength(1);
+  });
+
+  test("the echo is swallowed without reaching the window, where the Menu hides on any contextmenu", () => {
+    const { view, key, pointer, stopped, stoppedImmediate } = setup();
+    view.selection.set(["x"]);
+    key("ContextMenu");
+    pointer("contextmenu", 0, 0, { button: 0 });
+    expect(stopped()).toBe(1);
+    expect(stoppedImmediate()).toBe(1);
+  });
+
+  test("Escape with a menu open leaves the selection alone, also for the keydown that closed it", () => {
+    vi.useFakeTimers();
+    try {
+      const { view, key } = setup();
+      view.selection.set(["x"]);
+      key("ContextMenu");
+      expect(view.contextMenuOpen).toBe(true);
+      key("Escape");
+      expect(view.selection.ids).toEqual(["x"]);
+      // The Menu hides on that same keydown, before the stage sees it.
+      menus[menus.length - 1].hide();
+      key("Escape");
+      expect(view.selection.ids).toEqual(["x"]);
+      vi.runAllTimers();
+      expect(view.contextMenuOpen).toBe(false);
+      key("Escape");
+      expect(view.selection.ids).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("the echo is swallowed once: a real right-click right after it opens its own menu", () => {

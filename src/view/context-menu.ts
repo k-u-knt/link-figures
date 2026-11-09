@@ -9,6 +9,8 @@ export interface MenuHost {
   plugin: { registries: Pick<Registries, "commands"> };
   commandContext(): CommandContext;
   runCommandById(id: string): void;
+  /** True while a context menu is open, and for the rest of the task in which it closed (see `showContextMenu`). */
+  contextMenuOpen: boolean;
 }
 
 /**
@@ -29,6 +31,10 @@ export function showContextMenu(host: MenuHost, where: MenuPlace, at: Pt): Menu 
       });
     }
   });
+  // An on-page Menu does not take the focus: the key that closes it (Escape) also reaches the stage. So the stage is told
+  // a menu is open, and for the rest of the task in which it hid, which is the task of that keydown.
+  host.contextMenuOpen = true;
+  menu.onHide(() => setTimeout(() => (host.contextMenuOpen = false), 0));
   menu.showAtPosition(at);
   return menu;
 }

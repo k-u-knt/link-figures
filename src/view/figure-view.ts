@@ -92,6 +92,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   private pinnedPage: PageId | null = null;
 
+  /** A context menu is open (see `showContextMenu`): the stage's Escape leaves the selection alone. */
+  contextMenuOpen = false;
+
   /** This view's settings that are not part of the figure (a tool's mode): see `viewOption`. */
   private readonly options = new Map<string, unknown>();
 

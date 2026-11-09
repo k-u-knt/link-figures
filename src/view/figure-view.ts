@@ -133,6 +133,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** What `whenLoaded` waits on: resolved when `setViewData` has run, or the view closes. */
   private loadWaiters: (() => void)[] = [];
 
+  /** The view has edits that no save has taken yet (an edit, undo or redo since the last load or save). */
+  private unsaved = false;
   /** The file text as `setViewData` received it. */
   private rawText = "";
   /** What the loaded document serialises to, to tell whether it has changed since the file was read. */
@@ -268,6 +270,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
         return;
       }
     }
+    // What is saved from here is no longer unsaved (an edit made while the write is under way sets it again).
+    this.unsaved = false;
     return super.save(clear);
   }
 
@@ -306,6 +310,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
     const reload = !clear && this.loaded && !this.readOnly;
     if (reload && this.adoptReload(data, loaded)) return;
+    // The file's version replaces the open figure: edits not yet saved are gone, which the user is told of unless the
+    // plugin itself wrote it (an API call, see `FigureWrites`).
+    if (reload && this.unsaved && this.file && !this.plugin.figureWrites.wroteLast(this.file.path, data)) {
+      const message = `Link Figures: "${this.file.path}" was changed outside this view; your unsaved edits were replaced by the file's version.`;
+      console.warn(message);
+      new Notice(message);
+    }
+    this.unsaved = false;
     this.clearError();
     this.readOnly = false;
     // Said once per type as the figure opens, not again each time the file is read back.
@@ -394,6 +406,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.readOnly = false;
     this.rawText = "";
     this.serializedAtLoad = "";
+    this.unsaved = false;
     // A file is about to be loaded (or none): whichever comes next starts from a fitted page, an edit reload of the same file does not.
     this.needsFit = true;
     this.clearError();
@@ -886,7 +899,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       // A `replace` names the nodes that differ, like an edit does; the node host resolves again only those whose link changed.
       this.nodeHost.applyChange(store.doc, ev.changedNodeIds);
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
-      if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") this.requestSave();
+      if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") {
+        this.unsaved = true;
+        this.requestSave();
+      }
       this.renderChrome();
     });
     this.renderChrome();

@@ -222,13 +222,14 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     return view.onLoadFile(file as never);
   };
 
+  const files = figureWrites.wrap({
+    read: () => vault.read(),
+    process: async (_p, edit) => void (await vault.process(file, edit)),
+  });
   const api = createApi({
     app: app as never,
     registries,
-    files: figureWrites.wrap({
-      read: () => vault.read(),
-      process: async (_p, edit) => void (await vault.process(file, edit)),
-    }),
+    files,
     normalizePath: (p) => p,
     openFigure: () => (view && view.hasDocument() ? view : null),
     loadingFigure: () => (view && view.isLoading() ? view.whenLoaded() : null),
@@ -247,7 +248,7 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     await opening;
     return view!;
   };
-  return { api, registries, disk, writes, vault, openFile, opened, externalWrite, shape, get view() { return view!; } };
+  return { api, files, registries, disk, writes, vault, openFile, opened, externalWrite, shape, get view() { return view!; } };
 }
 
 beforeEach(() => {
@@ -367,5 +368,50 @@ describe("the plugin never writes a figure it cannot read back", () => {
     expect(await settled).toMatch(/could not be read back/);
     expect(t.writes).toEqual([]);
     expect(t.disk.text).toBe(before);
+  });
+});
+
+describe("unsaved edits replaced by the file's version", () => {
+  const DROPPED = `Link Figures: "${PATH}" was changed outside this view; your unsaved edits were replaced by the file's version.`;
+  /** The figure's text with one more shape, `id`, copied from the view's first node. */
+  const withShape = (t: ReturnType<typeof setup>, id: string) => {
+    const { doc, parsed } = loadDocument(t.disk.text);
+    doc.nodes.push({ ...t.view.store.doc.nodes[0], id });
+    return serializeFigureFile(doc, parsed);
+  };
+
+  test("a change from outside the plugin that replaces unsaved edits says so, in a Notice and the console", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const t = setup();
+    await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("mine", 10));
+    t.externalWrite(withShape(t, "theirs"));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["theirs"]);
+    expect(notices).toContain(DROPPED);
+    expect(warn).toHaveBeenCalledWith(DROPPED);
+    warn.mockRestore();
+  });
+
+  test("a change from outside with no unsaved edits in the view says nothing", async () => {
+    const t = setup();
+    await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("mine", 10));
+    await vi.advanceTimersByTimeAsync(5000); // saved
+    t.externalWrite(withShape(t, "theirs"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(notices).not.toContain(DROPPED);
+  });
+
+  test("a write by the plugin itself (FigureWrites) that replaces unsaved edits says nothing", async () => {
+    const t = setup();
+    await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("mine", 10));
+    const next = withShape(t, "plugin");
+    const write = t.files.process(PATH, () => next);
+    await vi.advanceTimersByTimeAsync(5000);
+    await write;
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["plugin"]);
+    expect(notices).not.toContain(DROPPED);
   });
 });

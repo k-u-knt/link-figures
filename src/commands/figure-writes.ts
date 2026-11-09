@@ -6,6 +6,13 @@ import type { FigureFiles } from "./headless";
  */
 export class FigureWrites {
   private readonly pending = new Map<string, Set<Promise<unknown>>>();
+  /** The text the plugin last wrote to each file, so a view can tell its own plugin's write from someone else's. */
+  private readonly written = new Map<string, string>();
+
+  /** Whether `text` is what the plugin last wrote to `path`. */
+  wroteLast(path: string, text: string): boolean {
+    return this.written.get(path) === text;
+  }
 
   /** Records `write` as in flight on `path` until it settles, and gives it back. */
   track<T>(path: string, write: Promise<T>): Promise<T> {
@@ -31,7 +38,15 @@ export class FigureWrites {
   wrap(files: FigureFiles): FigureFiles {
     return {
       read: (path) => files.read(path),
-      process: (path, edit) => this.track(path, files.process(path, edit)),
+      process: (path, edit) =>
+        this.track(
+          path,
+          files.process(path, (text) => {
+            const out = edit(text);
+            this.written.set(path, out);
+            return out;
+          }),
+        ),
     };
   }
 }

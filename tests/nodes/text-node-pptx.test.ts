@@ -90,6 +90,17 @@ describe("text toPptx", () => {
     expect(all(await sp(text({ text: "" })), "a:p")).toHaveLength(1);
   });
 
+  it("clamps a size and spacing past PowerPoint's limits, with a warning", async () => {
+    const { ctx, warnings } = pptxContext({}, { ...doc, nodes: [] });
+    const big = parseFragment(((await textNodeType.toPptx!(text({ font: { ...DEFAULT_FONT, size: 5000, lineHeight: 2 } }), ctx)) as PptxPart).xml);
+    expect(all(big, "a:rPr")[0].getAttribute("sz")).toBe("400000");
+    expect(all(big, "a:spcPts").map((s) => s.getAttribute("val"))).toContain("158400");
+    expect(warnings.some((w) => w.includes("font size"))).toBe(true);
+    expect(warnings.some((w) => w.includes("line spacing"))).toBe(true);
+    const small = parseFragment(((await textNodeType.toPptx!(text({ font: { ...DEFAULT_FONT, size: 0.5 } }), ctx)) as PptxPart).xml);
+    expect(all(small, "a:rPr")[0].getAttribute("sz")).toBe("100");
+  });
+
   it("escapes the text and splits on any line break", async () => {
     const el = await sp(text({ text: "x < y & z\r\n\"q\"\r'w'" }));
     expect(all(el, "a:t").map((t) => t.textContent)).toEqual(["x < y & z", '"q"', "'w'"]);

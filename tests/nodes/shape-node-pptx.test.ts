@@ -92,7 +92,17 @@ describe("shape toPptx", () => {
     expect(warnings.some((w) => w.startsWith('Shape "rect"') && w.includes("plaid"))).toBe(true);
   });
 
-  it("has a kind without a preset (or none registered) rasterised", async () => {
+  it("has a kind without PowerPoint geometry (or none registered) rasterised", async () => {
     expect((await write(shape({ kind: "star" }))).part).toBe("raster");
+    const made = pptxContext({}, doc);
+    made.ctx.registries.shapes.register({ id: "blob", name: "Blob", icon: "", defaults: () => ({}), fields: () => [], outline: () => [], anchors: () => [] });
+    expect(await shapeNodeType.toPptx!(shape({ kind: "blob" }), made.ctx)).toBe("raster");
+  });
+
+  it("writes a kind's own geometry", async () => {
+    const made = pptxContext({}, doc);
+    made.ctx.registries.shapes.register({ id: "tri", name: "Triangle", icon: "", defaults: () => ({}), fields: () => [], outline: () => [], anchors: () => [], toPptx: () => '<a:prstGeom prst="triangle"><a:avLst/></a:prstGeom>' });
+    const part = (await shapeNodeType.toPptx!(shape({ kind: "tri" }), made.ctx)) as PptxPart;
+    expect(one(parseFragment(part.xml), "a:prstGeom").getAttribute("prst")).toBe("triangle");
   });
 });

@@ -26,6 +26,15 @@ export const rectShape: ShapeKind = {
     return rectPath(box, radius);
   },
   anchors: (box) => boxAnchors(box),
+  /** `rect`, or `roundRect` whose `adj` is the radius as a fraction of the short side (1/100 000), at most a half. */
+  toPptx(box, params) {
+    const raw = params.cornerRadius;
+    const radius = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    const short = Math.min(box.width, box.height);
+    if (radius === 0 || short <= 0) return '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>';
+    const adj = Math.round(Math.min(0.5, radius / short) * 100000);
+    return `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${adj}"/></a:avLst></a:prstGeom>`;
+  },
 };
 
 /** The ellipse inscribed in the box; its edge midpoints are the box's. */
@@ -37,6 +46,7 @@ export const ellipseShape: ShapeKind = {
   fields: () => [],
   outline: (box) => ellipsePath(box),
   anchors: (box) => boxAnchors(box),
+  toPptx: () => '<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>',
 };
 
 /** The shape kinds the plugin registers at load. */

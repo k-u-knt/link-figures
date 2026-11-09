@@ -1,5 +1,5 @@
 import { PT_TO_PX } from "../constants";
-import { colorXml, hexColor, labelled, nvPrXml, xfrmXml } from "../export/pptx/drawingml";
+import { clampWhole, colorXml, hexColor, labelled, MAX_FONT_SZ, MAX_SPC_PTS, MIN_FONT_SZ, nvPrXml, xfrmXml, xmlSafe } from "../export/pptx/drawingml";
 import { escapeXml } from "../export/pptx/package";
 import { nodeLabel } from "../model/labels";
 import type { TextNode } from "../model/types";
@@ -14,8 +14,6 @@ export const BASELINE_DROP = 0.2;
 
 const ALIGN = { left: "l", center: "ctr", right: "r" } as const;
 
-/** Drops the characters XML 1.0 cannot hold (control characters other than tab). */
-const xmlSafe = (s: string): string => s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/g, "");
 
 /**
  * A label as a text box (`p:sp txBox`) at its box, turned with the node: one paragraph per line of its text, each one
@@ -29,7 +27,7 @@ export function textNodePptx(node: TextNode, base: PptxContext): PptxPart {
   const ctx = labelled(base, nodeLabel(base.doc, node));
   const { font } = node;
   const sizePt = font.size * ctx.scale;
-  const sz = Math.round(sizePt * 100);
+  const sz = clampWhole(sizePt * 100, MIN_FONT_SZ, MAX_FONT_SZ, "the font size (1/100 pt)", ctx);
   const rgb = hexColor(font.color);
   if (rgb === null) ctx.warn(`the colour ${JSON.stringify(font.color)} is not one PowerPoint can take, written as black`);
   const typeface = escapeXml(font.family);
@@ -39,7 +37,7 @@ export function textNodePptx(node: TextNode, base: PptxContext): PptxPart {
   const firstLine = 1 + BASELINE_DROP;
   const inset = Math.max(0, firstLine - font.lineHeight);
   const pPr = (lineHeight: number): string =>
-    `<a:pPr algn="${ALIGN[font.align] ?? "l"}"><a:lnSpc><a:spcPts val="${Math.round(lineHeight * sizePt * 100)}"/></a:lnSpc>` +
+    `<a:pPr algn="${ALIGN[font.align] ?? "l"}"><a:lnSpc><a:spcPts val="${clampWhole(lineHeight * sizePt * 100, 0, MAX_SPC_PTS, "the line spacing (1/100 pt)", ctx)}"/></a:lnSpc>` +
     '<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft><a:buNone/></a:pPr>';
   const end = `<a:endParaRPr ${rPrAttrs}>${rPrBody}</a:endParaRPr>`;
 

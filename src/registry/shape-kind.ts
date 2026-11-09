@@ -26,6 +26,11 @@ export interface ShapeKind {
   /** The closed outline the shape fills and strokes. */
   outline(box: Rect, params: Record<string, unknown>): PathData;
   anchors(box: Rect, params: Record<string, unknown>): Anchor[];
+  /**
+   * The kind's geometry for PowerPoint, for a shape whose box is `box` (page px, unrotated): an `a:prstGeom` or
+   * `a:custGeom` element, or null when it has none. A kind without it (or returning null) is exported as a picture.
+   */
+  toPptx?(box: Rect, params: Record<string, unknown>): string | null;
 }
 
 export class ShapeKindRegistry {

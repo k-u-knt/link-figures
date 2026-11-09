@@ -10,6 +10,7 @@ import {
   nvPrXml,
   PATTERN_WARNING,
   xfrmXml,
+  xmlSafe,
 } from "../../../src/export/pptx/drawingml";
 import type { Paint, Stroke } from "../../../src/model/types";
 import { pptxContext } from "./context";
@@ -145,6 +146,16 @@ describe("fillXml", () => {
     expect(unknown.warnings[0]).toContain("plaid");
   });
 
+  it("writes a paint through its type's toPptx, and one without it as nothing, with a warning", () => {
+    const { ctx, warnings } = pptxContext();
+    ctx.registries.paints.register({ id: "mine", name: "Mine", defaults: () => ({ type: "mine" }), fields: () => [], toSvg: () => ({ ref: "none", defs: [] }), toPptx: (_p, alpha) => `<a:noFill/><!--${alpha}-->` });
+    ctx.registries.paints.register({ id: "svgOnly", name: "SVG only", defaults: () => ({ type: "svgOnly" }), fields: () => [], toSvg: () => ({ ref: "none", defs: [] }) });
+    expect(fillXml({ type: "mine" }, 0.5, box, ctx)).toBe("<a:noFill/><!--0.5-->");
+    expect(fillXml({ type: "svgOnly" }, 1, box, ctx)).toBe("<a:noFill/>");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("svgOnly");
+  });
+
   it("paints a colour it cannot read as black, with a warning", () => {
     const { doc, warnings } = fill({ type: "solid", color: "tomato" });
     expect(one(doc, "a:srgbClr").getAttribute("val")).toBe("000000");
@@ -173,6 +184,20 @@ describe("lnXml", () => {
     expect(one(ln(stroke({ dash: "dashDot" })), "a:prstDash").getAttribute("val")).toBe("dashDot");
   });
 
+  it("writes a width of 0 as no line, and clamps a width past PowerPoint's limit with a warning", () => {
+    expect(one(one(ln(stroke({ width: 0 })), "a:ln"), "a:noFill")).toBeTruthy();
+    expect(one(ln(stroke({ width: 0 })), "a:ln").getAttribute("w")).toBeNull();
+    const { ctx, warnings } = pptxContext();
+    const wide = one(parseFragment(lnXml(stroke({ width: 2000 }), 1, box, ctx)), "a:ln");
+    expect(wide.getAttribute("w")).toBe("20116800");
+    expect(warnings[0]).toContain("20116800");
+  });
+
+  it("writes a miter of limit 4 (SVG's) when the stroke sets no join, and for a miter join", () => {
+    expect(one(ln(stroke()), "a:miter").getAttribute("lim")).toBe("400000");
+    expect(one(ln(stroke({ join: "miter" })), "a:miter").getAttribute("lim")).toBe("400000");
+  });
+
   it("writes cap and join, the children in schema order", () => {
     const line = one(ln(stroke({ cap: "round", join: "bevel", paint: { type: "linear", angle: 0, stops } })), "a:ln");
     expect(line.getAttribute("cap")).toBe("rnd");
@@ -189,6 +214,13 @@ describe("xfrmXml and nvPrXml", () => {
     expect([one(x, "a:off").getAttribute("x"), one(x, "a:off").getAttribute("y")]).toEqual(["1", "2"]);
     expect([one(x, "a:ext").getAttribute("cx"), one(x, "a:ext").getAttribute("cy")]).toEqual(["3", "4"]);
     expect(xfrmXml({ x: 0, y: 0, cx: 1, cy: 1 }, 0)).not.toContain("rot");
+  });
+
+  it("drops characters XML cannot hold from the name and description, and keeps line breaks", () => {
+    expect(xmlSafe("a\u0001b\ufffec\uffff\td")).toBe("abc\td");
+    const pr = one(parseFragment(nvPrXml(5, "x\u0007y", "line 1\nline 2")), "p:cNvPr");
+    expect(pr.getAttribute("name")).toBe("xy");
+    expect(pr.getAttribute("descr")).toBe("line 1\nline 2");
   });
 
   it("escapes the name and description", () => {

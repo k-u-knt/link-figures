@@ -13,11 +13,14 @@ const DOS_TIME = 0;
 const DOS_DATE = (0 << 9) | (1 << 5) | 1;
 const UTF8_FLAG = 0x0800;
 const VERSION = 20;
+/** What a ZIP without ZIP64 holds: 16-bit entry counts, 32-bit sizes and offsets. */
+export const MAX_ENTRIES = 0xffff;
+export const MAX_BYTES = 0xffffffff;
 
 /**
  * A ZIP archive (no ZIP64, so under 4 GB and 65 535 entries) of `entries`, in their order: each deflated (pako's raw
  * deflate) unless it is to be stored or deflate would not make it smaller. A name that is not ASCII is flagged as UTF-8.
- * Throws on a repeated name.
+ * Throws on a repeated name, more than MAX_ENTRIES entries, or an entry or archive over MAX_BYTES.
  */
 export function zip(entries: readonly ZipInput[]): Uint8Array {
   const encoder = new TextEncoder();
@@ -26,7 +29,9 @@ export function zip(entries: readonly ZipInput[]): Uint8Array {
   const centrals: Uint8Array[] = [];
   let offset = 0;
 
+  if (entries.length > MAX_ENTRIES) throw new Error(`zip: ${entries.length} entries, more than a ZIP without ZIP64 holds (${MAX_ENTRIES})`);
   for (const entry of entries) {
+    if (entry.data.byteLength > MAX_BYTES) throw new Error(`zip: "${entry.name}" is larger than a ZIP without ZIP64 holds (4 GB)`);
     if (seen.has(entry.name)) throw new Error(`zip: the name "${entry.name}" is used twice`);
     seen.add(entry.name);
     const name = encoder.encode(entry.name);
@@ -77,9 +82,11 @@ export function zip(entries: readonly ZipInput[]): Uint8Array {
     locals.push(local, body);
     centrals.push(central);
     offset += local.byteLength + body.byteLength;
+    if (offset > MAX_BYTES) throw new Error("zip: the archive would be larger than a ZIP without ZIP64 holds (4 GB)");
   }
 
   const cdSize = centrals.reduce((n, c) => n + c.byteLength, 0);
+  if (offset + cdSize > MAX_BYTES) throw new Error("zip: the archive would be larger than a ZIP without ZIP64 holds (4 GB)");
   const end = new Uint8Array(22);
   const ev = new DataView(end.buffer);
   ev.setUint32(0, 0x06054b50, true);

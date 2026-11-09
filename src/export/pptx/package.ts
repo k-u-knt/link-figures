@@ -41,19 +41,30 @@ const NS_PML = `xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"`;
 const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const PML_CT = "application/vnd.openxmlformats-officedocument.presentationml";
 
-/** `s` escaped for XML text and attribute values. */
+/** `s` escaped for XML text and attribute values (tabs and line breaks as character references, so an attribute keeps them). */
 export function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+    .replace(/[\t\n\r]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 interface Rel {
   id: string;
+  /** The relationship type's full URI. */
   type: string;
   target: string;
 }
 
+/** An officeDocument relationship type's URI (`slide`, `image`…). */
+const rt = (name: string): string => `${REL}/${name}`;
+const CORE_PROPERTIES_REL = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
+
 function relsXml(rels: Rel[]): string {
-  const items = rels.map((r) => `<Relationship Id="${r.id}" Type="${REL}/${r.type}" Target="${escapeXml(r.target)}"/>`).join("");
+  const items = rels.map((r) => `<Relationship Id="${r.id}" Type="${escapeXml(r.type)}" Target="${escapeXml(r.target)}"/>`).join("");
   return `${DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
 }
 
@@ -180,7 +191,7 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
   input.slides.forEach((slide, i) => {
     const n = i + 1;
     overrides.push([`/ppt/slides/slide${n}.xml`, `${PML_CT}.slide+xml`]);
-    const rels: Rel[] = [{ id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" }];
+    const rels: Rel[] = [{ id: "rId1", type: rt("slideLayout"), target: "../slideLayouts/slideLayout1.xml" }];
     slide.media.forEach((m, j) => {
       const dot = m.name.lastIndexOf(".");
       const stem = dot > 0 ? m.name.slice(0, dot) : m.name;
@@ -191,7 +202,7 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
       if (!defaults.has(ext)) defaults.set(ext, m.contentType);
       else if (defaults.get(ext) !== m.contentType) overrides.push([`/ppt/media/${name}`, m.contentType]);
       media.push({ name: `ppt/media/${name}`, data: m.bytes, store: true });
-      rels.push({ id: slideMediaRId(j), type: "image", target: `../media/${name}` });
+      rels.push({ id: slideMediaRId(j), type: rt("image"), target: `../media/${name}` });
     });
     slideParts.push({ name: `ppt/slides/slide${n}.xml`, data: encoder.encode(slideXml(slide)) });
     slideParts.push({ name: `ppt/slides/_rels/slide${n}.xml.rels`, data: encoder.encode(relsXml(rels)) });
@@ -204,10 +215,10 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
   xml(
     "_rels/.rels",
     relsXml([
-      { id: "rId1", type: "officeDocument", target: "ppt/presentation.xml" },
-      { id: "rId2", type: "metadata/core-properties", target: "docProps/core.xml" },
-      { id: "rId3", type: "extended-properties", target: "docProps/app.xml" },
-    ]).replace(`${REL}/metadata/core-properties`, "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"),
+      { id: "rId1", type: rt("officeDocument"), target: "ppt/presentation.xml" },
+      { id: "rId2", type: CORE_PROPERTIES_REL, target: "docProps/core.xml" },
+      { id: "rId3", type: rt("extended-properties"), target: "docProps/app.xml" },
+    ]),
   );
 
   const created = w3cdtf(input.created ?? new Date());
@@ -226,18 +237,18 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
   );
 
   // Presentation rels: the master, the slides, then the theme and the properties parts.
-  const presRels: Rel[] = [{ id: "rId1", type: "slideMaster", target: "slideMasters/slideMaster1.xml" }];
+  const presRels: Rel[] = [{ id: "rId1", type: rt("slideMaster"), target: "slideMasters/slideMaster1.xml" }];
   const slideIds = input.slides.map((_, i) => {
     const id = `rId${i + 2}`;
-    presRels.push({ id, type: "slide", target: `slides/slide${i + 1}.xml` });
+    presRels.push({ id, type: rt("slide"), target: `slides/slide${i + 1}.xml` });
     return `<p:sldId r:id="${id}" id="${FIRST_SLIDE_ID + i}"/>`;
   });
   const next = input.slides.length + 2;
   presRels.push(
-    { id: `rId${next}`, type: "theme", target: "theme/theme1.xml" },
-    { id: `rId${next + 1}`, type: "presProps", target: "presProps.xml" },
-    { id: `rId${next + 2}`, type: "viewProps", target: "viewProps.xml" },
-    { id: `rId${next + 3}`, type: "tableStyles", target: "tableStyles.xml" },
+    { id: `rId${next}`, type: rt("theme"), target: "theme/theme1.xml" },
+    { id: `rId${next + 1}`, type: rt("presProps"), target: "presProps.xml" },
+    { id: `rId${next + 2}`, type: rt("viewProps"), target: "viewProps.xml" },
+    { id: `rId${next + 3}`, type: rt("tableStyles"), target: "tableStyles.xml" },
   );
   xml(
     "ppt/presentation.xml",
@@ -254,12 +265,12 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
   xml(
     "ppt/slideMasters/_rels/slideMaster1.xml.rels",
     relsXml([
-      { id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" },
-      { id: "rId2", type: "theme", target: "../theme/theme1.xml" },
+      { id: "rId1", type: rt("slideLayout"), target: "../slideLayouts/slideLayout1.xml" },
+      { id: "rId2", type: rt("theme"), target: "../theme/theme1.xml" },
     ]),
   );
   xml("ppt/slideLayouts/slideLayout1.xml", LAYOUT);
-  xml("ppt/slideLayouts/_rels/slideLayout1.xml.rels", relsXml([{ id: "rId1", type: "slideMaster", target: "../slideMasters/slideMaster1.xml" }]));
+  xml("ppt/slideLayouts/_rels/slideLayout1.xml.rels", relsXml([{ id: "rId1", type: rt("slideMaster"), target: "../slideMasters/slideMaster1.xml" }]));
   xml("ppt/theme/theme1.xml", THEME);
 
   return zip([...parts, ...slideParts, ...media]);

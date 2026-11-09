@@ -1,3 +1,4 @@
+import { angle60k, colorXml, gsLstXml, PATTERN_WARNING, radialStops, readColor, readStops, type GradStop } from "../export/pptx/drawingml";
 import { escapeAttr } from "../export/svg-builder";
 import type { Rect } from "../model/geometry";
 import { toSvgPath, type PathData } from "../model/path";
@@ -52,6 +53,7 @@ export const nonePaint: PaintType = {
   defaults: () => ({ type: "none" }),
   fields: () => [],
   toSvg: () => ({ ref: "none", defs: [] }),
+  toPptx: () => "<a:noFill/>",
 };
 
 /** One colour; `opacity` (0-1) is left to the attribute that uses it (`fill-opacity`, `stroke-opacity`). */
@@ -68,7 +70,15 @@ export const solidPaint: PaintType = {
     const opacity = clamp01(num(paint.opacity, 1));
     return opacity < 1 ? { ref, defs: [], opacity } : { ref, defs: [] };
   },
+  toPptx: (paint, alpha, _box, ctx) => `<a:solidFill>${colorXml(readColor(paint.color, ctx), clamp01(num(paint.opacity, 1)) * alpha)}</a:solidFill>`,
 };
+
+/** A gradient of fewer than two stops for PowerPoint: one colour, or nothing; null for a real gradient. */
+function degenerateGradient(stops: GradStop[], alpha: number): string | null {
+  if (stops.length === 0) return "<a:noFill/>";
+  if (stops.length === 1) return `<a:solidFill>${colorXml(stops[0].rgb, stops[0].alpha * alpha)}</a:solidFill>`;
+  return null;
+}
 
 /**
  * A gradient along `angle` degrees (0 runs left to right, 90 top to bottom), through the box's centre. Its line is as
@@ -87,6 +97,12 @@ export const linearPaint: PaintType = {
     const id = ctx.uid("grad");
     const line = `x1="${cx - d.x * half}" y1="${cy - d.y * half}" x2="${cx + d.x * half}" y2="${cy + d.y * half}"`;
     return { ref: `url(#${id})`, defs: [`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" ${line}>${stopElements(paint.stops)}</linearGradient>`] };
+  },
+  /** Our angle and `a:lin ang` share a convention (clockwise from +x, y down) and an extent (the box's along the angle). */
+  toPptx(paint, alpha, _box, ctx) {
+    const stops = readStops(paint.stops, ctx);
+    const lin = `<a:lin ang="${angle60k(num(paint.angle, 0))}" scaled="0"/>`;
+    return degenerateGradient(stops, alpha) ?? `<a:gradFill rotWithShape="1">${gsLstXml(stops, alpha)}${lin}</a:gradFill>`;
   },
 };
 
@@ -108,10 +124,37 @@ export const radialPaint: PaintType = {
     const id = ctx.uid("grad");
     return { ref: `url(#${id})`, defs: [`<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${cx}" cy="${cy}" r="${r}">${stopElements(paint.stops)}</radialGradient>`] };
   },
+  /**
+   * A circular path gradient centred by `fillToRect`. DrawingML's 0-1 runs to the box's farthest corner, so the stops
+   * are placed at their distance (see `radialStops`).
+   */
+  toPptx(paint, alpha, box, ctx) {
+    const stops = readStops(paint.stops, ctx);
+    const degenerate = degenerateGradient(stops, alpha);
+    if (degenerate !== null) return degenerate;
+    const cx = num(paint.cx, 0.5);
+    const cy = num(paint.cy, 0.5);
+    const radius = Math.max(0, num(paint.r, 0.5)) * Math.max(box.width, box.height);
+    const far = Math.hypot(Math.max(cx, 1 - cx) * box.width, Math.max(cy, 1 - cy) * box.height);
+    const placed = radialStops(stops, radius, far);
+    if (placed.length === 1) return `<a:solidFill>${colorXml(placed[0].rgb, placed[0].alpha * alpha)}</a:solidFill>`;
+    const pct = (v: number): number => Math.round(v * 100000);
+    const rect = `<a:fillToRect l="${pct(cx)}" t="${pct(cy)}" r="${pct(1 - cx)}" b="${pct(1 - cy)}"/>`;
+    return `<a:gradFill rotWithShape="1">${gsLstXml(placed, alpha)}<a:path path="circle">${rect}</a:path></a:gradFill>`;
+  },
 };
 
 /** A pattern tile's side at scale 1, in px; its lines are an eighth of the side wide. */
 const PATTERN_TILE_PX = 8;
+
+/** PowerPoint's preset patterns nearest our pattern tiles. */
+const PATTERN_PRESETS: Record<string, string> = {
+  hatch: "dkUpDiag",
+  hatchReverse: "dkDnDiag",
+  crosshatch: "diagCross",
+  grid: "lgGrid",
+  dots: "pct20",
+};
 
 /** "/" lines across a tile of side `t`, with the neighbouring tiles' ends at two corners so the lines join up. */
 const forward = (t: number): PathData => [
@@ -195,6 +238,19 @@ export const patternPaint: PaintType = {
     const id = ctx.uid("pattern");
     const def = `<pattern id="${id}" patternUnits="userSpaceOnUse" x="${box.x}" y="${box.y}" width="${t}" height="${t}"${turn}>${bg}${tile(t, color(paint.fg, "#000000"))}</pattern>`;
     return { ref: `url(#${id})`, defs: [def] };
+  },
+  /** PowerPoint's nearest preset pattern, in `fg` over `bg` (clear for none); scale and angle are not kept (one export-wide warning). */
+  toPptx(paint, alpha, _box, ctx) {
+    const name = typeof paint.pattern === "string" ? paint.pattern : "";
+    let prst = Object.hasOwn(PATTERN_PRESETS, name) ? PATTERN_PRESETS[name] : undefined;
+    if (!prst) {
+      ctx.warn(`no pattern "${name}" is known, written as hatch`);
+      prst = PATTERN_PRESETS.hatch;
+    }
+    ctx.warn(PATTERN_WARNING);
+    const fg = colorXml(readColor(paint.fg, ctx), alpha);
+    const bg = typeof paint.bg === "string" ? colorXml(readColor(paint.bg, ctx), alpha) : colorXml("FFFFFF", 0);
+    return `<a:pattFill prst="${prst}"><a:fgClr>${fg}</a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
   },
 };
 

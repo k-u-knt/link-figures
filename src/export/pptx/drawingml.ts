@@ -1,4 +1,5 @@
 import type { Paint, Stroke } from "../../model/types";
+import type { PaintPptxContext } from "../../registry/paint";
 import type { PptxContext } from "../../registry/node-type";
 import { escapeXml } from "./package";
 
@@ -38,20 +39,21 @@ export function colorXml(rgb: string, alpha: number): string {
 }
 
 /** `value` as a colour for DrawingML: black, with a warning, when it is not a `#rrggbb` (or `#rgb`) colour. */
-function readColor(value: unknown, ctx: DrawingContext): string {
+export function readColor(value: unknown, ctx: Pick<PaintPptxContext, "warn">): string {
   const rgb = typeof value === "string" ? hexColor(value) : null;
   if (rgb === null) ctx.warn(`the colour ${JSON.stringify(value)} is not one PowerPoint can take, written as black`);
   return rgb ?? "000000";
 }
 
-interface GradStop {
+/** One stop of a gradient as DrawingML writes it: `pos` 0-1, `rgb` as `RRGGBB`, `alpha` 0-1. */
+export interface GradStop {
   pos: number;
   rgb: string;
   alpha: number;
 }
 
-/** A gradient's stops, read and put in offset order within 0-1, as the SVG export draws them. */
-function readStops(raw: unknown, ctx: DrawingContext): GradStop[] {
+/** A gradient paint's `stops`, read and put in offset order within 0-1, as the SVG export draws them. */
+export function readStops(raw: unknown, ctx: Pick<PaintPptxContext, "warn">): GradStop[] {
   const stops = (Array.isArray(raw) ? raw : []).filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null);
   return stops
     .map((s) => ({ pos: clamp01(num(s.offset, 0)), rgb: readColor(s.color, ctx), alpha: clamp01(num(s.opacity, 1)) }))
@@ -78,15 +80,16 @@ function colorAt(stops: GradStop[], pos: number): GradStop {
   return { ...stops[stops.length - 1], pos };
 }
 
-const gsLst = (stops: GradStop[], alpha: number): string =>
+/** An `a:gsLst` of `stops`, each colour's alpha multiplied by `alpha`. */
+export const gsLstXml = (stops: GradStop[], alpha: number): string =>
   `<a:gsLst>${stops.map((s) => `<a:gs pos="${Math.round(clamp01(s.pos) * 100000)}">${colorXml(s.rgb, s.alpha * alpha)}</a:gs>`).join("")}</a:gsLst>`;
 
 /**
- * Stops placed for DrawingML's circular path gradient, whose 0-1 runs from the centre to the box's farthest corner:
- * ours runs from the centre over `radius` px. Past the last stop the last colour goes on, as SVG pads; a gradient that
- * reaches past the farthest corner is cut there, with the colour it has there.
+ * Stops placed for DrawingML's circular path gradient, whose 0-1 runs from the centre to the box's farthest corner
+ * (`far` px): ours runs from the centre over `radius` px. Past the last stop the last colour goes on, as SVG pads; a
+ * gradient that reaches past the farthest corner is cut there, with the colour it has there.
  */
-function radialStops(stops: GradStop[], radius: number, far: number): GradStop[] {
+export function radialStops(stops: GradStop[], radius: number, far: number): GradStop[] {
   if (far <= 0) return [stops[stops.length - 1]];
   const k = radius / far;
   const placed = stops.map((s) => ({ ...s, pos: s.pos * k }));
@@ -97,81 +100,55 @@ function radialStops(stops: GradStop[], radius: number, far: number): GradStop[]
   return inside;
 }
 
-/** PowerPoint's preset patterns nearest our pattern tiles. */
-const PATTERN_PRESETS: Record<string, string> = {
-  hatch: "dkUpDiag",
-  hatchReverse: "dkDnDiag",
-  crosshatch: "diagCross",
-  grid: "lgGrid",
-  dots: "pct20",
-};
-
 /**
  * `paint` as a DrawingML fill (`a:noFill`, `a:solidFill`, `a:gradFill`, `a:pattFill`) of a shape whose box is `box`
- * (px), every colour's alpha multiplied by `alpha` (the node's opacity). A gradient of one stop is that colour; of none,
- * no fill. A paint type the writer does not know paints nothing, with a warning; so does one that is not registered.
+ * (px), every colour's alpha multiplied by `alpha` (the node's opacity), written by its paint type's `toPptx`. A paint
+ * type that is not registered, or has no `toPptx`, paints nothing, with a warning.
  */
 export function fillXml(paint: Paint, alpha: number, box: { width: number; height: number }, ctx: DrawingContext): string {
-  if (!ctx.registries.paints.get(paint.type)) {
+  const type = ctx.registries.paints.get(paint.type);
+  if (!type) {
     ctx.warn(`no paint type "${paint.type}" is registered, written without paint`);
     return "<a:noFill/>";
   }
-  switch (paint.type) {
-    case "none":
-      return "<a:noFill/>";
-    case "solid":
-      return `<a:solidFill>${colorXml(readColor(paint.color, ctx), clamp01(num(paint.opacity, 1)) * alpha)}</a:solidFill>`;
-    case "linear":
-    case "radial": {
-      const stops = readStops(paint.stops, ctx);
-      if (stops.length === 0) return "<a:noFill/>";
-      if (stops.length === 1) return `<a:solidFill>${colorXml(stops[0].rgb, stops[0].alpha * alpha)}</a:solidFill>`;
-      if (paint.type === "linear") {
-        // Both run clockwise from +x with y down, over the box's extent along the angle.
-        return `<a:gradFill rotWithShape="1">${gsLst(stops, alpha)}<a:lin ang="${angle60k(num(paint.angle, 0))}" scaled="0"/></a:gradFill>`;
-      }
-      const cx = num(paint.cx, 0.5);
-      const cy = num(paint.cy, 0.5);
-      const radius = Math.max(0, num(paint.r, 0.5)) * Math.max(box.width, box.height);
-      const far = Math.hypot(Math.max(cx, 1 - cx) * box.width, Math.max(cy, 1 - cy) * box.height);
-      const placed = radialStops(stops, radius, far);
-      const pct = (v: number): number => Math.round(v * 100000);
-      const rect = `<a:fillToRect l="${pct(cx)}" t="${pct(cy)}" r="${pct(1 - cx)}" b="${pct(1 - cy)}"/>`;
-      const body = placed.length === 1 ? `<a:solidFill>${colorXml(placed[0].rgb, placed[0].alpha * alpha)}</a:solidFill>` : null;
-      return body ?? `<a:gradFill rotWithShape="1">${gsLst(placed, alpha)}<a:path path="circle">${rect}</a:path></a:gradFill>`;
-    }
-    case "pattern": {
-      const name = typeof paint.pattern === "string" ? paint.pattern : "";
-      let prst = Object.hasOwn(PATTERN_PRESETS, name) ? PATTERN_PRESETS[name] : undefined;
-      if (!prst) {
-        ctx.warn(`no pattern "${name}" is known, written as hatch`);
-        prst = PATTERN_PRESETS.hatch;
-      }
-      ctx.warn(PATTERN_WARNING);
-      const fg = colorXml(readColor(paint.fg, ctx), alpha);
-      const bg = typeof paint.bg === "string" ? colorXml(readColor(paint.bg, ctx), alpha) : colorXml("FFFFFF", 0);
-      return `<a:pattFill prst="${prst}"><a:fgClr>${fg}</a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
-    }
-    default:
-      ctx.warn(`the paint type "${paint.type}" cannot be written to PowerPoint, written without paint`);
-      return "<a:noFill/>";
+  if (!type.toPptx) {
+    ctx.warn(`the paint type "${paint.type}" cannot be written to PowerPoint, written without paint`);
+    return "<a:noFill/>";
   }
+  return type.toPptx(paint, alpha, box, ctx);
 }
 
 const DASHES: Record<Stroke["dash"], string> = { solid: "solid", dash: "dash", dot: "sysDot", dashDot: "dashDot" };
 const CAPS: Record<NonNullable<Stroke["cap"]>, string> = { butt: "flat", round: "rnd", square: "sq" };
-const JOINS: Record<NonNullable<Stroke["join"]>, string> = { miter: '<a:miter lim="800000"/>', round: "<a:round/>", bevel: "<a:bevel/>" };
+/** A miter join with SVG's default limit of 4 (DrawingML's `lim` is in 1/1000 per cent): SVG's join when none is set. */
+const MITER = '<a:miter lim="400000"/>';
+const JOINS: Record<NonNullable<Stroke["join"]>, string> = { miter: MITER, round: "<a:round/>", bevel: "<a:bevel/>" };
+
+/** DrawingML's limits: a line's width (EMU), a run's size (1/100 pt) and a line spacing (1/100 pt). */
+export const MAX_LINE_EMU = 20116800;
+export const MIN_FONT_SZ = 100;
+export const MAX_FONT_SZ = 400000;
+export const MAX_SPC_PTS = 158400;
+
+/** `value` rounded and kept within `min`-`max`; a warning names `what` when that changes it beyond rounding. */
+export function clampWhole(value: number, min: number, max: number, what: string, ctx: Pick<PptxContext, "warn">): number {
+  const rounded = Math.round(value);
+  const kept = Math.min(max, Math.max(min, rounded));
+  if (kept !== rounded) ctx.warn(`${what} ${rounded} is outside PowerPoint's range (${min}-${max}), written as ${kept}`);
+  return kept;
+}
 
 /**
  * `stroke` as an `a:ln`: its width in EMU at the slide's scale, its paint (laid out in `box`, px) with `alpha`, its dash,
- * cap and join; `extra` (head and tail ends) goes last, as the schema orders it. No stroke is a line with no fill.
+ * cap and join (a miter of limit 4 when it sets none, as SVG); `extra` (head and tail ends) goes last, as the schema
+ * orders it. No stroke, or one of width 0, is a line with no fill.
  */
 export function lnXml(stroke: Stroke | null, alpha: number, box: { width: number; height: number }, ctx: DrawingContext, extra = ""): string {
-  if (!stroke) return `<a:ln><a:noFill/>${extra}</a:ln>`;
-  const w = Math.max(0, Math.round(stroke.width * EMU_PER_PT * ctx.scale));
+  if (!stroke || !(stroke.width > 0)) return `<a:ln><a:noFill/>${extra}</a:ln>`;
+  const w = clampWhole(stroke.width * EMU_PER_PT * ctx.scale, 0, MAX_LINE_EMU, "the line width (EMU)", ctx);
   const cap = stroke.cap && Object.hasOwn(CAPS, stroke.cap) ? ` cap="${CAPS[stroke.cap]}"` : "";
   const dash = Object.hasOwn(DASHES, stroke.dash) ? DASHES[stroke.dash] : "solid";
-  const join = stroke.join && Object.hasOwn(JOINS, stroke.join) ? JOINS[stroke.join] : "";
+  const join = stroke.join && Object.hasOwn(JOINS, stroke.join) ? JOINS[stroke.join] : MITER;
   return `<a:ln w="${w}"${cap}>${fillXml(stroke.paint, alpha, box, ctx)}<a:prstDash val="${dash}"/>${join}${extra}</a:ln>`;
 }
 
@@ -181,10 +158,13 @@ export function xfrmXml(box: { x: number; y: number; cx: number; cy: number }, r
   return `<a:xfrm${rot === 0 ? "" : ` rot="${rot}"`}><a:off x="${box.x}" y="${box.y}"/><a:ext cx="${box.cx}" cy="${box.cy}"/></a:xfrm>`;
 }
 
+/** `s` without the characters XML 1.0 cannot hold (control characters other than tab and line breaks, U+FFFE, U+FFFF). */
+export const xmlSafe = (s: string): string => s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, "");
+
 /** A `p:cNvPr`: the shape's id, its name and, when given, its description. */
 export function nvPrXml(id: number, name: string, descr?: string): string {
-  const d = descr === undefined ? "" : ` descr="${escapeXml(descr)}"`;
-  return `<p:cNvPr id="${id}" name="${escapeXml(name)}"${d}/>`;
+  const d = descr === undefined ? "" : ` descr="${escapeXml(xmlSafe(descr))}"`;
+  return `<p:cNvPr id="${id}" name="${escapeXml(xmlSafe(name))}"${d}/>`;
 }
 
 /** Warnings said once per export whatever item gives them, so not prefixed with the item's label. */

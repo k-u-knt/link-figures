@@ -51,3 +51,12 @@ describe("zip", () => {
     expect(() => zip([{ name: "a", data: text("1") }, { name: "a", data: text("2") }])).toThrow(/a/);
   });
 });
+
+describe("zip limits", () => {
+  it("refuses more entries than a ZIP without ZIP64 holds", () => {
+    const empty = new Uint8Array(0);
+    const many = Array.from({ length: 65536 }, (_, i) => ({ name: String(i), data: empty }));
+    expect(() => zip(many)).toThrow(/65535/);
+    expect(() => zip(many.slice(0, 65535))).not.toThrow();
+  });
+});

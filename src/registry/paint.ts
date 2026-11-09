@@ -20,6 +20,11 @@ export interface PaintSvg {
   opacity?: number;
 }
 
+/** What a paint needs to be written to PowerPoint: a place to say what it could not keep. */
+export interface PaintPptxContext {
+  warn(message: string): void;
+}
+
 /**
  * One kind of paint (solid, gradient, pattern…). The same entry paints fills and strokes. `toSvg` lays a gradient or
  * pattern out in `box`, in page px: the shape's box for a fill, the path's bounds for a stroke.
@@ -32,6 +37,12 @@ export interface PaintType {
   /** The type's own inspector fields; their keys are relative to the paint (`"color"`, `"stops"`). */
   fields(paint: Paint): Field[];
   toSvg(paint: Paint, box: Rect, ctx: PaintContext): PaintSvg;
+  /**
+   * The paint as a DrawingML fill element (`a:solidFill`, `a:gradFill`, `a:pattFill`, `a:noFill`) for a shape or line
+   * whose box is `box` (px, only its size), every colour's alpha multiplied by `alpha`. A type without it is written as
+   * no fill, with a warning.
+   */
+  toPptx?(paint: Paint, alpha: number, box: { width: number; height: number }, ctx: PaintPptxContext): string;
 }
 
 export class PaintRegistry {

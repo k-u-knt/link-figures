@@ -27,7 +27,8 @@ export interface DropData {
   selection?: (text: string) => SelectionMatch | null;
   /**
    * When the drag started on an embed in a note's editor (`EditorDragTracker.embed`): that note, and the embed's line
-   * and offset in it when the editor could say. Live Preview drags an embedded image as its `file`, not as a link.
+   * and offset in it when the editor could say. Live Preview drags an inline embedded image as its `file`, and an
+   * own-line one as a `link` from the note.
    */
   embedDrag?: { sourcePath: string; line: number | null; offset?: number | null };
 }
@@ -125,6 +126,12 @@ const linksToNote = (fromNote: DropFromNote | undefined) => fromNote === "block-
 /** Whether `path` is a note's, and not a figure's (a figure is not a note). */
 const isNotePath = (path: string) => /\.md$/i.test(path) && !path.endsWith(FILE_SUFFIX);
 
+/** The embed's line, and its offset when the line is known, as a `link-note-image` takes them: none when the line is unknown. */
+function embedPlace({ line, offset }: NonNullable<DropData["embedDrag"]>): { line?: number; offset?: number } {
+  if (line === null) return {};
+  return typeof offset === "number" ? { line, offset } : { line };
+}
+
 function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: DropFromNote | undefined, embedDrag: DropData["embedDrag"]): IntakeAction[] {
   switch (draggable.type) {
     case "file":
@@ -132,16 +139,7 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: 
       const paths = draggable.paths ?? [];
       // One image file dragged off an embed in a note's editor (Live Preview's image widget): the place in the note, by the setting.
       if (draggable.type === "file" && paths.length === 1 && embedDrag && isNotePath(embedDrag.sourcePath) && linksToNote(fromNote) && isPanelExtension(extensionOf(paths[0]))) {
-        const { sourcePath, line, offset } = embedDrag;
-        return [
-          {
-            kind: "link-note-image",
-            linktext: paths[0],
-            sourcePath,
-            ...(line !== null ? { line } : {}),
-            ...(line !== null && typeof offset === "number" ? { offset } : {}),
-          },
-        ];
+        return [{ kind: "link-note-image", linktext: paths[0], sourcePath: embedDrag.sourcePath, ...embedPlace(embedDrag) }];
       }
       return paths.map((path) => ({ kind: "link-file", path }));
     }
@@ -153,7 +151,9 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: 
       // An image dragged out of a note (an embed in it) links the place in the note, by the setting; a figure is not a note.
       const fromANote = sourcePath !== undefined && isNotePath(sourcePath);
       if (fromANote && linksToNote(fromNote) && isPanelExtension(extensionOf(splitLinktext(linktext).file))) {
-        return [{ kind: "link-note-image", linktext, sourcePath }];
+        // Live Preview drags an own-line embed as a link: the place recorded at dragstart, when it was in this note's editor.
+        const place = embedDrag && embedDrag.sourcePath === sourcePath ? embedPlace(embedDrag) : {};
+        return [{ kind: "link-note-image", linktext, sourcePath, ...place }];
       }
       return [sourcePath === undefined ? { kind: "link-text", linktext } : { kind: "link-text", linktext, sourcePath }];
     }

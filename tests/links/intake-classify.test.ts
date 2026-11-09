@@ -238,6 +238,24 @@ describe("classifyDrop: text and images dragged out of a note's editor", () => {
     }
   });
 
+  test("an image link dragged off an embed in that note's editor (Live Preview's own-line embed) carries the embed's line and offset", () => {
+    const draggable = { type: "link" as const, linktext: "plot.png", sourcePath: "Notes/a.md" };
+    const embedDrag = { sourcePath: "Notes/a.md", line: 9, offset: 140 };
+    for (const fromNote of ["block-id", "heading"] as const) {
+      expect(classifyDrop({ draggable, fromNote, embedDrag })).toEqual([
+        { kind: "link-note-image", linktext: "plot.png", sourcePath: "Notes/a.md", line: 9, offset: 140 },
+      ]);
+    }
+    // Line unknown: no place passed (the first occurrence is used later); offset without a line is dropped.
+    expect(classifyDrop({ draggable, fromNote: "block-id", embedDrag: { sourcePath: "Notes/a.md", line: null, offset: 5 } })).toEqual([
+      { kind: "link-note-image", linktext: "plot.png", sourcePath: "Notes/a.md" },
+    ]);
+    // An embed drag recorded in another note's editor says nothing about this link.
+    expect(classifyDrop({ draggable, fromNote: "block-id", embedDrag: { sourcePath: "Notes/b.md", line: 9, offset: 140 } })).toEqual([
+      { kind: "link-note-image", linktext: "plot.png", sourcePath: "Notes/a.md" },
+    ]);
+  });
+
   test("an image link stays a link-text in 'direct' mode, without a mode, without a source note, or from a figure; so does a link to a note", () => {
     const image = { type: "link" as const, linktext: "plot.png", sourcePath: "Notes/a.md" };
     expect(classifyDrop({ draggable: image, fromNote: "direct" })).toEqual([{ kind: "link-text", linktext: "plot.png", sourcePath: "Notes/a.md" }]);

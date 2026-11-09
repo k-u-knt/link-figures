@@ -1,4 +1,7 @@
 import { Deflate } from "pako";
+import { yieldToEventLoop } from "../util/event-loop";
+
+export { yieldToEventLoop };
 
 export type TiffCompression = "none" | "deflate";
 
@@ -12,24 +15,6 @@ interface Entry {
   tag: number;
   type: typeof SHORT | typeof LONG | typeof RATIONAL;
   values: number[];
-}
-
-/**
- * Lets the event loop run (a macrotask), so a long encode does not freeze the window. A MessageChannel message, not
- * `setTimeout(0)`: a hidden or background window throttles timers (to once a second or less), which would stretch a
- * large TIFF's export to minutes; messages are not throttled. `setTimeout(0)` where there is no MessageChannel.
- */
-export function yieldToEventLoop(): Promise<void> {
-  if (typeof MessageChannel !== "function") return new Promise<void>((resolve) => setTimeout(resolve, 0));
-  return new Promise<void>((resolve) => {
-    const { port1, port2 } = new MessageChannel();
-    port1.onmessage = () => {
-      port1.close();
-      port2.close();
-      resolve();
-    };
-    port2.postMessage(null);
-  });
 }
 
 /** Rows `from`…`to` of the RGBA pixels as RGB, alpha dropped. */

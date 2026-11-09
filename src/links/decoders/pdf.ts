@@ -1,5 +1,6 @@
 import { loadPdfJs } from "obsidian";
 import type { DecodedImage } from "../types";
+import { yieldToEventLoop } from "../../util/event-loop";
 import { checkDecodeBudget } from "./budget";
 
 // The few pdf.js members used here; `loadPdfJs` is typed `any` or `unknown` depending on which typings win.
@@ -9,7 +10,12 @@ interface PdfViewport {
 }
 interface PdfPage {
   getViewport(params: { scale: number }): PdfViewport;
-  render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport; background?: string }): { promise: Promise<void> };
+  render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport; background?: string; intent?: "display" | "print" }): PdfRenderTask;
+}
+/** pdf.js calls `onContinue`, when set, each time it pauses between time slices, with the function that goes on. */
+interface PdfRenderTask {
+  promise: Promise<void>;
+  onContinue?: (cont: () => void) => void;
 }
 interface PdfDocument {
   numPages: number;
@@ -54,7 +60,12 @@ export async function decodePdf(bytes: ArrayBuffer, pageIndex: number, scale: nu
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D context unavailable");
     // Transparent, as in the PDF export (pdf.js paints white by default), so the stage shows what the export gives.
-    await page.render({ canvasContext: context, viewport, background: "rgba(0,0,0,0)" }).promise;
+    // The "print" intent: with "display", pdf.js goes on after each time slice in a requestAnimationFrame, which a
+    // hidden window never runs, so an export started before hiding Obsidian stalled until it was shown again. Between
+    // slices it yields through a message instead (not throttled), so the window stays responsive.
+    const task = page.render({ canvasContext: context, viewport, background: "rgba(0,0,0,0)", intent: "print" });
+    task.onContinue = (cont) => void yieldToEventLoop().then(cont);
+    await task.promise;
     return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height, pageCount };
   });
 }

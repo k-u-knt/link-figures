@@ -142,10 +142,10 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
       let mediaCount = 0;
 
       /** `fragment` (page px) drawn over `box` on a clear background, as PNG bytes at the export dpi or the most that fits. */
-      const rasterise = async (fragment: string, box: Rect, label: string): Promise<Uint8Array> => {
+      const rasterise = async (fragment: string, box: Rect, say: (message: string) => void): Promise<Uint8Array> => {
         if (!(box.width > 0 && box.height > 0)) throw new Error("it has no area to draw");
         const fit = fitDpi({ width: box.width / MM_TO_PX, height: box.height / MM_TO_PX }, input.dpi);
-        if (fit.reduced) warn(`${label}: drawn at ${fit.dpi} dpi (the largest that fits)`);
+        if (fit.reduced) say(`drawn at ${fit.dpi} dpi (the largest that fits)`);
         const svg =
           `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fit.widthPx}" height="${fit.heightPx}" ` +
           `viewBox="${box.x} ${box.y} ${box.width} ${box.height}" preserveAspectRatio="none">${fragment}</svg>`;
@@ -173,22 +173,34 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
             return slideMediaRId(media.length - 1);
           },
           nextId: () => ++id,
-          rasterise: (fragment, box) => rasterise(fragment, box, `"${page.name}"`),
+          rasterise: (fragment, box, say) => rasterise(fragment, box, say ?? ((m) => warn(`"${page.name}": ${m}`))),
           warn,
         };
 
         /** A node drawn as the SVG export draws it (turned and faded), as a picture of the box it reaches. */
         const asPicture = async (node: Node): Promise<string | null> => {
           const label = nodeLabel(input.doc, node);
-          const built = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([node.id]), paper: false });
-          if (built.drawn === 0) return null;
-          const type = input.registries.nodeTypes.get(node.type)!;
-          const b = turnedBounds(type.bounds(node), node.rotation);
-          const box = { x: b.x - RASTER_MARGIN_PX, y: b.y - RASTER_MARGIN_PX, width: b.width + 2 * RASTER_MARGIN_PX, height: b.height + 2 * RASTER_MARGIN_PX };
-          const inner = built.svg.replace(/^[\s\S]*?<svg\b[^>]*>/, "").replace(/<\/svg>\s*$/, "");
+          let box: Rect;
+          let inner: string;
+          try {
+            const built = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([node.id]), paper: false });
+            // What the SVG build said (rasterised, skipped) is not said by `svgWarnings`, as it is not about the slide.
+            for (const w of built.warnings) warn(w);
+            if (built.drawn === 0) {
+              warn(`${label}: nothing to draw, skipped`);
+              return null;
+            }
+            const type = input.registries.nodeTypes.get(node.type)!;
+            const b = turnedBounds(type.bounds(node), node.rotation);
+            box = { x: b.x - RASTER_MARGIN_PX, y: b.y - RASTER_MARGIN_PX, width: b.width + 2 * RASTER_MARGIN_PX, height: b.height + 2 * RASTER_MARGIN_PX };
+            inner = built.svg.replace(/^[\s\S]*?<svg\b[^>]*>/, "").replace(/<\/svg>\s*$/, "");
+          } catch (error) {
+            warn(`${label}: could not be drawn as a picture (${message(error)}), skipped`);
+            return null;
+          }
           let png: Uint8Array;
           try {
-            png = await rasterise(inner, box, label);
+            png = await rasterise(inner, box, (m) => warn(`${label}: ${m}`));
           } catch (error) {
             warn(`${label}: could not be drawn as a picture (${message(error)}), skipped`);
             return null;

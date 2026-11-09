@@ -1,9 +1,9 @@
 import { createPptxExporter, slideFit, slideTree } from "../../../src/export/exporters/pptx";
-import { PATTERN_WARNING } from "../../../src/export/pptx/drawingml";
+import { labelled, PATTERN_WARNING } from "../../../src/export/pptx/drawingml";
 import { createDocument, createPage, shapeNodeDefaults, textNodeDefaults } from "../../../src/model/defaults";
 import type { Document, Node, Page } from "../../../src/model/types";
 import type { ExportInput } from "../../../src/registry/exporter";
-import type { NodeType } from "../../../src/registry/node-type";
+import type { NodeType, PptxContext } from "../../../src/registry/node-type";
 import { PNG_BYTES, pptxRegistries } from "./context";
 import { all, one, parseXml, unzip, unzipText } from "./ooxml";
 
@@ -228,6 +228,63 @@ describe("pptx exporter", () => {
     const entries = unzip(files[0].bytes).map((e) => e.name);
     expect(entries).toContain("ppt/media/image1.png");
     expect(warnings).toEqual(['Item "widget" (Page 1): written as a picture']);
+  });
+
+  const widgetDoc = () => {
+    const doc = createDocument("nature-double");
+    const page = doc.pages[0];
+    doc.nodes.push({ id: "w", type: "widget", page: page.id, x: 20, y: 30, width: 40, height: 20, z: 0, rotation: 0, opacity: 1, locked: false } as unknown as Node);
+    return doc;
+  };
+  const widgetType = (over: Record<string, unknown>) =>
+    ({
+      type: "widget",
+      name: "Widget",
+      icon: "",
+      mount: () => ({ update() {}, unmount() {} }),
+      bounds: (n: Node) => ({ x: n.x, y: n.y, width: n.width, height: n.height }),
+      inspector: () => [],
+      toSvg: (n: Node) => `<rect x="${n.x}" y="${n.y}" width="${n.width}" height="${n.height}" fill="#00f"/>`,
+      ...over,
+    }) as unknown as NodeType;
+
+  it("reports an item whose picture would draw nothing, instead of dropping it silently", async () => {
+    const registries = pptxRegistries();
+    registries.nodeTypes.register(widgetType({ toSvg: () => "raster" }));
+    const fake = fakeBackend();
+    const { files, warnings } = await run(input(widgetDoc(), { registries }), fake.backend);
+    expect(fake.calls).toHaveLength(0);
+    expect(all(slideOf(files[0].bytes), "p:pic")).toHaveLength(0);
+    expect(warnings.some((w) => w.includes('Item "widget"') && w.includes("skipped"))).toBe(true);
+  });
+
+  it("does not fail the export when a type's bounds throw while it is drawn as a picture", async () => {
+    const registries = pptxRegistries();
+    registries.nodeTypes.register(
+      widgetType({
+        bounds: () => {
+          throw new Error("bad bounds");
+        },
+      }),
+    );
+    const { files, warnings } = await run(input(widgetDoc(), { registries }));
+    expect(files).toHaveLength(1);
+    expect(warnings.some((w) => w.includes("bad bounds"))).toBe(true);
+  });
+
+  it("labels the dpi warning of a hook's rasterise with the item when it uses labelled", async () => {
+    const registries = pptxRegistries();
+    registries.nodeTypes.register(
+      widgetType({
+        toPptx: async (n: Node, base: PptxContext) => {
+          const ctx = labelled(base, 'Item "w"');
+          await ctx.rasterise("<g/>", { x: 0, y: 0, width: 100000, height: 100000 });
+          return { xml: "" };
+        },
+      }),
+    );
+    const { warnings } = await run(input(widgetDoc(), { registries }));
+    expect(warnings.some((w) => w.startsWith('Item "w": drawn at'))).toBe(true);
   });
 
   it("names media image1, image2… across the whole export, never after vault files", async () => {

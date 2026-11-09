@@ -66,9 +66,10 @@ export interface PptxContext {
   nextId(): number;
   /**
    * `svgFragment` (page px, as `toSvg` writes, with any `<defs>` it needs inline) drawn over `box` (page px) on a clear
-   * background, as PNG bytes at `dpi` (lower when that is over the canvas limits). Rejects when it cannot be drawn.
+   * background, as PNG bytes at `dpi` (lower when that is over the canvas limits, which it says through `warn`, by default
+   * with the page's name; `labelled` passes the item's). Rejects when it cannot be drawn.
    */
-  rasterise(svgFragment: string, box: Rect): Promise<Uint8Array>;
+  rasterise(svgFragment: string, box: Rect, warn?: (message: string) => void): Promise<Uint8Array>;
   /** Says what the slide could not keep; the same message is reported once per export. Say which item it is about. */
   warn(message: string): void;
 }
@@ -229,7 +230,7 @@ export interface NodeType<N extends Node = Node> {
   pageAfterMove?(node: N, ctx: MoveContext): PageId;
   /**
    * Opts the type in to containing other nodes, as a group does: the ids of its members (the nodes whose `parent` is its
-   * id), in z order. Moving, deleting, duplicating, restacking and aligning the node act on these too; code that needs
+   * id), in z order. A container's own drawing (its frame, background) is not exported to PowerPoint: only its members are. Moving, deleting, duplicating, restacking and aligning the node act on these too; code that needs
    * to know whether a node contains others asks this hook (`isGroup` in model/groups.ts), never the node's type.
    */
   members?(node: N, doc: Document): NodeId[];

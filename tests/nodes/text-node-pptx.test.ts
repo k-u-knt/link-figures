@@ -70,6 +70,7 @@ describe("text toPptx", () => {
       expect(rPr.getAttribute("sz")).toBe("900");
       expect(rPr.getAttribute("b")).toBe("1");
       expect(rPr.getAttribute("i")).toBe("1");
+      expect(rPr.hasAttribute("lang")).toBe(false);
       expect(one(rPr, "a:latin").getAttribute("typeface")).toBe("Georgia");
       expect(one(one(rPr, "a:solidFill"), "a:srgbClr").getAttribute("val")).toBe("336699");
     }

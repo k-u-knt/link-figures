@@ -7,6 +7,7 @@ import {
   EMU_PER_PX,
   fillXml,
   hexColor,
+  labelled,
   lnXml,
   nvPrXml,
   PATTERN_WARNING,
@@ -200,6 +201,11 @@ describe("lnXml", () => {
     expect(one(ln(stroke({ join: "miter" })), "a:miter").getAttribute("lim")).toBe("400000");
   });
 
+  it("writes a flat cap (SVG's butt) when the stroke sets none, since DrawingML defaults to square", () => {
+    expect(one(ln(stroke()), "a:ln").getAttribute("cap")).toBe("flat");
+    expect(one(ln(stroke({ cap: "butt" })), "a:ln").getAttribute("cap")).toBe("flat");
+  });
+
   it("writes cap and join, the children in schema order", () => {
     const line = one(ln(stroke({ cap: "round", join: "bevel", paint: { type: "linear", angle: 0, stops } })), "a:ln");
     expect(line.getAttribute("cap")).toBe("rnd");
@@ -272,5 +278,20 @@ describe("xfrmXml and nvPrXml", () => {
     expect(pr.getAttribute("id")).toBe("5");
     expect(pr.getAttribute("name")).toBe('A & "B" <c>');
     expect(pr.getAttribute("descr")).toBe("[[x#y]]");
+  });
+});
+
+describe("labelled", () => {
+  it("prefixes warnings, and the rasteriser's, with the item's label", async () => {
+    const { ctx, warnings } = pptxContext({
+      rasterise: async (_f, _b, warn) => {
+        warn?.("drawn at 50 dpi (the largest that fits)");
+        return new Uint8Array();
+      },
+    });
+    const item = labelled(ctx, 'Item "w"');
+    item.warn("hello");
+    await item.rasterise("", { x: 0, y: 0, width: 1, height: 1 });
+    expect(warnings).toEqual(['Item "w": hello', 'Item "w": drawn at 50 dpi (the largest that fits)']);
   });
 });

@@ -142,16 +142,16 @@ export function clampWhole(value: number, min: number, max: number, what: string
 
 /**
  * `stroke` as an `a:ln`: its width in EMU at the slide's scale, its paint (laid out in `box`, px) with `alpha`, its dash,
- * cap and join (a miter of limit 4 when it sets none, as SVG); `extra` (head and tail ends) goes last, as the schema
+ * cap (flat when it sets none, as SVG and PDF; DrawingML's own default is square) and join (a miter of limit 4 when it sets none, as SVG); `extra` (head and tail ends) goes last, as the schema
  * orders it. No stroke, or one of width 0, is a line with no fill.
  */
 export function lnXml(stroke: Stroke | null, alpha: number, box: { width: number; height: number }, ctx: DrawingContext, extra = ""): string {
   if (!stroke || !(stroke.width > 0)) return `<a:ln><a:noFill/>${extra}</a:ln>`;
   const w = clampWhole(stroke.width * EMU_PER_PT * ctx.scale, 0, MAX_LINE_EMU, "the line width (EMU)", ctx);
-  const cap = stroke.cap && Object.hasOwn(CAPS, stroke.cap) ? ` cap="${CAPS[stroke.cap]}"` : "";
+  const cap = stroke.cap && Object.hasOwn(CAPS, stroke.cap) ? CAPS[stroke.cap] : "flat";
   const dash = Object.hasOwn(DASHES, stroke.dash) ? DASHES[stroke.dash] : "solid";
   const join = stroke.join && Object.hasOwn(JOINS, stroke.join) ? JOINS[stroke.join] : MITER;
-  return `<a:ln w="${w}"${cap}>${fillXml(stroke.paint, alpha, box, ctx)}<a:prstDash val="${dash}"/>${join}${extra}</a:ln>`;
+  return `<a:ln w="${w}" cap="${cap}">${fillXml(stroke.paint, alpha, box, ctx)}<a:prstDash val="${dash}"/>${join}${extra}</a:ln>`;
 }
 
 /** An `a:xfrm` of a box in EMU (whole numbers; an extent below 0 is 0), turned `rotation` degrees clockwise about its centre. */
@@ -175,7 +175,14 @@ const EXPORT_WIDE = new Set([PATTERN_WARNING]);
 
 /** `ctx` with its warnings prefixed with `label` (the item's, from `nodeLabel`), except the export-wide ones. */
 export function labelled<C extends Pick<PptxContext, "warn">>(ctx: C, label: string): C {
-  return { ...ctx, warn: (message: string) => ctx.warn(EXPORT_WIDE.has(message) ? message : `${label}: ${message}`) };
+  const warn = (message: string) => ctx.warn(EXPORT_WIDE.has(message) ? message : `${label}: ${message}`);
+  const out = { ...ctx, warn } as C;
+  // The rasteriser's own warnings (the dpi it fell back to) are the item's too.
+  if ("rasterise" in ctx) {
+    const raster = (ctx as unknown as PptxContext).rasterise;
+    (out as unknown as PptxContext).rasterise = (fragment, box) => raster(fragment, box, warn);
+  }
+  return out;
 }
 
 /**

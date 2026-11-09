@@ -31,7 +31,7 @@ export function textNodePptx(node: TextNode, base: PptxContext): PptxPart {
   const rgb = hexColor(font.color);
   if (rgb === null) ctx.warn(`the colour ${JSON.stringify(font.color)} is not one PowerPoint can take, written as black`);
   const typeface = escapeXml(xmlSafe(font.family));
-  const rPrAttrs = `lang="en-US" sz="${sz}"${font.weight === "bold" ? ' b="1"' : ' b="0"'}${font.italic ? ' i="1"' : ' i="0"'} dirty="0"`;
+  const rPrAttrs = `sz="${sz}"${font.weight === "bold" ? ' b="1"' : ' b="0"'}${font.italic ? ' i="1"' : ' i="0"'} dirty="0"`;
   const rPrBody = `<a:solidFill>${colorXml(rgb ?? "000000", node.opacity)}</a:solidFill><a:latin typeface="${typeface}"/><a:ea typeface="${typeface}"/><a:cs typeface="${typeface}"/>`;
   // The first line's spacing and the top inset (in font sizes) that put its baseline a size below the top.
   const firstLine = 1 + BASELINE_DROP;

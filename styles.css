@@ -513,3 +513,45 @@
 .lf-snap-guide.is-horizontal {
   border-top: calc(1px / var(--lf-zoom, 1)) solid var(--interactive-accent);
 }
+
+/*
+ * Crop mode (see CropSession): the whole image at 35 % where it is on the page, unclipped, behind the crop frame on the
+ * panel's box and its eight handles. Handles are drawn like the resize handles, square-cornered marks in the accent.
+ */
+.lf-crop-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  max-width: none;
+  opacity: 0.35;
+  outline: calc(1px / var(--lf-zoom, 1)) dashed var(--text-faint);
+  pointer-events: none;
+  user-select: none;
+}
+
+.lf-crop-frame {
+  position: absolute;
+  box-sizing: border-box;
+  outline: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+  cursor: move;
+  pointer-events: none;
+}
+
+.lf-crop-handle {
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(10px / var(--lf-zoom, 1));
+  height: calc(10px / var(--lf-zoom, 1));
+  transform: translate(-50%, -50%);
+  background-color: var(--interactive-accent);
+  border: calc(2px / var(--lf-zoom, 1)) solid var(--background-primary);
+  pointer-events: auto;
+}
+
+.lf-crop-handle[data-handle="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.lf-crop-handle[data-handle="n"] { left: 50%; top: 0; cursor: ns-resize; }
+.lf-crop-handle[data-handle="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.lf-crop-handle[data-handle="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+.lf-crop-handle[data-handle="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.lf-crop-handle[data-handle="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+.lf-crop-handle[data-handle="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.lf-crop-handle[data-handle="w"] { left: 0; top: 50%; cursor: ew-resize; }

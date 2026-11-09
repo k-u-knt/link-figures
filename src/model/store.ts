@@ -109,6 +109,11 @@ export class DocumentStore {
     this.mergeTarget = null;
   }
 
+  /** Forgets every step there is to redo: for an edit taken back as though it had never been made (a cancelled crop session). */
+  discardRedo(): void {
+    this.redoStack = [];
+  }
+
   canUndo(): boolean {
     return this.undoStack.length > 0;
   }

@@ -12,6 +12,8 @@ interface MeasuringRenderer extends NodeRenderer {
   naturalSize(): Promise<{ width: number; height: number }>;
   /** The image's size if it has loaded with one, else null. */
   naturalSizeNow(): { width: number; height: number } | null;
+  /** The URL the image was loaded from, if it has loaded; else null. */
+  imageSourceNow?(): string | null;
 }
 
 function isMeasuring(renderer: NodeRenderer): renderer is MeasuringRenderer {
@@ -148,6 +150,12 @@ export class NodeHost {
   naturalSizeNow(id: NodeId): { width: number; height: number } | null {
     const renderer = this.entries.get(id)?.renderer;
     return renderer && isMeasuring(renderer) ? renderer.naturalSizeNow() : null;
+  }
+
+  /** The URL the image a node shows was loaded from, if it has loaded; null otherwise. */
+  imageSourceNow(id: NodeId): string | null {
+    const renderer = this.entries.get(id)?.renderer;
+    return renderer && isMeasuring(renderer) ? renderer.imageSourceNow?.() ?? null : null;
   }
 
   /**

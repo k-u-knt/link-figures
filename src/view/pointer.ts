@@ -10,6 +10,7 @@ import type { Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { DragTargets, ToolPreview } from "../registry/command";
 import type { HandleDrag, InteractionContext, NodeType } from "../registry/node-type";
 import type { SnapLine } from "../registry/snap";
+import { CROP_ROTATED_NOTICE, CropSession, croppable, type CropHandle } from "./crop-session";
 import type { LinkFiguresView } from "./figure-view";
 import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, nodeSizePx, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
 import { pagePointAt, pageWorldRect } from "./viewport";
@@ -60,7 +61,8 @@ type Gesture =
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null; snap: Snap }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; within: NodeId | null; el: HTMLElement }
-  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null; snap: Snap };
+  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null; snap: Snap }
+  | { kind: "cropping"; pointerId: number; client: Pt; handle: CropHandle; started: boolean };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
@@ -68,6 +70,7 @@ type Resizing = Extract<Gesture, { kind: "resizing" }>;
 type Handling = Extract<Gesture, { kind: "handling" }>;
 type Marquee = Extract<Gesture, { kind: "marquee" }>;
 type Drawing = Extract<Gesture, { kind: "drawing" }>;
+type Cropping = Extract<Gesture, { kind: "cropping" }>;
 
 /**
  * What is drawn for one selected node in its page's overlay: an outlined box holding the handles, the eight resize
@@ -100,7 +103,26 @@ export class PointerController {
   /** The snap guides of the drag under way (see `drawGuides`), in its page's overlay. */
   private guideEls: HTMLElement[] = [];
 
-  constructor(private readonly view: LinkFiguresView) {}
+  /** Crop mode on the page (see `CropSession`): while a session is under way, presses on its panel go to it. */
+  readonly cropSession: CropSession;
+
+  constructor(private readonly view: LinkFiguresView) {
+    this.cropSession = new CropSession({
+      get store() {
+        return view.store;
+      },
+      runCommandById: (id, args, step) => view.runCommandById(id, args, step),
+      imageSizeNow: (id) => view.imageSizeNow(id),
+      imageSourceNow: (id) => view.imageSourceNow?.(id) ?? null,
+      overlayOf: (pageId) => this.overlayOf(pageId),
+      snapLines: (pageId, exclude) => this.snapLines(pageId, exclude),
+      snapping: (mods) => this.snapping(mods),
+      snapReachPage: () => this.snapReachPage(),
+      drawGuides: (snap, guides, moving) => this.drawGuides(snap, guides, moving),
+      clearGuides: () => this.clearGuides(),
+      onEnd: () => this.sync(),
+    });
+  }
 
   attach(stageEl: HTMLElement): void {
     this.detach();
@@ -128,6 +150,7 @@ export class PointerController {
 
   detach(): void {
     this.endGesture();
+    this.cropSession.finish();
     this.clearHover();
     this.listening?.abort();
     this.listening = null;
@@ -143,6 +166,7 @@ export class PointerController {
   rebind(): void {
     if (!this.stage) return;
     this.endGesture();
+    this.cropSession.finish();
     this.unsubscribeStore?.();
     this.clearParts();
     // A group entered in another document is not one of this one's.
@@ -157,7 +181,31 @@ export class PointerController {
    * is under way every commit is stamped with the moment the drag began.
    */
   commitTime(): number {
-    return this.dragStartedAt ?? Date.now();
+    // A crop session is one step from its first edit to its end, over however many drags.
+    return this.dragStartedAt ?? this.cropSession.startedAt ?? Date.now();
+  }
+
+  /**
+   * Starts crop mode on the image panel `id` (see `CropSession`), selecting it alone; a rotated panel shows the Notice
+   * "Set rotation to 0 to crop on the page" instead. False when no session started.
+   */
+  startCrop(id: NodeId): boolean {
+    if (this.view.readOnly) return false;
+    const can = croppable(this.store, this.view, id);
+    if (can === "rotated") this.view.notify(CROP_ROTATED_NOTICE);
+    if (can !== "ok") return false;
+    this.endGesture();
+    this.cropSession.finish();
+    if (this.view.armedTool) this.view.disarmTool();
+    this.select([id]);
+    const started = this.cropSession.start(id);
+    this.sync();
+    return started;
+  }
+
+  /** Finishes the crop session under way, if any, keeping what it did. */
+  finishCrop(): void {
+    this.cropSession.finish();
   }
 
   /** Selects `ids`, less any that are not in the document and any that are not on the page of the first one: a selection never spans pages. */
@@ -204,6 +252,7 @@ export class PointerController {
     // is dragged out (`placeDrag`) is placed at the release instead: see `finishDrawing`.
     const tool = this.view.armedTool;
     if (tool) {
+      this.cropSession.finish();
       ev.preventDefault();
       const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
       const at = pagePointAt(this.store.doc, world);
@@ -220,6 +269,26 @@ export class PointerController {
     const doc = this.store.doc;
     const selection = this.view.selection;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+
+    // A crop session takes a press on its handles or in its box; a press anywhere else finishes it, and is a press as any other.
+    const crop = this.cropSession;
+    if (crop.active) {
+      const origin = pageOriginsPx(doc).get(crop.pageId() ?? "");
+      const at = origin ? { x: world.x - origin.x, y: world.y - origin.y } : null;
+      const handle = at && crop.handleAt(at, HANDLE_GRAB_PX / this.view.viewport.zoom);
+      const target = handle ?? (at && crop.contains(at) ? "pan" : null);
+      if (at && target) {
+        crop.begin(target, at);
+        this.gesture = { kind: "cropping", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, handle: target, started: false };
+        try {
+          stage.setPointerCapture(ev.pointerId);
+        } catch {
+          // Without capture the drag still follows the pointer while it is over the stage.
+        }
+        return;
+      }
+      crop.finish();
+    }
 
     const grabbed = this.grabbedHandle(doc, world);
     if (grabbed) {
@@ -291,6 +360,10 @@ export class PointerController {
     if (ev.pointerId !== g.pointerId) return;
     if (g.kind === "drawing") {
       this.drawPreview(g, ev);
+      return;
+    }
+    if (g.kind === "cropping") {
+      this.cropTo(g, ev);
       return;
     }
     if (g.kind === "pressed") {
@@ -481,6 +554,22 @@ export class PointerController {
     style.width = `${rect.width}px`;
     style.height = `${rect.height}px`;
     this.view.selection.set([...g.base, ...marqueeSelect(this.unitsOn(doc, page, g.within), rect)]);
+  }
+
+  // Crop mode
+
+  /** Drags the crop session's handle (or pans its image) to the pointer of `ev`, once the press has travelled far enough to be a drag. */
+  private cropTo(g: Cropping, ev: PointerEvent): void {
+    if (!g.started && Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) < DRAG_THRESHOLD_PX) return;
+    g.started = true;
+    const crop = this.cropSession;
+    const origin = pageOriginsPx(this.store.doc).get(crop.pageId() ?? "");
+    if (!crop.active || !origin) {
+      this.endGesture();
+      return;
+    }
+    const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    crop.drag(g.handle, { x: world.x - origin.x, y: world.y - origin.y }, ev);
   }
 
   // Dragging a handle of a node's own
@@ -676,6 +765,10 @@ export class PointerController {
       this.finishHandle(g);
       return;
     }
+    if (g.kind === "cropping") {
+      this.endGesture();
+      return;
+    }
     if (g.kind === "resizing" && g.group) {
       this.finishGroupResize(g, ev);
       return;
@@ -705,7 +798,9 @@ export class PointerController {
     this.dragStartedAt = null;
     this.clearGuides();
     if (g.kind === "idle") return;
-    this.store.endMerge();
+    // A crop drag's step stays open for the session's next drag: the session closes it when it ends.
+    if (g.kind === "cropping") this.cropSession.release();
+    else this.store.endMerge();
     if (g.kind === "marquee" || g.kind === "drawing" || g.kind === "handling") g.el?.remove();
     if (g.kind === "resizing") g.group?.el?.remove();
     try {
@@ -727,6 +822,11 @@ export class PointerController {
    */
   private onDoubleClick(ev: MouseEvent): void {
     if (this.view.readOnly || isEditable(ev.target)) return;
+    // A double-click finishes crop mode.
+    if (this.cropSession.active) {
+      this.cropSession.finish();
+      return;
+    }
     const doc = this.store.doc;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
     const hit = hitTest(this.itemsOnAllPages(doc), world);
@@ -740,6 +840,12 @@ export class PointerController {
       return;
     }
     if (entered !== this.entered) this.setEntered(entered);
+    // An image panel starts crop mode (a rotated one says why it does not).
+    const can = croppable(this.store, this.view, hit);
+    if (can !== "no") {
+      this.startCrop(hit);
+      return;
+    }
     const el = this.view.nodeHost.elementFor(hit);
     el?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
   }
@@ -756,6 +862,16 @@ export class PointerController {
     if (ev.key === "Escape" && this.gesture.kind === "resizing" && this.gesture.group && !this.view.readOnly) {
       ev.preventDefault();
       this.endGesture();
+      return;
+    }
+    // Crop mode: Enter finishes it, Escape takes it back (a drag under way with it).
+    const crop = this.cropSession;
+    if (crop.active && !this.view.readOnly && !ev.isComposing && !isEditable(ev.target) && (ev.key === "Enter" || ev.key === "Escape")) {
+      if (ev.key === "Enter" && this.gesture.kind !== "idle") return;
+      ev.preventDefault();
+      this.endGesture();
+      if (ev.key === "Enter") crop.finish();
+      else crop.cancel();
       return;
     }
     // The stage is the one place these keys are ours; text being typed into inside it, and anything while dragging, are not.
@@ -845,7 +961,11 @@ export class PointerController {
   private sync(): void {
     const doc = this.store.doc;
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
-    const wanted = this.view.selection.ids.filter((id) => byId.has(id));
+    // Crop mode lasts while its panel alone is selected; meanwhile its handles are the crop's, not the box's.
+    const crop = this.cropSession;
+    const ids = this.view.selection.ids;
+    if (crop.active && (ids.length !== 1 || ids[0] !== crop.id)) crop.finish();
+    const wanted = ids.filter((id) => byId.has(id) && id !== crop.id);
     const keep = new Set(wanted);
     for (const [id, parts] of this.parts) {
       if (keep.has(id)) continue;

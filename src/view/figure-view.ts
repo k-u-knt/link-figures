@@ -457,6 +457,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** The stage shows an armed tool by its cursor (`.lf-tool-armed` in styles.css), and the toolbar by its button. */
   private setArmedTool(tool: Command | null): void {
     if (tool === this.armedTool) return;
+    // Arming a tool finishes crop mode.
+    if (tool) this.pointer.finishCrop();
     this.armedTool = tool;
     this.stageEl.classList.toggle("lf-tool-armed", tool !== null);
     if (tool) this.stageEl.style.setProperty("--lf-tool-cursor", tool.cursor ?? "crosshair");
@@ -472,6 +474,21 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** The natural size of the image a node shows if it has loaded; null while it has not, and for a node that shows none. */
   imageSizeNow(id: NodeId): { width: number; height: number } | null {
     return this.nodeHost.naturalSizeNow(id);
+  }
+
+  /** The URL the image a node shows was loaded from, if it has loaded; null otherwise (the crop ghost draws an outline then). */
+  imageSourceNow(id: NodeId): string | null {
+    return this.nodeHost.imageSourceNow(id);
+  }
+
+  /** Starts crop mode on the image panel `id` (a rotated panel shows a Notice instead). */
+  startCrop(id: NodeId): void {
+    this.pointer.startCrop(id);
+  }
+
+  /** Shows `message` to the user as a Notice. */
+  notify(message: string): void {
+    new Notice(message);
   }
 
   /** The Maximum page size setting, in millimetres. */

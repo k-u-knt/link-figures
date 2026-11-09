@@ -27,6 +27,12 @@ export interface EditorView extends FigureViewLike {
   imageSize(id: NodeId): Promise<{ width: number; height: number }>;
   /** The natural size of the image a node shows if it has loaded, else null (a command that cannot wait asks this). */
   imageSizeNow(id: NodeId): { width: number; height: number } | null;
+  /** The URL the image a node shows was loaded from, if it has loaded, else null. */
+  imageSourceNow(id: NodeId): string | null;
+  /** Starts crop mode on the page for the image panel `id`; a rotated panel shows a Notice instead. */
+  startCrop(id: NodeId): void;
+  /** Shows `message` to the user as a Notice. */
+  notify(message: string): void;
   /** Tells a node what a double-click on it tells it (a text node starts editing). */
   activateNode(id: NodeId): void;
   /** The largest width or height a page may have, in millimetres (the Maximum page size setting). */

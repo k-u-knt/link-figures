@@ -120,6 +120,12 @@ class FileNodeRenderer implements NodeRenderer {
     return n && n.width > 0 && n.height > 0 ? { ...n } : null;
   }
 
+  /** The URL the shown image was loaded from, once it has loaded; null otherwise. */
+  imageSourceNow(): string | null {
+    const img = this.imageEl;
+    return img && this.natural ? img.currentSrc || img.src || null : null;
+  }
+
   private applyBox(): void {
     const n = this.node;
     const style = this.el.style;

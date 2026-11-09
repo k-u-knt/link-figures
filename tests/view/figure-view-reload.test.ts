@@ -75,7 +75,7 @@ function setup(initial: Document = figure()) {
   const internals = view as unknown as Record<string, unknown>;
 
   const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn() };
-  const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn() };
+  const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn(), finishCrop: vi.fn() };
   const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
   const toolbar = { render: vi.fn() };
   const inspector = { render: vi.fn() };

@@ -39,6 +39,8 @@ function setup(build: (doc: Document) => void = () => {}) {
     readOnly: false,
     plugin: { registries: createRegistries() },
     viewOption: () => undefined,
+    // No image has loaded: an image panel's double-click starts crop mode only once one has (see tests/view/crop-session.test.ts).
+    imageSizeNow: () => null,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     nodeHost: { elementFor: (id: string) => els.get(id) },
     pageLayer: { overlayHost: () => { throw new Error("no overlay"); } },

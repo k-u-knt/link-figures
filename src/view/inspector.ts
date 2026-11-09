@@ -698,16 +698,16 @@ export class Inspector {
       write: (key, value, step) => {
         const route = type?.fieldRoute?.(key);
         if (route) {
-          // A commit of the value the field already reads (a field left after a histogram drag set it) is no edit, and
-          // no undo step. A gesture's writes are kept: its "start" opens the step the rest merge into.
-          const node = live();
-          if (step === undefined && node && Object.is(route.read(node, this.context()), value)) return;
           // One call of the type's command per selected node of the type (or the first only), in one commit, as `node.update` writes are.
           const ctx = this.context();
-          const routed = this.view.store.doc.nodes
+          const applicable = this.view.store.doc.nodes
             .filter((node) => (route.firstOnly ? node.id === first.id : targets.has(node.id)) && node.type === first.type)
-            .filter((node) => route.applies?.(node, this.view.store.doc, ctx) ?? true)
-            .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value, ctx)));
+            .filter((node) => route.applies?.(node, this.view.store.doc, ctx) ?? true);
+          // A commit of the value every target already reads (a field left after a histogram drag set it) is no edit,
+          // and no undo step; one target that reads another value is written. A gesture's writes are kept: its "start"
+          // opens the step the rest merge into.
+          if (step === undefined && applicable.every((node) => Object.is(route.read(node, ctx), value))) return;
+          const routed = applicable.map((node) => prepareCall(this.view.plugin.registries, route.call(node, value, ctx)));
           if (routed.length > 0) this.runWrite(key, fields, routed, step);
           return;
         }

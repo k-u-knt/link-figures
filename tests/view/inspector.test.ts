@@ -502,6 +502,40 @@ describe("node section", () => {
     expect(notices).toEqual([]);
   });
 
+  test("a crop inset committed with the first panel's value still sets the other selected panels", () => {
+    const { el, store, selection, view } = setup((d) => {
+      addNode(d, { id: "p-a", crop: { x: 0.1, y: 0, w: 0.9, h: 1 } } as Partial<Node>);
+      addNode(d, { id: "p-b", crop: { x: 0, y: 0, w: 1, h: 1 } } as Partial<Node>);
+    });
+    // Both images have loaded, so panel.crop can keep them where they are.
+    Object.assign(view, { imageSizeNow: () => ({ width: 100, height: 100 }) });
+    selection.set(["p-a", "p-b"]);
+    // The field shows the first panel's inset.
+    expect(el.control("crop.left").value).toBe("10");
+    el.typeInto("crop.left", "10");
+    expect((store.doc.nodes.find((n) => n.id === "p-b") as FileNode).crop?.x).toBeCloseTo(0.1);
+  });
+
+  test("a crop inset committed with the value every selected panel already reads writes nothing", () => {
+    const crop = { x: 0.1, y: 0, w: 0.9, h: 1 };
+    const { el, store, selection, view } = setup((d) => {
+      addNode(d, { id: "p-a", crop } as Partial<Node>);
+      addNode(d, { id: "p-b", crop, width: 200 } as Partial<Node>);
+    });
+    // Each image fills its box once cropped (no letterbox), so the shown crop is the stored one.
+    Object.assign(view, {
+      imageSizeNow: (id: string) => {
+        const node = store.doc.nodes.find((n) => n.id === id)!;
+        return { width: node.width / crop.w, height: node.height / crop.h };
+      },
+    });
+    selection.set(["p-a", "p-b"]);
+    const steps = labelsOf(store);
+    el.typeInto("crop.left", "10");
+    expect(steps).toEqual([]);
+    expect(store.doc.nodes.map((n) => (n as FileNode).crop)).toEqual([crop, crop]);
+  });
+
   test("an emptied name is removed, not kept as an empty string", () => {
     const { el, store, selection } = setup((d) => { addNode(d, { id: "p-img", name: "Plot" }); });
     selection.set(["p-img"]);

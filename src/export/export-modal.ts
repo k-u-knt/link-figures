@@ -44,6 +44,7 @@ export function viewExportTarget(view: LinkFiguresView, file: { path: string }, 
       trim: browserTrimDeps,
       isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
     },
+    drawn: () => view.nodeHost.drawn(),
   };
 }
 
@@ -58,6 +59,29 @@ export class ExportModal extends Modal {
   private optionsEl: HTMLElement | null = null;
   private busy = false;
 
+  /** The export dialog that is open, if one is: there is never more than one (see `show`). */
+  private static shown: ExportModal | null = null;
+
+  /** The export dialog that is open, or null. */
+  static openDialog(): ExportModal | null {
+    return ExportModal.shown;
+  }
+
+  /**
+   * Opens the export dialog for `view`; when one is already open (for any figure), that one is kept and focused
+   * instead of a second being stacked on it. Returns the dialog shown.
+   */
+  static show(view: LinkFiguresView): ExportModal {
+    const open = ExportModal.shown;
+    if (open) {
+      open.focus();
+      return open;
+    }
+    const modal = new ExportModal(view);
+    modal.open();
+    return modal;
+  }
+
   constructor(private readonly view: LinkFiguresView) {
     super(view.app);
     // The page the user is looking at when they ask, not wherever the view has moved to when they press Export.
@@ -67,6 +91,7 @@ export class ExportModal extends Modal {
   }
 
   onOpen(): void {
+    ExportModal.shown = this;
     const { contentEl } = this;
     this.setTitle("Export figure");
     contentEl.empty();
@@ -135,8 +160,15 @@ export class ExportModal extends Modal {
   }
 
   onClose(): void {
+    if (ExportModal.shown === this) ExportModal.shown = null;
     this.contentEl.empty();
     this.optionsEl = null;
+  }
+
+  /** Brings the keyboard back to the dialog: its first control, else the dialog itself. */
+  private focus(): void {
+    const first = this.modalEl.querySelector<HTMLElement>("select, input, button");
+    (first ?? this.modalEl).focus();
   }
 
   /** The chosen format's options, under the Format menu, each at its default. */

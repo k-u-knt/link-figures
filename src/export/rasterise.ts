@@ -1,3 +1,5 @@
+import { isTransparentPaper } from "../model/paper";
+
 /** Pixels as `getImageData` gives them: RGBA, 8 bits a sample, row by row. */
 export interface RasterImage {
   width: number;
@@ -27,11 +29,10 @@ export interface RasterBackend {
 }
 
 const WHITE = "#ffffff";
-const TRANSPARENT = new Set(["", "none", "transparent"]);
 
 /** What a page is flattened onto: its paper, or white when the paper is transparent. */
 export function paperBackground(paper: string): string {
-  return TRANSPARENT.has(paper.trim().toLowerCase()) ? WHITE : paper;
+  return isTransparentPaper(paper) ? WHITE : paper;
 }
 
 const ROOT = /<svg\b[^>]*>/;

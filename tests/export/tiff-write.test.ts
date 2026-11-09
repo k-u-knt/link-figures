@@ -1,5 +1,5 @@
 import UTIF from "utif";
-import { encodeTiffRgb as encodeParts } from "../../src/export/tiff-write";
+import { encodeTiffRgb as encodeParts, yieldToEventLoop } from "../../src/export/tiff-write";
 
 /** RGB as RGBA, opaque. */
 function rgba(rgb: Uint8Array): Uint8ClampedArray {
@@ -103,4 +103,43 @@ test("the parts are the header, the strip, and the IFD with its values", async (
   const parts = await encodeParts(rgba(gradient(3, 2)), 3, 2, 300, "none");
   expect(parts[0].length).toBe(8);
   expect(parts.at(-1)!.length).toBeGreaterThan(2 + 13 * 12 + 4);
+});
+
+describe("yieldToEventLoop", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("yields through a MessageChannel message, not setTimeout (which hidden windows throttle)", async () => {
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const made = vi.fn();
+    const Real = globalThis.MessageChannel;
+    vi.stubGlobal(
+      "MessageChannel",
+      class extends Real {
+        constructor() {
+          super();
+          made();
+        }
+      },
+    );
+    await yieldToEventLoop();
+    expect(made).toHaveBeenCalledTimes(1);
+    expect(timeout).not.toHaveBeenCalled();
+    timeout.mockRestore();
+  });
+
+  test("is a macrotask: microtasks queued before it run first", async () => {
+    const order: string[] = [];
+    const done = yieldToEventLoop().then(() => order.push("yield"));
+    void Promise.resolve().then(() => order.push("micro"));
+    await done;
+    expect(order).toEqual(["micro", "yield"]);
+  });
+
+  test("falls back to setTimeout(0) without MessageChannel", async () => {
+    vi.stubGlobal("MessageChannel", undefined);
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    await yieldToEventLoop();
+    expect(timeout).toHaveBeenCalledWith(expect.any(Function), 0);
+    timeout.mockRestore();
+  });
 });

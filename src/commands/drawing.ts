@@ -310,7 +310,8 @@ const PAGE_FIELDS: ParamSpec = {
   preset: { type: "string" },
   width: { type: "number", exclusiveMinimum: 0 },
   height: { type: "number", exclusiveMinimum: 0 },
-  paper: { type: "string", pattern: COLOR_PATTERN },
+  // A colour, or "transparent" for no paper (`TRANSPARENT_PAPER`).
+  paper: { type: "string", pattern: `${COLOR_PATTERN}|transparent` },
   margins: {
     type: "object",
     properties: {

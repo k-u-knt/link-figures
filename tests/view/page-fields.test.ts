@@ -18,6 +18,8 @@ test("page fields: size and margins are millimetre numbers, paper is a colour", 
   expect(byKey.get("width")).toMatchObject({ kind: "number", unit: "mm", min: 10, step: 0.5 });
   expect(byKey.get("height")).toMatchObject({ kind: "number", unit: "mm", min: 10, step: 0.5 });
   expect(byKey.get("paper")!.kind).toBe("color");
+  // It may be transparent: a nullable colour (see the inspector's page section).
+  expect(byKey.get("paper")!.nullable).toBe(true);
   for (const side of ["top", "right", "bottom", "left"]) expect(byKey.get(`margins.${side}`)).toMatchObject({ kind: "number", unit: "mm", min: 0 });
 });
 

@@ -4,6 +4,7 @@ import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Registries } from "../registry";
 import type { SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
+import { isTransparentPaper } from "../model/paper";
 
 /** For a value written between double quotes. */
 export function escapeAttr(s: string): string {
@@ -101,7 +102,8 @@ export function buildPageSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}mm" height="${page.height}mm" viewBox="0 0 ${size.width} ${size.height}">`,
   ];
   if (defs.length > 0) parts.push(`<defs>${defs.join("")}</defs>`);
-  if (opts.paper !== false) parts.push(`<rect width="${size.width}" height="${size.height}" fill="${escapeAttr(page.paper)}"/>`);
+  // A transparent paper is no rectangle at all (an SVG viewer shows what is behind; a PDF page stays clear).
+  if (opts.paper !== false && !isTransparentPaper(page.paper)) parts.push(`<rect width="${size.width}" height="${size.height}" fill="${escapeAttr(page.paper)}"/>`);
   parts.push(...body, "</svg>");
   return { svg: parts.join("\n"), warnings, drawn: body.length };
 }

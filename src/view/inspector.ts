@@ -2,6 +2,7 @@ import { prepareCall, runInOneCommit, type PreparedCall } from "../commands/head
 import { mmToPx, pxToMm } from "../model/geometry";
 import type { Node, NodeId, Page, Paint } from "../model/types";
 import { childrenOf } from "../model/groups";
+import { isTransparentPaper, TRANSPARENT_PAPER } from "../model/paper";
 import { getPreset } from "../model/presets";
 import type { HistogramResult } from "../model/histogram";
 import type { UndoStep } from "../registry/command";
@@ -654,11 +655,14 @@ export class Inspector {
         if (!current) return undefined;
         // A preset that is not one of ours (an edited file) is shown as custom, which is what it is.
         if (key === "preset") return current.preset !== undefined && getPreset(current.preset) ? current.preset : CUSTOM_PRESET;
+        // A transparent paper is the nullable colour's "none".
+        if (key === "paper") return isTransparentPaper(current.paper) ? null : current.paper;
         return readValue(current, key);
       },
       write: (key, value) => {
         const current = live();
         if (!current) return;
+        if (key === "paper" && value === null) value = TRANSPARENT_PAPER;
         const call = prepareCall(this.view.plugin.registries, { id: "page.update", args: { id, patch: patchFor(current, key, value) } });
         this.runWrite(key, fields, [call]);
       },

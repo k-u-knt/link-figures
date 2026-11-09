@@ -18,7 +18,8 @@ export function pageFields(): Field[] {
     },
     { kind: "number", key: "width", label: "Width", unit: "mm", min: 10, step: 0.5 },
     { kind: "number", key: "height", label: "Height", unit: "mm", min: 10, step: 0.5 },
-    { kind: "color", key: "paper", label: "Paper" },
+    // Off is a transparent paper (the inspector reads and writes `"transparent"` as none).
+    { kind: "color", key: "paper", label: "Paper", nullable: true },
     margin("top"),
     margin("right"),
     margin("bottom"),

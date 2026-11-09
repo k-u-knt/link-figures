@@ -191,3 +191,17 @@ test("the output has no foreignObject, class, filter or mask", () => {
   const svg = buildPageSvg(d, d.pages[0], reg(), new Map([[d.nodes[0].id, image()]])).svg;
   expect(svg).not.toMatch(/foreignObject|class=|<filter|<mask/);
 });
+
+test("a transparent paper has no paper rectangle; nodes are drawn as before", () => {
+  for (const paper of ["transparent", "none", "", " TRANSPARENT "]) {
+    const d = docWith({});
+    d.pages[0].paper = paper;
+    const { svg } = buildPageSvg(d, d.pages[0], reg(), new Map());
+    d.pages[0].paper = "#ffffff";
+    const white = buildPageSvg(d, d.pages[0], reg(), new Map()).svg;
+    expect(svg).not.toContain("transparent");
+    // The same document but for the paper's rectangle.
+    expect(svg).toBe(white.replace(/<rect width="[^"]*" height="[^"]*" fill="#ffffff"\/>\n/, ""));
+    expect(svg).not.toBe(white);
+  }
+});

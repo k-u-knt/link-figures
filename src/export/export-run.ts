@@ -206,6 +206,25 @@ export interface FigureExportTarget {
   currentPage: Page | undefined;
   settings: Pick<LinkFiguresSettings, "exportFolder" | "exportDpi" | "maxPageSizeMm">;
   deps: ExportDeps;
+  /**
+   * Resolves once its links are resolved and its nodes drawn (`NodeHost.drawn`), so content cards can be snapshotted;
+   * waited on for at most `DRAWN_WAIT_MS` before the export. None: the figure is taken as drawn.
+   */
+  drawn?: () => Promise<void>;
+}
+
+/** How long an export waits for its figure to be drawn (`FigureExportTarget.drawn`) before it goes on with a warning. */
+export const DRAWN_WAIT_MS = 30_000;
+
+/** Whether `drawn()` settled (resolved or rejected: a drawing that failed is as drawn as it will get) within `ms`. */
+async function drawnWithin(drawn: () => Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)));
+  try {
+    return await Promise.race([drawn().then(() => true, () => true), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Whether `asked` is a `pages` request in form: `"current"`, `"all"` or a list of page ids (left out is `"current"`). */
@@ -255,10 +274,13 @@ export async function exportFigure(target: FigureExportTarget, request: ExportRe
   const { exporter, dpi, options } = checkRequest(target.deps.registries, target.settings.exportDpi, request);
   const pages = pagesOf(target.doc, target.currentPage, request.pages);
   const folder = exportFolderFor(target.settings, target.figurePath);
+  // Content cards are snapshotted from the stage: wait (bounded) for it to settle, open figures too.
+  const drawn = target.drawn ? await drawnWithin(target.drawn, DRAWN_WAIT_MS) : true;
   const { paths, warnings } = await runExport(
     { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi, maxPageSizeMm: target.settings.maxPageSizeMm, options },
     target.deps,
   );
+  if (!drawn) warnings.unshift(`"${target.baseName}": exported before every item was drawn`);
   return { files: paths, warnings, folder };
 }
 
@@ -284,7 +306,8 @@ export interface BackgroundExportHost {
 /**
  * Exports the figure at `path`, which no view has open, as `exportFigure` does: the request is checked first, against
  * the figure's file for its pages, so that a refusal opens no tab; then the figure is opened in a background tab, which
- * is waited on until it is drawn (a content card is snapshotted from the stage) and closed again whatever happens.
+ * is waited on until it is drawn (a content card is snapshotted from the stage; at most `DRAWN_WAIT_MS`) and closed
+ * again whatever happens.
  */
 export async function exportInBackground(host: BackgroundExportHost, path: string, request: ExportRequest): Promise<ExportOutcome> {
   checkRequest(host.registries, host.settings.exportDpi, request);
@@ -292,8 +315,8 @@ export async function exportInBackground(host: BackgroundExportHost, path: strin
   pagesOf(doc, doc.pages[0], request.pages);
   const figure = await host.open(path);
   try {
-    await figure.drawn();
-    const { files, warnings } = await exportFigure(figure.target, request);
+    // The bounded wait for it to be drawn is exportFigure's.
+    const { files, warnings } = await exportFigure({ ...figure.target, drawn: () => figure.drawn() }, request);
     return { files, warnings };
   } finally {
     figure.close();

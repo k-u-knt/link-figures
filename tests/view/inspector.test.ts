@@ -197,6 +197,34 @@ describe("page section", () => {
     expect(store.doc.pages[0].paper).toBe("#f4f4f4");
   });
 
+  test("the paper may be transparent: a checkbox beside its colour turns the paper on and off", () => {
+    const { el, store, labels } = setup();
+    const seen = labels();
+    const paper = el.control("paper");
+    const toggle = el.find((e) => e.hasClass("lf-null-toggle"))!;
+    expect(toggle.checked).toBe(true);
+    paper.value = "#f4f4f4";
+    paper.fire("input");
+    toggle.checked = false;
+    toggle.fire("change");
+    expect(store.doc.pages[0].paper).toBe("transparent");
+    expect(paper.disabled).toBe(true);
+    expect(toggle.checked).toBe(false);
+    // The colour last shown comes back when the paper is turned on again.
+    toggle.checked = true;
+    toggle.fire("change");
+    expect(store.doc.pages[0].paper).toBe("#f4f4f4");
+    expect(seen).toEqual(["inspect:paper", "inspect:paper", "inspect:paper"]);
+  });
+
+  test("a paper the file gives as none or empty is shown as transparent", () => {
+    const { el, store } = setup();
+    for (const none of ["none", "", "Transparent"]) {
+      store.commit("edit", (d) => { d.pages[0].paper = none; });
+      expect(el.find((e) => e.hasClass("lf-null-toggle"))!.checked).toBe(false);
+    }
+  });
+
   test("a margin is written through its dotted key", () => {
     const { el, store } = setup();
     el.typeInto("margins.left", "15");

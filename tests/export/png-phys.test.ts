@@ -82,6 +82,7 @@ test("the other chunks are kept byte for byte", () => {
 test("bytes that are not a PNG, or one with no IDAT, are refused", () => {
   expect(() => withPhys(Uint8Array.from([1, 2, 3]), 300)).toThrow(/not a PNG/);
   expect(() => withPhys(png(), 300)).toThrow(/IDAT/);
+  expect(() => withPhys(png(chunk("PLTE", [0, 0, 0])), 300)).toThrow(/IDAT/);
   const truncated = png(idat).subarray(0, 40);
   expect(() => withPhys(truncated, 300)).toThrow(/PNG/);
 });
@@ -102,4 +103,14 @@ test("the input's chunks are passed through as views of it, not copies", () => {
   const input = png(idat);
   const parts = withPhysParts(input, 300);
   expect(parts.some((p) => p.buffer === input.buffer)).toBe(true);
+});
+
+test("in a palette PNG, pHYs and sRGB go before the PLTE (sRGB must precede it), not between PLTE and IDAT", () => {
+  const plte = chunk("PLTE", [0, 0, 0, 255, 255, 255]);
+  const out = readChunks(withPhys(png(plte, chunk("tRNS", [0]), idat), 300));
+  expect(out.map((c) => c.type)).toEqual(["IHDR", "pHYs", "sRGB", "PLTE", "tRNS", "IDAT", "IEND"]);
+  expect(out.every((c) => c.crcOk)).toBe(true);
+  // With an ICC profile (which must also precede PLTE): no sRGB, pHYs still before the PLTE.
+  const withProfile = readChunks(withPhys(png(chunk("iCCP", [65, 0, 0, 1]), plte, idat), 300));
+  expect(withProfile.map((c) => c.type)).toEqual(["IHDR", "iCCP", "pHYs", "PLTE", "IDAT", "IEND"]);
 });

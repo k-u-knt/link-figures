@@ -348,11 +348,20 @@ describe("page.update", () => {
     expect(store.doc).toEqual(before);
   });
 
+  test('the paper may be "transparent" (the exporters flatten it onto white where they must)', async () => {
+    const { api, doc } = setup();
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { paper: "transparent" } });
+    expect((await pageOf(doc())).paper).toBe("transparent");
+    await api.run(PATH, "page.update", { id: "pg-1", patch: { paper: "#eeeeee" } });
+    expect((await pageOf(doc())).paper).toBe("#eeeeee");
+  });
+
   test.each([
     ["a missing page", { id: "pg-9", patch: {} }, /no page "pg-9"/],
     ["a new id", { id: "pg-1", patch: { id: "pg-2" } }, /"id" cannot change/],
     ["a width of 0", { id: "pg-1", patch: { width: 0 } }, /"width" must be more than 0/],
     ["a paper that is not #rrggbb", { id: "pg-1", patch: { paper: "red" } }, /"paper" must match/],
+    ["a paper of \"none\" (only \"transparent\" says there is none)", { id: "pg-1", patch: { paper: "none" } }, /"paper" must match/],
     ["a negative margin", { id: "pg-1", patch: { margins: { top: -1 } } }, /"margins.top" must be at least 0/],
     ["a grid without spacing", { id: "pg-1", patch: { grid: { spacing: 0 } } }, /"grid.spacing" must be more than 0/],
     ["a name that is not a string", { id: "pg-1", patch: { name: 3 } }, /"name" must be a string/],

@@ -45,9 +45,9 @@ const srgbChunk = () => chunk("sRGB", Uint8Array.of(0));
 
 /**
  * The PNG with its resolution set to `dpi` and marked as sRGB, as parts to be written one after another (a Blob of
- * them), so that the image data is not copied: a `pHYs` and an `sRGB` chunk just before the first `IDAT`, and any
- * `pHYs` or `sRGB` it had left out. A PNG with an ICC profile (`iCCP`) gets no `sRGB`, as the two must not both be
- * there. Every other chunk is kept as it was, as a view of the input.
+ * them), so that the image data is not copied: a `pHYs` and an `sRGB` chunk just before the first `PLTE` or `IDAT`
+ * (whichever comes first), and any `pHYs` or `sRGB` it had left out. A PNG with an ICC profile (`iCCP`) gets no
+ * `sRGB`, as the two must not both be there. Every other chunk is kept as it was, as a view of the input.
  */
 export function withPhys(png: Uint8Array, dpi: number): Uint8Array[] {
   if (png.length < SIGNATURE.length || SIGNATURE.some((b, i) => png[i] !== b)) throw new Error("the bytes are not a PNG");
@@ -55,6 +55,7 @@ export function withPhys(png: Uint8Array, dpi: number): Uint8Array[] {
   const parts: Uint8Array[] = [png.subarray(0, SIGNATURE.length)];
   let placed = false;
   let hasProfile = false;
+  let hasData = false;
   for (let at = SIGNATURE.length; at < png.length; ) {
     if (at + 12 > png.length) throw new Error("the PNG ends inside a chunk");
     const length = view.getUint32(at);
@@ -62,7 +63,9 @@ export function withPhys(png: Uint8Array, dpi: number): Uint8Array[] {
     if (end > png.length) throw new Error("the PNG ends inside a chunk");
     const type = String.fromCharCode(...png.subarray(at + 4, at + 8));
     if (type === "iCCP") hasProfile = true;
-    if (type === "IDAT" && !placed) {
+    if (type === "IDAT") hasData = true;
+    // sRGB must precede PLTE and IDAT, pHYs IDAT: both go before whichever comes first. An iCCP precedes PLTE too.
+    if ((type === "PLTE" || type === "IDAT") && !placed) {
       parts.push(physChunk(dpi));
       if (!hasProfile) parts.push(srgbChunk());
       placed = true;
@@ -70,6 +73,6 @@ export function withPhys(png: Uint8Array, dpi: number): Uint8Array[] {
     if (type !== "pHYs" && type !== "sRGB") parts.push(png.subarray(at, end));
     at = end;
   }
-  if (!placed) throw new Error("the PNG has no IDAT chunk");
+  if (!hasData) throw new Error("the PNG has no IDAT chunk");
   return parts;
 }

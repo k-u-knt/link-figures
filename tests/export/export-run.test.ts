@@ -10,7 +10,7 @@ vi.mock("obsidian", async () => {
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile, Modal: class {}, Notice: class {}, Setting: class {} };
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
-const { exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS } = await import("../../src/export/export-run");
+const { exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS, DRAWN_WAIT_MS } = await import("../../src/export/export-run");
 type FigureExportTarget = import("../../src/export/export-run").FigureExportTarget;
 
 const FIELDS: Field[] = [
@@ -135,6 +135,49 @@ describe("exportFigure", () => {
   });
 });
 
+describe("exportFigure waits for the figure to be drawn", () => {
+  afterEach(() => vi.useRealTimers());
+
+  test("an open figure is exported only once it is drawn; no warning then", async () => {
+    let finish: () => void = () => {};
+    const { t, spy } = target({ drawn: () => new Promise<void>((resolve) => (finish = resolve)) });
+    const out = exportFigure(t, { format: "spy" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(spy.runs).toEqual([]);
+    finish();
+    expect((await out).warnings).toEqual(["said"]);
+    expect(spy.runs).toHaveLength(1);
+  });
+
+  test(`the wait is bounded (${DRAWN_WAIT_MS / 1000} s): the export goes on, first in the report that not every item was drawn`, async () => {
+    vi.useFakeTimers();
+    const { t, spy } = target({ drawn: () => new Promise<void>(() => {}) });
+    const out = exportFigure(t, { format: "spy" });
+    await vi.advanceTimersByTimeAsync(DRAWN_WAIT_MS - 1);
+    expect(spy.runs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    const done = await out;
+    expect(spy.runs).toHaveLength(1);
+    expect(done.warnings).toEqual(['"Fig": exported before every item was drawn', "said"]);
+    expect(DRAWN_WAIT_MS).toBe(30_000);
+  });
+
+  test("a drawing that rejects counts as drawn; the timer is cleared", async () => {
+    vi.useFakeTimers();
+    const { t } = target({ drawn: () => Promise.reject(new Error("no")) });
+    expect((await exportFigure(t, { format: "spy" })).warnings).toEqual(["said"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("a bad request is refused before the wait", async () => {
+    const drawn = vi.fn(() => new Promise<void>(() => {}));
+    const { t } = target({ drawn });
+    await expect(exportFigure(t, { format: "gif" })).rejects.toThrow(/no format/);
+    await expect(exportFigure(t, { format: "spy", pages: ["nope"] })).rejects.toThrow(/no page/);
+    expect(drawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("exportInBackground", () => {
   /** A host whose figure opens in a "tab" that records being opened, drawn and closed. */
   function background(over: { open?: () => Promise<never> } = {}) {
@@ -175,6 +218,20 @@ describe("exportInBackground", () => {
     expect((await out).files).toEqual(["figs/Fig - Page 1.txt", "figs/Fig - Page 2.txt", "figs/Fig - Page 3.txt"]);
     expect(b.events).toEqual(["open", "drawing", "drawn", "close"]);
     expect(b.spy.runs).toHaveLength(1);
+  });
+
+  test("a background figure that never finishes drawing is exported after the bounded wait, with the warning", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = background();
+      const out = exportInBackground(b.host, b.t.figurePath, { format: "spy" });
+      await vi.advanceTimersByTimeAsync(DRAWN_WAIT_MS);
+      const done = await out;
+      expect(done.warnings[0]).toBe('"Fig": exported before every item was drawn');
+      expect(b.events).toEqual(["open", "drawing", "close"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("the tab is closed when the export fails", async () => {

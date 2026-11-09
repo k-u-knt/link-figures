@@ -364,7 +364,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       new Notice("Link Figures: there is no figure to export.");
       return;
     }
-    new ExportModal(this).open();
+    // An export dialog already open is focused, not stacked on.
+    ExportModal.show(this);
   }
 
   // What the commands, the toolbar and the inspector use.

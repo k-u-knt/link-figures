@@ -16,6 +16,13 @@ function escapeText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Where a text node's `<text>` starts: `x` at the aligned edge of the box, `y` on the first baseline. */
+export function textNodeOrigin(node: TextNode): { x: number; y: number } {
+  const { font } = node;
+  const x = font.align === "center" ? node.x + node.width / 2 : font.align === "right" ? node.x + node.width : node.x;
+  return { x, y: node.y + font.size * PT_TO_PX };
+}
+
 /**
  * A text node as an SVG fragment, in the node's own (unrotated) coordinates: one `<text>` whose first baseline is a
  * font size below the top of the box, and one `<tspan>` per line of the text, each starting at the same `x` and a line
@@ -28,11 +35,11 @@ function escapeText(s: string): string {
 export function textNodeSvg(node: TextNode, _ctx: SvgContext): string {
   const { font } = node;
   const sizePx = font.size * PT_TO_PX;
-  const x = font.align === "center" ? node.x + node.width / 2 : font.align === "right" ? node.x + node.width : node.x;
+  const { x, y } = textNodeOrigin(node);
 
   const attrs = [
     `x="${x}"`,
-    `y="${node.y + sizePx}"`,
+    `y="${y}"`,
     `font-family="${escapeAttr(font.family)}"`,
     `font-size="${sizePx}"`,
   ];

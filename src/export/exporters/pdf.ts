@@ -11,18 +11,14 @@ import { buildPageSvg } from "../svg-builder";
 import { normaliseUserSpaceMarkers } from "../svg-markers";
 import { normalisePatternOrigins } from "../svg-patterns";
 import { outlinePaintedStrokes } from "../svg-stroke-paints";
+import { faceResolver, mergeFaces, prepareFonts, registerFaces, type FaceResolver, type RegisteredFace } from "../pdf-fonts";
+import { textNodeOrigin } from "../../nodes/text-node-svg";
 
 const PDF_MIME = "application/pdf";
 const SVG_MIME = "image/svg+xml";
 const MAX_PARSE_ERROR_CHARS = 200;
 /** What the SVG builder says about a PDF panel it had to draw from its raster; here the panels are embedded as vectors instead. */
 const RASTERISED_PANEL_WARNING = /PDF panel rasterised/;
-/**
- * The font families svg2pdf.js sets text in as they are, or as their metric twin: jsPDF has only the standard PDF fonts,
- * so Arial is drawn as Helvetica and Times New Roman as Times. Any other family (Calibri, Georgia, and Courier New too)
- * falls back to Times (`findFirstAvailableFontFamily` in svg2pdf.js), lower-cased here.
- */
-const PDF_FONT_FAMILIES = new Set(["arial", "helvetica", "times new roman"]);
 
 type JsPdfConstructor = typeof JsPdf;
 
@@ -40,10 +36,14 @@ function parseSvg(svg: string, page: Page): Element {
   return parsed.documentElement;
 }
 
-/** A jsPDF document whose first page has the figure page's size. */
-function createPdf(jsPDF: JsPdfConstructor, page: Page): JsPdf {
-  // Fonts: nothing to embed yet. Text nodes (Task 16) register their font files on the document here, before any page is drawn.
-  return new jsPDF({ unit: "mm", format: [page.width, page.height], orientation: orientationOf(page), compress: true });
+/**
+ * A jsPDF document whose first page has the figure page's size, with the faces its own SVGs use registered before
+ * anything is drawn. With no faces it is the document it always was (§8.7).
+ */
+function createPdf(jsPDF: JsPdfConstructor, page: Page, faces: RegisteredFace[]): JsPdf {
+  const pdf = new jsPDF({ unit: "mm", format: [page.width, page.height], orientation: orientationOf(page), compress: true });
+  registerFaces(pdf, faces);
+  return pdf;
 }
 
 /**
@@ -63,6 +63,38 @@ function ownerLabel(doc: Document, page: Page): (el: Element) => string {
 }
 
 /**
+ * Names the owner of a `<text>` for a font warning: a linked SVG's panel (as `ownerLabel`), else the text node whose
+ * `<text>` it is (found by where it starts and its family, as the text node draws them), else the page.
+ */
+function textOwnerLabel(doc: Document, page: Page): (el: Element) => string {
+  const owner = ownerLabel(doc, page);
+  const labels = doc.nodes.flatMap((n) => (n.page === page.id && n.type === "text" ? [n] : []));
+  return (el) => {
+    const named = owner(el);
+    if (named !== `Page "${page.name}"`) return named;
+    const text = el.closest("text") ?? el;
+    const node = labels.find((n) => {
+      const { x, y } = textNodeOrigin(n);
+      return text.getAttribute("x") === String(x) && text.getAttribute("y") === String(y) && text.getAttribute("font-family") === n.font.family;
+    });
+    return node ? nodeLabel(doc, node) : named;
+  };
+}
+
+/** What every document of one export shares for its fonts: the faces found so far, and the warnings said. */
+interface FontPass {
+  resolve: FaceResolver;
+  warnings: Set<string>;
+}
+
+/** The PDF copy of a page's SVG, with the faces it uses (see `prepareFonts`); its warnings go to the pass. */
+async function fontsFor(fonts: FontPass, svg: string, doc: Document, page: Page): Promise<{ svg: string; faces: RegisteredFace[] }> {
+  const prepared = await prepareFonts(svg, fonts.resolve, textOwnerLabel(doc, page));
+  for (const warning of prepared.warnings) fonts.warnings.add(warning);
+  return prepared;
+}
+
+/**
  * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
  * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width), and gradient
  * and pattern strokes, which svg2pdf.js leaves unpainted, for their outlines filled with the paint. Patterns placed by
@@ -76,12 +108,14 @@ async function drawSvg(pdf: JsPdf, svg: string, doc: Document, page: Page, warni
 }
 
 /** One PDF holding a page per figure page, each drawn from its own SVG. */
-async function plainPdf(jsPDF: JsPdfConstructor, doc: Document, pages: Page[], svgs: string[], warnings: Set<string>): Promise<Blob> {
+async function plainPdf(jsPDF: JsPdfConstructor, doc: Document, pages: Page[], svgs: string[], fonts: FontPass, warnings: Set<string>): Promise<Blob> {
+  const prepared: { svg: string; faces: RegisteredFace[] }[] = [];
+  for (const [i, page] of pages.entries()) prepared.push(await fontsFor(fonts, svgs[i], doc, page));
   // jsPDF starts with one page, so the first page sets the document up and the rest are added.
-  const pdf = createPdf(jsPDF, pages[0]);
+  const pdf = createPdf(jsPDF, pages[0], mergeFaces(prepared.map((p) => p.faces)));
   for (const [i, page] of pages.entries()) {
     if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
-    await drawSvg(pdf, svgs[i], doc, page, warnings);
+    await drawSvg(pdf, prepared[i].svg, doc, page, warnings);
   }
   return pdf.output("blob");
 }
@@ -102,15 +136,6 @@ function pdfPanelsOf(nodes: Node[], assets: AssetMap): Map<NodeId, PdfPanel> {
 }
 
 type PdfLib = typeof import("@cantoo/pdf-lib");
-
-/** One warning per text node whose font the PDF cannot set, naming the font it gets instead. */
-function fontWarnings(doc: Document, nodes: Node[]): string[] {
-  return nodes.flatMap((node) =>
-    node.type === "text" && !PDF_FONT_FAMILIES.has(node.font.family.trim().toLowerCase())
-      ? [`${nodeLabel(doc, node)}: font "${node.font.family}" substituted by Times in PDF`]
-      : [],
-  );
-}
 
 /**
  * The source PDF as pdf-lib reads it. A file with only an owner password (which restricts what a reader may do) opens
@@ -134,9 +159,10 @@ interface PagePlan {
 }
 
 /** The layer's SVG drawn by svg2pdf.js on a jsPDF page of its own, as the bytes of that one-page PDF. */
-async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, doc: Document, page: Page, warnings: Set<string>): Promise<ArrayBuffer> {
-  const pdf = createPdf(jsPDF, page);
-  await drawSvg(pdf, svg, doc, page, warnings);
+async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, doc: Document, page: Page, fonts: FontPass, warnings: Set<string>): Promise<ArrayBuffer> {
+  const prepared = await fontsFor(fonts, svg, doc, page);
+  const pdf = createPdf(jsPDF, page, prepared.faces);
+  await drawSvg(pdf, prepared.svg, doc, page, warnings);
   return pdf.output("arraybuffer");
 }
 
@@ -188,7 +214,7 @@ async function drawPdfPanel(doc: Document, lib: PdfLib, out: PDFDocument, target
  * panel's source page is embedded as a page of its own, with what its node type draws over it (its frame) as a layer
  * of its own on top, all stacked on one output page in z order.
  */
-async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: PagePlan[], warnings: Set<string>): Promise<Blob> {
+async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: PagePlan[], fonts: FontPass, warnings: Set<string>): Promise<Blob> {
   const lib = await import("@cantoo/pdf-lib");
   const out = await lib.PDFDocument.create();
   for (const { page, svg: pageSvg, panels, layers } of plans) {
@@ -208,7 +234,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
         // What drawing the overlay had to say (a frame's paint that is not registered) is said in the notice too.
         for (const warning of overlay.warnings) warnings.add(warning);
         if (overlay.drawn > 0) {
-          const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, overlay.svg, input.doc, page, warnings));
+          const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, overlay.svg, input.doc, page, fonts, warnings));
           target.drawPage(embedded, { x: 0, y: 0, width, height });
         }
         continue;
@@ -223,7 +249,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
               only: new Set(layer.nodeIds),
               paper: index === 0,
             }).svg;
-      const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, input.doc, page, warnings));
+      const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, input.doc, page, fonts, warnings));
       target.drawPage(embedded, { x: 0, y: 0, width, height });
     }
   }
@@ -247,12 +273,10 @@ export const pdfExporter: Exporter = {
     if (input.pages.length === 0) return { files: [], warnings: input.warnings };
 
     // Check every page before loading anything heavy.
-    const fonts: string[] = [];
     const plans = input.pages.map((page): PagePlan => {
       const svg = input.svgs.get(page.id);
       if (svg === undefined) throw new Error(`No SVG was built for page "${page.name}"`);
       const nodes = input.doc.nodes.filter((n) => n.page === page.id);
-      fonts.push(...fontWarnings(input.doc, nodes));
       const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
       return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id), (n) => input.registries.nodeTypes.get(n.type)?.members !== undefined) };
     });
@@ -265,12 +289,14 @@ export const pdfExporter: Exporter = {
     const name = `${input.baseName}.pdf`;
     // What only the PDF finds out: strokes it could not keep as vectors, and what a PDF panel's overlay layer said.
     const strokes = new Set<string>();
+    // Fonts are looked up once per export, and each document registers only the faces its own SVGs use (§8.7).
+    const fonts: FontPass = { resolve: faceResolver(input.registries), warnings: new Set() };
     if (plans.every((plan) => plan.panels.size === 0)) {
-      const blob = await plainPdf(jsPDF, input.doc, input.pages, plans.map((plan) => plan.svg), strokes);
-      return { files: [{ name, blob }], warnings: [...new Set([...input.warnings, ...fonts, ...strokes])] };
+      const blob = await plainPdf(jsPDF, input.doc, input.pages, plans.map((plan) => plan.svg), fonts, strokes);
+      return { files: [{ name, blob }], warnings: [...new Set([...input.warnings, ...fonts.warnings, ...strokes])] };
     }
-    const blob = await layeredPdf(jsPDF, input, plans, strokes);
+    const blob = await layeredPdf(jsPDF, input, plans, fonts, strokes);
     const kept = input.warnings.filter((w) => !RASTERISED_PANEL_WARNING.test(w));
-    return { files: [{ name, blob }], warnings: [...new Set([...kept, ...fonts, ...strokes])] };
+    return { files: [{ name, blob }], warnings: [...new Set([...kept, ...fonts.warnings, ...strokes])] };
   },
 };

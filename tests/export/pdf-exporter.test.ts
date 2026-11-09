@@ -411,38 +411,21 @@ test("a crop with no area fails the export instead of drawing a broken page", as
   await expect(pdfExporter.run(f.i, {})).rejects.toThrow(new RegExp(`${escapeRe(nodeLabel(f.i.doc, node))}: .*no area`));
 });
 
-describe("fonts the PDF cannot set", () => {
-  test("a label in Calibri is reported once, naming the font it gets; Arial, Helvetica and Times New Roman are not", async () => {
+// The font pass itself (faces registered per document, the warnings) is tested with the real jsPDF and svg2pdf.js in
+// tests/export/pdf-fonts.test.ts; here only that it works from the SVG drawn, not from the document's nodes.
+describe("fonts", () => {
+  test("fonts come from the SVG drawn: a label the page's SVG does not hold is neither looked up nor reported", async () => {
     const i = input();
-    const [first, second] = i.doc.pages;
-    const label = (page: Page, family: string) => {
-      const node = textNodeDefaults(page, { text: "A" }, i.doc.nodes.map((n) => n.id));
-      node.font = { ...node.font, family };
-      i.doc.nodes.push(node);
-      return node;
-    };
-    const calibri = label(first, "Calibri");
-    for (const family of ["Arial", "helvetica", "Times New Roman"]) label(first, family);
-    const courier = label(second, "Courier New");
-    i.warnings.push("Node p-zzzz: link missing, skipped");
+    const node = textNodeDefaults(i.doc.pages[0], { text: "A" }, []);
+    node.font = { ...node.font, family: "Calibri" };
+    i.doc.nodes.push(node);
+    const find = vi.fn(async () => null);
+    i.registries.fontSources.register({ id: "fake", name: "Fake", list: async () => [], find });
     const { warnings } = await pdfExporter.run(i, {});
-    expect(warnings).toEqual([
-      "Node p-zzzz: link missing, skipped",
-      `${nodeLabel(i.doc, calibri)}: font "Calibri" substituted by Times in PDF`,
-      `${nodeLabel(i.doc, courier)}: font "Courier New" substituted by Times in PDF`,
-    ]);
-  });
-
-  test("only the pages exported count, and the layered path reports them too", async () => {
-    const f = panelFigure();
-    f.panel(f.first, 0, [0, 0, 150, 100], pdfAsset(await sourcePdf([[300, 200]])));
-    const georgia = textNodeDefaults(f.first, { text: "B" }, f.i.doc.nodes.map((n) => n.id));
-    georgia.font = { ...georgia.font, family: "Georgia" };
-    const elsewhere = textNodeDefaults(f.second, { text: "C" }, [...f.i.doc.nodes.map((n) => n.id), georgia.id]);
-    elsewhere.font = { ...elsewhere.font, family: "Georgia" };
-    f.i.doc.nodes.push(georgia, elsewhere);
-    const { warnings } = await pdfExporter.run({ ...f.i, pages: [f.first] }, {});
-    expect(warnings).toEqual([`${nodeLabel(f.i.doc, georgia)}: font "Georgia" substituted by Times in PDF`]);
+    expect(warnings).toEqual([]);
+    expect(find).not.toHaveBeenCalled();
+    // The stand-in jsPDF has no addFont: nothing was registered.
+    expect(calls.map((c) => c[0])).toEqual(["new", "svg", "addPage", "svg", "output"]);
   });
 });
 

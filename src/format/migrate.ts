@@ -10,7 +10,7 @@ const isRecord = (v: unknown): v is Json => typeof v === "object" && v !== null 
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /**
- * Same values as `fileNodeDefaults` / `textNodeDefaults` / `shapeNodeDefaults` / `connectorNodeDefaults` in
+ * Same values as `fileNodeDefaults` / `textNodeDefaults` / `shapeNodeDefaults` / `connectorNodeDefaults` / `groupNodeDefaults` in
  * model/defaults.ts (tests keep them in step), except that a shape with no `params` gets none (they belong to its kind,
  * which may not be the default one), nor does a connector with no `routeParams`, and a connector's `ends` have no
  * default: a connector without them is malformed.
@@ -34,6 +34,7 @@ const NODE_DEFAULTS: Record<string, () => Json> = {
   text: () => ({ ...COMMON_DEFAULTS(), text: "", font: { ...DEFAULT_FONT } }),
   shape: () => ({ ...COMMON_DEFAULTS(), kind: "rect", params: {}, fill: { type: "solid", color: "#ffffff" }, border: defaultBorder() }),
   connector: () => ({ ...COMMON_DEFAULTS(), route: "straight", routeParams: {}, stroke: defaultBorder(), caps: defaultCaps() }),
+  group: () => COMMON_DEFAULTS(),
 };
 
 /** Keeps every key already in `source` (so unknown keys survive) and adds the missing ones from `defaults`. */
@@ -110,6 +111,8 @@ function migrateNode(raw: unknown, index: number): Json {
   for (const key of ["x", "y", "width", "height"]) {
     if (!isNumber(raw[key])) throw new FormatError(`Node ${id}: "${key}" must be a number`);
   }
+  // Whether the group it names exists is the store's group normaliser's to check, as the document is loaded.
+  if (raw.parent !== undefined && typeof raw.parent !== "string") throw new FormatError(`Node ${id}: "parent" must be a string`);
   if (!Object.hasOwn(NODE_DEFAULTS, type)) throw new FormatError(`Node ${id} has unsupported type "${type}"`);
   const node = fill(raw, NODE_DEFAULTS[type]());
   if (type === "file") {

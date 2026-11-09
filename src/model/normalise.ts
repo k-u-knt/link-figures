@@ -4,7 +4,7 @@ import type { Registries } from "../registry";
 import { attachTarget, nearestAnchor } from "./attach";
 import { pageOriginsPx, type Pt } from "./geometry";
 import { DocumentStore } from "./store";
-import type { ConnectorNode, Document, End } from "./types";
+import type { ConnectorNode, Document, End, Node, NodeId, PageId } from "./types";
 
 /**
  * A rule that keeps derived parts of a document consistent with the rest. The store runs every normaliser on the draft
@@ -24,6 +24,8 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
   const store = new DocumentStore(doc, now);
   // Every connector is kept in step with its items in each commit, and the document is brought in line now.
   store.addNormaliser(connectorNormaliser(registries));
+  // After the connectors, so a group whose member is a connector takes in the connector's box as it now is.
+  store.addNormaliser(groupNormaliser(registries));
   return store;
 }
 
@@ -103,4 +105,131 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
   const from = origins.get(was.page);
   const to = origins.get(c.page);
   return from && to ? { x: pt.x + from.x - to.x, y: pt.y + from.y - to.y } : pt;
+}
+
+/**
+ * Keeps containment consistent (spec §3.1). A group here is any node whose type has a `members` hook; its members are
+ * the nodes whose `parent` is its id.
+ * - a `parent` that names no node, the node itself, or a node that is not a group is removed;
+ * - a cycle of parents is broken by removing one `parent` in it: one this edit changed (compared with `before`), else
+ *   the last one met walking up from the node first in the document;
+ * - a group with no members is deleted, and one with a single member is dissolved (the member takes the group's
+ *   `parent`), until every group has two members or more;
+ * - a group's page is the page of its first member by z, and each node in it (at any depth) goes to its outermost
+ *   group's page, keeping its coordinates;
+ * - a group's box is the union of its members' unrotated boxes, its `z` the highest member's, its rotation 0 and its
+ *   opacity 1. Nested groups are worked out first, so a group's box takes in its member groups' boxes as they now are.
+ * A document without parents or groups is left alone, and a value is written only when it differs.
+ */
+export function groupNormaliser(registries: Registries): Normaliser {
+  const isGroupNode = (n: Node) => registries.nodeTypes.get(n.type)?.members !== undefined;
+  return (draft, before) => {
+    if (!draft.nodes.some((n) => n.parent !== undefined || isGroupNode(n))) return;
+
+    let byId = new Map(draft.nodes.map((n) => [n.id, n] as const));
+    for (const node of draft.nodes) {
+      if (node.parent === undefined) continue;
+      const parent = byId.get(node.parent);
+      if (!parent || parent === node || !isGroupNode(parent)) delete node.parent;
+    }
+    breakCycles(draft.nodes, byId, before);
+
+    // Deleting or dissolving a group can leave its own group with fewer members, so this goes on until none is left.
+    for (;;) {
+      const members = membersByGroup(draft.nodes);
+      const index = draft.nodes.findIndex((n) => isGroupNode(n) && (members.get(n.id)?.length ?? 0) < 2);
+      if (index < 0) break;
+      const group = draft.nodes[index];
+      for (const member of members.get(group.id) ?? []) {
+        if (group.parent === undefined) delete member.parent;
+        else member.parent = group.parent;
+      }
+      draft.nodes.splice(index, 1);
+    }
+    byId = new Map(draft.nodes.map((n) => [n.id, n] as const));
+
+    const members = membersByGroup(draft.nodes);
+    const derived = new Map<NodeId, { page: PageId; z: number; x: number; y: number; right: number; bottom: number }>();
+    const derive = (group: Node): void => {
+      const list = members.get(group.id) ?? [];
+      for (const m of list) if (isGroupNode(m)) derive(m);
+      const zOf = (m: Node) => derived.get(m.id)?.z ?? m.z;
+      // `sort` is stable, so members with the same `z` keep the document's order.
+      const first = [...list].sort((a, b) => zOf(a) - zOf(b))[0];
+      const box = { page: derived.get(first.id)?.page ?? first.page, z: -Infinity, x: Infinity, y: Infinity, right: -Infinity, bottom: -Infinity };
+      for (const m of list) {
+        const d = derived.get(m.id);
+        box.z = Math.max(box.z, zOf(m));
+        box.x = Math.min(box.x, d ? d.x : m.x);
+        box.y = Math.min(box.y, d ? d.y : m.y);
+        box.right = Math.max(box.right, d ? d.right : m.x + m.width);
+        box.bottom = Math.max(box.bottom, d ? d.bottom : m.y + m.height);
+      }
+      derived.set(group.id, box);
+    };
+    const toPage = (id: NodeId, page: PageId): void => {
+      for (const m of members.get(id) ?? []) {
+        if (m.page !== page) m.page = page;
+        toPage(m.id, page);
+      }
+    };
+    for (const group of draft.nodes) {
+      if (group.parent !== undefined || !isGroupNode(group)) continue;
+      derive(group);
+      toPage(group.id, (derived.get(group.id) as { page: PageId }).page);
+    }
+    for (const [id, d] of derived) {
+      const group = byId.get(id) as Node;
+      const width = d.right - d.x;
+      const height = d.bottom - d.y;
+      if (group.page !== d.page && group.parent === undefined) group.page = d.page;
+      if (group.x !== d.x) group.x = d.x;
+      if (group.y !== d.y) group.y = d.y;
+      if (group.width !== width) group.width = width;
+      if (group.height !== height) group.height = height;
+      if (group.z !== d.z) group.z = d.z;
+      if (group.rotation !== 0) group.rotation = 0;
+      if (group.opacity !== 1) group.opacity = 1;
+    }
+  };
+}
+
+/** Each group's members, by the group's id, in document order. */
+function membersByGroup(nodes: Node[]): Map<NodeId, Node[]> {
+  const out = new Map<NodeId, Node[]>();
+  for (const node of nodes) {
+    if (node.parent === undefined) continue;
+    const list = out.get(node.parent);
+    if (list) list.push(node);
+    else out.set(node.parent, [node]);
+  }
+  return out;
+}
+
+/**
+ * Removes one `parent` from each cycle of parents (every `parent` must name a node of `byId`). The one removed is one
+ * this edit changed, compared with `before`, so the edit that closed the cycle is the one undone; when none was (a
+ * loaded file), it is the last one met walking up from the node first in the document.
+ */
+function breakCycles(nodes: Node[], byId: Map<NodeId, Node>, before: Document): void {
+  const was = new Map(before.nodes.map((n) => [n.id, n.parent] as const));
+  // Nodes whose walk up is known to end at a node at top level.
+  const settled = new Set<NodeId>();
+  for (const start of nodes) {
+    const path: Node[] = [];
+    let node: Node | undefined = start;
+    while (node && !settled.has(node.id)) {
+      const at = path.indexOf(node);
+      if (at >= 0) {
+        const cycle = path.slice(at);
+        const offending = cycle.find((n) => n.parent !== was.get(n.id)) ?? cycle[cycle.length - 1];
+        delete offending.parent;
+        break;
+      }
+      path.push(node);
+      node = node.parent === undefined ? undefined : byId.get(node.parent);
+    }
+    // Every node met now ends at the top: the walk did, or it ran into the cycle, whose broken link is now the top.
+    for (const n of path) settled.add(n.id);
+  }
 }

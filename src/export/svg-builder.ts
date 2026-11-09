@@ -92,7 +92,9 @@ export function buildPageSvg(
         `preserveAspectRatio="none"/>`;
       warnings.push(`${nodeLabel(doc, node)} rasterised`);
     }
-    body.push(wrap(node, fragment + (type.overlaySvg?.(node, ctx) ?? "")));
+    // A node that draws nothing (a group) adds nothing, so a page exports the same with it as without it.
+    const drawing = fragment + (type.overlaySvg?.(node, ctx) ?? "");
+    if (drawing !== "") body.push(wrap(node, drawing));
   }
 
   const parts = [

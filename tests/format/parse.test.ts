@@ -4,7 +4,7 @@ import { loadDocument } from "../../src/format/load";
 import { serializeFigureFile } from "../../src/format/serialize";
 import { migrate } from "../../src/format/migrate";
 import { FormatError, NotFigureError } from "../../src/format/errors";
-import { connectorNodeDefaults, fileNodeDefaults, createPage } from "../../src/model/defaults";
+import { connectorNodeDefaults, fileNodeDefaults, createPage, groupNodeDefaults } from "../../src/model/defaults";
 import { DEFAULT_FONT } from "../../src/constants";
 import type { FileNode, TextNode } from "../../src/model/types";
 
@@ -106,6 +106,27 @@ test.each([
   ["a null stroke", { ends, stroke: null }],
   ["one cap", { ends, caps: [{ kind: "none", size: 3 }] }],
 ])("migrate rejects a malformed connector: %s", (_name, fields) => expect(() => migrate(docWith([{ id: "p-1", type: "connector", ...geom, ...fields }]))).toThrow(FormatError));
+
+// --- groups
+test("migrate fills group defaults, agreeing with groupNodeDefaults", () => {
+  const [n] = migrate(docWith([{ id: "p-1", type: "group", ...geom }])).nodes;
+  const { id: _id, type: _type, page: _page, x: _x, y: _y, width: _w, height: _h, ...defaults } = groupNodeDefaults(createPage("a4-portrait", []), {}, []);
+  expect(n).toEqual({ id: "p-1", ...geom, type: "group", ...defaults });
+});
+test("a group and its members' parent survive a save and a load", () => {
+  const nodes = [
+    { id: "p-a", type: "text", ...geom, parent: "p-g" },
+    { id: "p-b", type: "text", ...geom, parent: "p-g" },
+    { id: "p-g", type: "group", ...geom },
+  ];
+  const loaded = loadDocument(`---\nlink-figures: 1\n---\n## Figure\n\`\`\`lnkfig\n${JSON.stringify(docWith(nodes))}\n\`\`\`\n`);
+  expect(loaded.doc.nodes.map((n) => [n.id, n.type, n.parent])).toEqual([["p-a", "text", "p-g"], ["p-b", "text", "p-g"], ["p-g", "group", undefined]]);
+  const again = loadDocument(serializeFigureFile(loaded.doc, loaded.parsed));
+  expect(again.doc).toEqual(loaded.doc);
+});
+test("a parent that is not a string is a FormatError", () => {
+  expect(() => migrate(docWith([{ id: "p-1", type: "text", ...geom, parent: 5 }]))).toThrow(new FormatError('Node p-1: "parent" must be a string'));
+});
 
 // --- adjustments
 const withAdjustments = (value: string) => loadDocument(FILE.replace('"frame":null}', `"frame":null,"adjustments":${value}}`));

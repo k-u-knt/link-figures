@@ -57,6 +57,11 @@ export interface NodeBase {
   locked: boolean;
   name?: string;
   color?: string;
+  /**
+   * The group (any node whose type has a `members` hook) this node is a member of, absent at top level. A member is on
+   * its group's page. Set by the group commands only; the group normaliser removes one that names no such node.
+   */
+  parent?: NodeId;
 }
 
 export type Range16 = { min: number; max: number };
@@ -139,7 +144,15 @@ export interface ConnectorNode extends NodeBase {
   caps: [Cap, Cap];
 }
 
-export type Node = FileNode | TextNode | ShapeNode | ConnectorNode;
+/**
+ * A group of nodes: the nodes whose `parent` is its id. It has no fields of its own; its box is the union of its members'
+ * boxes and its `z` the highest member's, both kept by the store's group normaliser, and it is never rotated or translucent.
+ */
+export interface GroupNode extends NodeBase {
+  type: "group";
+}
+
+export type Node = FileNode | TextNode | ShapeNode | ConnectorNode | GroupNode;
 
 export interface Document {
   version: 1;

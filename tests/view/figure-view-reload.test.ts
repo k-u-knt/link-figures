@@ -70,7 +70,7 @@ function setup(initial: Document = figure()) {
   const app = { vault: { on, cachedRead: vi.fn(async () => disk.text) }, metadataCache: { on, fileToLinktext } };
   /** The files that a linktext finds, the figure's own folder aside: by default none. */
   const resolveLink = vi.fn((_path: string, _from: string): { path: string; extension: string } | null => null);
-  const plugin = { app, registries: { nodeTypes: {} }, access: { resolveLink }, decoders: {} };
+  const plugin = { app, registries: { nodeTypes: { get: () => undefined } }, access: { resolveLink }, decoders: {} };
   const view = new LinkFiguresView({ app } as never, plugin as never);
   const internals = view as unknown as Record<string, unknown>;
 

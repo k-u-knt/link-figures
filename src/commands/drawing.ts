@@ -199,7 +199,7 @@ const BASE_FIELDS: ParamSpec = {
 
 /**
  * Changes node `id` by `patch`, a part of the node in its JSON form (`{ fill: { color: "#ff0000" } }`), merged into it
- * (see `mergePatch`). Its `id` and `type` cannot change; an empty `name` removes the name; a width or height under a
+ * (see `mergePatch`). Its `id` and `type` cannot change, nor its `parent` (that is `group.add` and `group.remove`); an empty `name` removes the name; a width or height under a
  * millimetre is a millimetre (`nodeSizePx`), as a resize by a handle keeps it. The node's type then adds what
  * the change brings with it (`completeUpdate`), and every field that changed is checked (the base fields here, the
  * type's own by `checkField`); keys that neither knows are kept, as the file format keeps them. A locked node is changed
@@ -213,6 +213,9 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   checkPlain(command, "patch", patch);
   for (const key of ["id", "type"] as const) {
     if (key in patch && patch[key] !== node[key]) throw new CommandError(`${command}: a node's "${key}" cannot change`);
+  }
+  if ("parent" in patch && patch.parent !== node.parent) {
+    throw new CommandError(`${command}: a node's "parent" is changed by group.add and group.remove`);
   }
   const before = node as unknown as Record<string, unknown>;
   let after: Record<string, unknown> = { ...before };

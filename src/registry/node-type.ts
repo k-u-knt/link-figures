@@ -152,6 +152,12 @@ export interface NodeType<N extends Node = Node> {
    * the page under its centre.
    */
   pageAfterMove?(node: N, ctx: MoveContext): PageId;
+  /**
+   * Opts the type in to containing other nodes, as a group does: the ids of its members (the nodes whose `parent` is its
+   * id), in z order. Moving, deleting, duplicating, restacking and aligning the node act on these too; code that needs
+   * to know whether a node contains others asks this hook (`isGroup` in model/groups.ts), never the node's type.
+   */
+  members?(node: N, doc: Document): NodeId[];
 }
 
 /** What a node type's `pageAfterMove` may depend on besides the node. */

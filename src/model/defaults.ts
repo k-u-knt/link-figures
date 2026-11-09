@@ -2,7 +2,7 @@ import { DEFAULT_FONT, MM_TO_PX } from "../constants";
 import { mmToPx } from "./geometry";
 import { getPreset } from "./presets";
 import { DEFAULT_CAP_SIZE } from "../registry/cap";
-import type { Cap, ConnectorNode, Document, FileNode, Page, ShapeNode, Stroke, TextNode } from "./types";
+import type { Cap, ConnectorNode, Document, FileNode, GroupNode, Page, ShapeNode, Stroke, TextNode } from "./types";
 
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const ID_LENGTH = 4;
@@ -148,6 +148,27 @@ export function connectorNodeDefaults(page: Page, partial: Partial<ConnectorNode
     routeParams: {},
     stroke: defaultBorder(),
     caps: defaultCaps(),
+    ...partial,
+  };
+}
+
+/**
+ * A group with no members yet. Its box is a placeholder: the store's group normaliser sets it to its members' in the
+ * commit that adds it (and deletes a group that has none).
+ */
+export function groupNodeDefaults(page: Page, partial: Partial<GroupNode>, existingIds: Iterable<string>): GroupNode {
+  return {
+    id: newId("p", existingIds),
+    type: "group",
+    page: page.id,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    z: 0,
+    rotation: 0,
+    opacity: 1,
+    locked: false,
     ...partial,
   };
 }

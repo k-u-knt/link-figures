@@ -12,6 +12,7 @@ import { ObsidianVaultAccess } from "./links/obsidian-access";
 import type { Decoders } from "./links/types";
 import { connectorNodeType } from "./nodes/connector-node";
 import { fileNodeType } from "./nodes/file-node";
+import { groupNodeType } from "./nodes/group-node";
 import { shapeNodeType } from "./nodes/shape-node";
 import { textNodeType } from "./nodes/text-node";
 import { builtinPaintTypes } from "./paint/builtin";
@@ -55,6 +56,7 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.nodeTypes.register(textNodeType);
     this.registries.nodeTypes.register(shapeNodeType);
     this.registries.nodeTypes.register(connectorNodeType);
+    this.registries.nodeTypes.register(groupNodeType);
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
     for (const paint of builtinPaintTypes) this.registries.paints.register(paint);

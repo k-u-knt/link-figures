@@ -117,6 +117,8 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
       registries,
       noteHost,
       api: { blockId },
+      /** The Markdown view a drag started in, as the plugin's document listeners record it. */
+      editorDrag: { source: null as unknown },
     },
     store,
     commandContext(): CommandContext {
@@ -819,12 +821,13 @@ describe("dragged out of a note's editor", () => {
   const TEXT = ["Intro.", "", "# Results", "", "The cells divide.", "", "Then they grow.", "", "![[chart.svg]] ![[plot.png]]"].join("\n");
 
   /** The note is open in an editor (active at `activeTime`) with `selected` selected on lines `from`..`to`. */
-  function openNote(s: Setup, selected: string, from: number, to: number, opts: { path?: string; text?: string; activeTime?: number; mode?: string } = {}) {
+  /** With `record` (the default), the drag starts in this note's editor. */
+  function openNote(s: Setup, selected: string, from: number, to: number, opts: { path?: string; text?: string; activeTime?: number; mode?: string; record?: boolean } = {}) {
     const path = opts.path ?? NOTE;
     const text = opts.text ?? TEXT;
     s.notes[path] = text;
     s.files[path] = text;
-    s.leaves.push({
+    const leaf = {
       activeTime: opts.activeTime ?? 1,
       view: {
         file: { path },
@@ -835,7 +838,9 @@ describe("dragged out of a note's editor", () => {
           listSelections: () => [{ anchor: { line: from, ch: 0 }, head: { line: to, ch: selected.length } }],
         },
       },
-    });
+    };
+    s.leaves.push(leaf);
+    if (opts.record !== false) s.view.plugin.editorDrag.source = leaf.view;
   }
 
   const dropText = (s: Setup, text: string) => s.handlers.drop(dropEvent({ x: 60, y: 80, text }));
@@ -905,15 +910,37 @@ describe("dragged out of a note's editor", () => {
     expect(s.blockId).not.toHaveBeenCalled();
   });
 
-  test("the most recently active editor with that selection is the one used; Reading view is not looked at", async () => {
+  test("a drag that did not start in an editor is read as before, even when an open note has that text selected: nothing written, no block panel", async () => {
+    const s = setup();
+    openNote(s, "Notes/plot.png", 4, 4, { record: false });
+    dropText(s, "Notes/plot.png");
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    // Today's reading: a path, linked as the file.
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath]).toEqual(["Notes/plot.png", ""]);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("only the editor the drag started in is matched: another note with that selection is not used", async () => {
     const s = setup({ files: { "Notes/other.md": "x" } });
-    openNote(s, "The cells divide.", 0, 0, { path: "Notes/reading.md", text: "The cells divide.", activeTime: 9, mode: "preview" });
-    openNote(s, "The cells divide.", 0, 0, { path: "Notes/other.md", text: "The cells divide.", activeTime: 2 });
-    openNote(s, "The cells divide.", 4, 4, { activeTime: 5 });
+    openNote(s, "The cells divide.", 0, 0, { path: "Notes/other.md", text: "The cells divide.", record: false });
+    openNote(s, "Something else", 4, 4);
+    dropText(s, "The cells divide.");
+    await settle();
+    expect(fileNodes(s)).toHaveLength(0);
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  test("the editor the drag started in is matched; Reading view is not", async () => {
+    const s = setup();
+    openNote(s, "The cells divide.", 4, 4);
     dropText(s, "The cells divide.");
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
-    expect(fileNodes(s)[0].file).toBe("Notes/analysis");
     expect(s.blockId).toHaveBeenCalledWith(NOTE, 4);
+    const r = setup();
+    openNote(r, "The cells divide.", 4, 4, { mode: "preview" });
+    dropText(r, "The cells divide.");
+    await settle();
+    expect(fileNodes(r)).toHaveLength(0);
   });
 
   test("text no open editor has selected is read as before", async () => {

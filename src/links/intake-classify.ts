@@ -78,10 +78,29 @@ function wikilinksIn(text: string): string[] {
   return out;
 }
 
-/** Whether `text` is wikilinks and embeds only, with nothing but white space between them. */
-function onlyWikilinks(text: string): boolean {
-  // `match`, not `test`: the expression is global, and `test` would keep its place for the next call.
-  return text.match(WIKILINK) !== null && text.replace(WIKILINK, "").trim() === "";
+/** A Markdown link or embed, `[text](target)` or `![alt](target)`, on one line; the target may be in `<…>`. */
+export const MD_LINK = /!?\[[^\]\r\n]*\]\(\s*(<[^>\r\n]*>|[^)\s]+)[^)\r\n]*\)/g;
+
+/** The target of a Markdown link as written in its `(…)`, without `<>` and percent-escapes. */
+export function mdLinkTarget(raw: string): string {
+  const target = raw.replace(/^<|>$/g, "");
+  try {
+    return decodeURI(target);
+  } catch {
+    return target;
+  }
+}
+
+/** The vault targets of the Markdown links in `text`: a web or other URL (`scheme:`) names no vault file. */
+function mdLinksIn(text: string): string[] {
+  return [...text.matchAll(MD_LINK)].map((m) => mdLinkTarget(m[1])).filter((t) => t.trim() !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(t));
+}
+
+/** Whether `text` is links and embeds only (wikilinks and Markdown ones), with nothing but white space between them. */
+function onlyLinks(text: string): boolean {
+  // `match`, not `test`: the expressions are global, and `test` would keep its place for the next call.
+  const rest = text.replace(WIKILINK, "").replace(MD_LINK, "");
+  return (text.match(WIKILINK) !== null || text.match(MD_LINK) !== null) && rest.trim() === "";
 }
 
 /** Whether a drop out of a note is to be linked to the note (its block or section), by the setting. */
@@ -127,7 +146,7 @@ export function classifyDrop(d: DropData): IntakeAction[] {
   // Text selected in an open note's editor links the place it came from, unless it is links only (each is linked, from that note).
   const match = linksToNote(d.fromNote) && d.selection && text.trim() !== "" ? d.selection(text) : null;
   if (match) {
-    if (onlyWikilinks(text)) return wikilinksIn(text).map((linktext) => ({ kind: "link-text", linktext, sourcePath: match.path }));
+    if (onlyLinks(text)) return [...wikilinksIn(text), ...mdLinksIn(text)].map((linktext) => ({ kind: "link-text", linktext, sourcePath: match.path }));
     return [{ kind: "link-block", notePath: match.path, from: match.from, to: match.to }];
   }
   // Text with a wikilink in it is read for its links only, even when none of them names a file.

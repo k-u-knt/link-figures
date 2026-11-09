@@ -197,6 +197,18 @@ describe("classifyDrop: text and images dragged out of a note's editor", () => {
     ]);
   });
 
+  test("Markdown embeds and links count as links: a selection of them only is read per link, from its note", () => {
+    const text = "![](img/a.png) [see](Notes/b.md) [[c.png]]";
+    expect(classifyDrop({ text, fromNote: "block-id", selection: finds(text) })).toEqual([
+      { kind: "link-text", linktext: "c.png", sourcePath: "Notes/a.md" },
+      { kind: "link-text", linktext: "img/a.png", sourcePath: "Notes/a.md" },
+      { kind: "link-text", linktext: "Notes/b.md", sourcePath: "Notes/a.md" },
+    ]);
+    // A web link names no vault file, and text around the links makes it a block.
+    expect(classifyDrop({ text: "[x](https://e.org)", fromNote: "block-id", selection: finds("[x](https://e.org)") })).toEqual([]);
+    expect(classifyDrop({ text: "see ![](a.png)", fromNote: "block-id", selection: finds("see ![](a.png)") })[0].kind).toBe("link-block");
+  });
+
   test("text that is no open note's selection is read as before", () => {
     const selection = vi.fn(() => null);
     expect(classifyDrop({ text: "see [[a.png]] here", fromNote: "block-id", selection })).toEqual([{ kind: "link-text", linktext: "a.png" }]);

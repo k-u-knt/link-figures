@@ -1,16 +1,17 @@
 import type { DropFromNote } from "../settings/settings";
 import { blockAt, blockIdInText, blockMatchesText, existingBlockId, idPlacement, type Block, type LinePos } from "./block-id";
-import type { SelectionMatch } from "./intake-classify";
-import { REINDEX_TIMEOUT_MS, type BlockIdResult, type NoteCache, type NoteHost } from "./note-block-id";
+import { MD_LINK, mdLinkTarget, type SelectionMatch } from "./intake-classify";
+import type { BlockIdResult, NoteCache, NoteHost } from "./note-block-id";
 
 /**
  * What a drop out of a note links to (spec `2026-11-10-drop-from-note-design.md` §2, §3, §6): the note whose editor has
  * the dropped text selected (`matchSelection`), and the place in it (`linkForText`, `linkForImage`). Only `"block-id"`
- * mode writes into a note, and only through `blockId` (`noteBlockId`); `"heading"` mode reads. Pure but for the host.
+ * mode writes into a note, and only through `blockId` (`noteBlockId`), and only when there is an id to write; nothing
+ * here saves an editor. `"heading"` mode reads. Pure but for the host.
  */
 
 /** What the drop needs of Obsidian: the note's cache and text, its open editor, and the block-id writer (`api.blockId`). */
-export type NoteDropHost = Pick<NoteHost, "cache" | "read" | "editor" | "saveAndReindex"> & {
+export type NoteDropHost = Pick<NoteHost, "cache" | "read" | "editor"> & {
   blockId(path: string, line: number): Promise<BlockIdResult>;
 };
 
@@ -21,7 +22,10 @@ export interface OpenNoteSelection {
   ranges: { anchor: { line: number; ch: number }; head: { line: number; ch: number } }[];
 }
 
-/** Where a drop out of a note links: the subpath on the note (`""` for the whole note), and what to tell the user. */
+/**
+ * Where a drop out of a note links: the subpath on the note (`""` for the whole note), and what to tell the user, as
+ * one message (at most one Notice per drop), without the "Link Figures:" the Notice starts with.
+ */
 export interface NoteLink {
   subpath: string;
   notices: string[];
@@ -31,25 +35,19 @@ const lf = (text: string) => text.replace(/\r\n?/g, "\n");
 const before = (a: { line: number; ch: number }, b: { line: number; ch: number }) => a.line < b.line || (a.line === b.line && a.ch < b.ch);
 
 /**
- * The first of `notes` (the most recently active first) whose selection is `text`, line endings aside: its path and the
- * selection's first and last lines. A selection that ends at the start of a line (a whole line taken with its break)
- * ends on the line before. Null when none is, and for blank text.
+ * Whether `note`'s selection (the editor the drag started in) is `text`, line endings aside: its path and the selection's
+ * first and last lines. A selection that ends at the start of a line (a whole line taken with its break) ends on the
+ * line before. Empty cursors are left out; more than one non-empty range (several pieces selected) is not matched. Null
+ * when it does not match, for no note, and for blank text.
  */
-export function matchSelection(notes: readonly OpenNoteSelection[], text: string): SelectionMatch | null {
+export function matchSelection(note: OpenNoteSelection | null, text: string): SelectionMatch | null {
   const wanted = lf(text);
-  if (wanted.trim() === "") return null;
-  for (const note of notes) {
-    if (note.ranges.length === 0 || lf(note.selection) !== wanted) continue;
-    let from = Infinity;
-    let to = -Infinity;
-    for (const { anchor, head } of note.ranges) {
-      const [start, end] = before(head, anchor) ? [head, anchor] : [anchor, head];
-      from = Math.min(from, start.line);
-      to = Math.max(to, end.ch === 0 && end.line > start.line ? end.line - 1 : end.line);
-    }
-    return { path: note.path, from, to };
-  }
-  return null;
+  if (!note || wanted.trim() === "" || lf(note.selection) !== wanted) return null;
+  const ranges = note.ranges.filter(({ anchor, head }) => anchor.line !== head.line || anchor.ch !== head.ch);
+  if (ranges.length !== 1) return null;
+  const { anchor, head } = ranges[0];
+  const [start, end] = before(head, anchor) ? [head, anchor] : [anchor, head];
+  return { path: note.path, from: start.line, to: end.ch === 0 && end.line > start.line ? end.line - 1 : end.line };
 }
 
 // --- A small reader of a note's blocks, for when the cache is behind the editor ---------------------------------
@@ -59,7 +57,6 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const MATH = /^\s*\$\$/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const EMBED = /!\[\[([^[\]\r\n]*)\]\]/g;
-const MD_IMAGE = /!\[[^\]\r\n]*\]\(\s*(<[^>\r\n]*>|[^)\s]+)[^)\r\n]*\)/g;
 
 const blank = (line: string) => line.trim() === "";
 
@@ -146,16 +143,8 @@ export function parseNote(text: string): NoteCache {
     if (code.some((s) => s.position.start.line <= n && n <= s.position.end.line)) return;
     const found: { link: string; col: number }[] = [];
     for (const m of line.matchAll(EMBED)) found.push({ link: m[1].split("|")[0].trim(), col: m.index ?? 0 });
-    for (const m of line.matchAll(MD_IMAGE)) {
-      const raw = m[1].replace(/^<|>$/g, "");
-      let link = raw;
-      try {
-        link = decodeURI(raw);
-      } catch {
-        // Kept as written.
-      }
-      found.push({ link, col: m.index ?? 0 });
-    }
+    // Markdown embeds only (`![…](…)`), as Obsidian's cache has them; a plain `[…](…)` is a link, not an embed.
+    for (const m of line.matchAll(MD_LINK)) if (m[0].startsWith("!")) found.push({ link: mdLinkTarget(m[1]), col: m.index ?? 0 });
     found.sort((a, b) => a.col - b.col);
     for (const { link, col } of found) {
       cache.embeds.push({ link, position: { start: { line: n, col, offset: starts[n] + col }, end: { line: n, col, offset: starts[n] + col } } });
@@ -179,28 +168,21 @@ function cacheHolds(cache: NoteCache, text: string): boolean {
 }
 
 /**
- * The note's blocks as they are in the text the user sees: the editor's when the note is open, else the file's. In
- * `"block-id"` mode, which writes, an editor ahead of the file is saved and the cache waited for (`REINDEX_TIMEOUT_MS`),
- * as `noteBlockId` does too; in `"heading"` mode, which never writes, it is not saved. A cache that is behind, or whose
- * places do not hold in the text, is replaced by `parseNote` of the text. Null when the note cannot be read.
+ * The note's blocks as they are in the text the user sees: the editor's when the note is open, else the file's. The
+ * cache when its places hold in that text, else `parseNote` of the text (the cache is behind an editor not yet saved).
+ * Nothing is saved here: when an id is to be written, `blockId` saves the editor and waits for the cache itself, and
+ * the lines are the same, since they are the editor's. Null when the note cannot be read.
  */
-async function noteState(host: NoteDropHost, mode: DropFromNote, path: string): Promise<NoteState | null> {
-  let fileText: string;
+async function noteState(host: NoteDropHost, path: string): Promise<NoteState | null> {
+  let text: string;
   try {
-    fileText = await host.read(path);
+    const editor = host.editor(path);
+    text = editor ? editor.getValue() : await host.read(path);
   } catch {
     return null;
   }
-  const editor = host.editor(path);
-  let text = editor ? editor.getValue() : fileText;
-  let caughtUp = true;
-  if (editor && text !== fileText) {
-    caughtUp = mode === "block-id" && (await host.saveAndReindex(path, REINDEX_TIMEOUT_MS));
-    text = editor.getValue();
-  }
   const cache = host.cache(path);
-  const fresh = cache !== null && caughtUp && cacheHolds(cache, text);
-  return { cache: fresh ? cache : parseNote(text), lines: text.split("\n") };
+  return { cache: cache !== null && cacheHolds(cache, text) ? cache : parseNote(text), lines: text.split("\n") };
 }
 
 interface HeadingAt {
@@ -221,11 +203,9 @@ function sectionEnd(headings: readonly HeadingAt[], index: number): number {
 /** A heading as a link holds it: what a link cannot hold (`# | ^ : % [ ] \`) made a space, as Obsidian does. */
 const linkable = (heading: string) => heading.replace(/[#|^:%[\]\\]/g, " ").replace(/\s+/g, " ").trim();
 
-/** The subpath that links `headings[index]`: `#Heading`, or, when another heading has the same text, through the headings above it (`#A#Heading`). */
-function headingSubpath(headings: readonly HeadingAt[], index: number): string {
-  const name = linkable(headings[index].heading);
-  if (headings.filter((h) => linkable(h.heading) === name).length === 1) return `#${name}`;
-  const chain = [name];
+/** `headings[index]` with the headings above it (each the nearest one of a higher level), as `#A#B#Heading`. */
+function headingChain(headings: readonly HeadingAt[], index: number): string {
+  const chain = [linkable(headings[index].heading)];
   let level = headings[index].level;
   for (let i = index - 1; i >= 0; i--) {
     if (headings[i].level < level) {
@@ -234,6 +214,18 @@ function headingSubpath(headings: readonly HeadingAt[], index: number): string {
     }
   }
   return `#${chain.join("#")}`;
+}
+
+/**
+ * The subpath that links `headings[index]`: `#Heading`, or, when another heading has the same text, through the
+ * headings above it (`#A#Heading`). Null when an earlier heading has that same chain: a link would find the earlier one.
+ */
+function headingSubpath(headings: readonly HeadingAt[], index: number): string | null {
+  const name = linkable(headings[index].heading);
+  if (headings.filter((h) => linkable(h.heading) === name).length === 1) return `#${name}`;
+  const chain = headingChain(headings, index);
+  for (let i = 0; i < index; i++) if (linkable(headings[i].heading) === name && headingChain(headings, i) === chain) return null;
+  return chain;
 }
 
 /** The index of the nearest heading at or above `line` (its section holds the line), or -1. */
@@ -248,7 +240,52 @@ function headingAbove(headings: readonly HeadingAt[], line: number): number {
 const noteName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
 
 /** Where a block is linked, and the line its linked range starts on (for counting images in it). */
-type Placed = NoteLink & { start: number };
+interface Placed {
+  subpath: string;
+  start: number;
+}
+
+const canHoldId = (block: Block) => block.type !== "heading" && idPlacement(block.type) !== null;
+
+/** The block's id, from the cache or the text; null when it has none. */
+const idOf = (state: NoteState, block: Block) => existingBlockId(state.cache.blocks, block) ?? blockIdInText(state.lines, block);
+
+/** The block's id, written through `blockId` when it has none (which saves the editor first: only now is it needed). */
+async function blockIdLink(host: NoteDropHost, path: string, state: NoteState, block: Block): Promise<Placed> {
+  const id = idOf(state, block);
+  return { subpath: id ? `#^${id}` : (await host.blockId(path, block.start)).subpath, start: block.start };
+}
+
+/**
+ * The link to the section of `headings[index]`. A heading an earlier one cannot be told from (`headingSubpath` null):
+ * in `"block-id"` mode the first of `candidates` (then of the section's blocks) that can hold an id, by its id; in
+ * `"heading"` mode (or with no such block) the whole note, with a Notice.
+ */
+async function sectionLink(
+  host: NoteDropHost,
+  mode: DropFromNote,
+  path: string,
+  state: NoteState,
+  headings: readonly HeadingAt[],
+  index: number,
+  candidates: readonly Block[],
+  notices: string[],
+): Promise<Placed> {
+  const subpath = headingSubpath(headings, index);
+  if (subpath !== null) return { subpath, start: headings[index].line };
+  if (mode === "block-id") {
+    const inSection: Block[] = [];
+    const end = Math.min(sectionEnd(headings, index), state.lines.length - 1);
+    for (let line = headings[index].line; line <= end; line++) {
+      const block = blockAt(state.cache, line);
+      if (block && !inSection.some((b) => b.start === block.start)) inSection.push(block);
+    }
+    const block = [...candidates, ...inSection].find(canHoldId);
+    if (block) return blockIdLink(host, path, state, block);
+  }
+  notices.push(`The heading "${headings[index].heading}" in ${noteName(path)} is not unique, so the panel links the whole note.`);
+  return { subpath: "", start: 0 };
+}
 
 /**
  * The link to `block`: its heading for a heading; its id when it has one (in the cache or in the text); in `"block-id"`
@@ -259,23 +296,23 @@ async function placeBlock(host: NoteDropHost, mode: DropFromNote, path: string, 
   const headings = headingsOf(state.cache);
   if (block.type === "heading") {
     const index = headings.findIndex((h) => h.line === block.start);
-    if (index >= 0) return { subpath: headingSubpath(headings, index), start: block.start, notices };
+    if (index >= 0) return sectionLink(host, mode, path, state, headings, index, [], notices);
   }
-  const id = existingBlockId(state.cache.blocks, block) ?? blockIdInText(state.lines, block);
-  if (id) return { subpath: `#^${id}`, start: block.start, notices };
-  const canHold = block.type !== "heading" && idPlacement(block.type) !== null;
-  if (mode === "block-id" && canHold) {
-    const written = await host.blockId(path, block.start);
-    return { subpath: written.subpath, start: block.start, notices };
-  }
+  const id = idOf(state, block);
+  if (id) return { subpath: `#^${id}`, start: block.start };
+  if (mode === "block-id" && canHoldId(block)) return blockIdLink(host, path, state, block);
   const index = headingAbove(headings, block.start);
   if (mode === "block-id") {
-    notices.push(`Link Figures: a ${block.type} block cannot hold a block id, so the panel links ${index >= 0 ? "the heading above it" : "the whole note"}.`);
+    notices.push(`A ${block.type} block cannot hold a block id, so the panel links ${index >= 0 ? "the heading above it" : "the whole note"}.`);
   }
-  if (index >= 0) return { subpath: headingSubpath(headings, index), start: headings[index].line, notices };
-  if (mode !== "block-id") notices.push(`Link Figures: there is no heading above ${what} in ${noteName(path)}, so the panel links the whole note.`);
-  return { subpath: "", start: 0, notices };
+  // Linking the heading here, never another block: a heading that is not unique gives the whole note.
+  if (index >= 0) return sectionLink(host, "heading", path, state, headings, index, [], notices);
+  if (mode !== "block-id") notices.push(`There is no heading above ${what} in ${noteName(path)}, so the panel links the whole note.`);
+  return { subpath: "", start: 0 };
 }
+
+/** The Notices of one drop as one message: at most one Notice per drop. */
+const oneNotice = (notices: string[]) => (notices.length > 0 ? [notices.join(" ")] : []);
 
 /**
  * The link for text selected on lines `from`..`to` of the note at `path` and dropped (mode `"block-id"` or
@@ -284,7 +321,7 @@ async function placeBlock(host: NoteDropHost, mode: DropFromNote, path: string, 
  * Rejects when `blockId` does (the note changed under the drop).
  */
 export async function linkForText(host: NoteDropHost, mode: DropFromNote, path: string, from: number, to: number): Promise<NoteLink | null> {
-  const state = await noteState(host, mode, path);
+  const state = await noteState(host, path);
   if (!state) return null;
   const blocks: Block[] = [];
   for (let line = from; line <= Math.min(to, state.lines.length - 1); line++) {
@@ -301,11 +338,14 @@ export async function linkForText(host: NoteDropHost, mode: DropFromNote, path: 
     headings.forEach((h, i) => {
       if (h.line <= first && sectionEnd(headings, i) >= last) holding = i;
     });
-    if (holding >= 0) return { subpath: headingSubpath(headings, holding), notices };
-    notices.push(`Link Figures: the selection spans several blocks of ${noteName(path)} with no heading over them all, so the panel links its first block.`);
+    if (holding >= 0) {
+      const { subpath } = await sectionLink(host, mode, path, state, headings, holding, blocks, notices);
+      return { subpath, notices: oneNotice(notices) };
+    }
+    notices.push(`The selection spans several blocks of ${noteName(path)} with no heading over them all, so the panel links its first block.`);
   }
   const { subpath } = await placeBlock(host, mode, path, state, blocks[0], "that text", notices);
-  return { subpath, notices };
+  return { subpath, notices: oneNotice(notices) };
 }
 
 /**
@@ -321,7 +361,7 @@ export async function linkForImage(
   isDragged: (link: string) => boolean,
   isImage: (link: string) => boolean,
 ): Promise<(NoteLink & { imageIndex: number }) | null> {
-  const state = await noteState(host, mode, path);
+  const state = await noteState(host, path);
   if (!state) return null;
   const order = (e: { position: LinePos }) => e.position.start.offset ?? e.position.start.line * 1e6 + (e.position.start.col ?? 0);
   const embeds = [...(state.cache.embeds ?? [])].sort((a, b) => order(a) - order(b));
@@ -330,12 +370,10 @@ export async function linkForImage(
   const target = hits[0];
   const line = target.position.start.line;
   const notices: string[] = [];
-  if (hits.length > 1) {
-    notices.push(`Link Figures: ${target.link} is embedded ${hits.length} times in ${noteName(path)}; the panel shows the first (line ${line + 1}).`);
-  }
+  if (hits.length > 1) notices.push(`${target.link} is embedded ${hits.length} times in ${noteName(path)}; the panel shows the first (line ${line + 1}).`);
   // An embed in no block of the cache (it should not happen) is placed as a block of its own line would be, by heading.
   const block = blockAt(state.cache, line) ?? { type: "unknown", start: line, end: line };
   const placed = await placeBlock(host, mode, path, state, block, "that image", notices);
   const imageIndex = embeds.filter((e) => e !== target && e.position.start.line >= placed.start && order(e) < order(target) && isImage(e.link)).length;
-  return { subpath: placed.subpath, imageIndex, notices: placed.notices };
+  return { subpath: placed.subpath, imageIndex, notices: oneNotice(notices) };
 }

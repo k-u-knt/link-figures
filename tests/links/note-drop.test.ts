@@ -41,24 +41,27 @@ function setup(options: { text?: string; cache?: ReturnType<typeof parseNote> | 
 describe("matchSelection", () => {
   const range = (fromLine: number, fromCh: number, toLine: number, toCh: number) => ({ anchor: { line: fromLine, ch: fromCh }, head: { line: toLine, ch: toCh } });
 
-  test("the first open note whose selection is the dropped text, line endings aside, with its first and last lines", () => {
-    const notes = [
-      { path: "A.md", selection: "other", ranges: [range(0, 0, 0, 5)] },
-      { path: "B.md", selection: "The cells\r\ndivide.", ranges: [range(5, 3, 4, 0)] },
-      { path: "C.md", selection: "The cells\ndivide.", ranges: [range(0, 0, 1, 7)] },
-    ];
-    expect(matchSelection(notes, "The cells\ndivide.")).toEqual({ path: "B.md", from: 4, to: 5 });
-    expect(matchSelection(notes, "nothing")).toBeNull();
+  test("the note whose selection is the dropped text, line endings aside, with its first and last lines", () => {
+    const note = { path: "B.md", selection: "The cells\r\ndivide.", ranges: [range(5, 3, 4, 0)] };
+    expect(matchSelection(note, "The cells\ndivide.")).toEqual({ path: "B.md", from: 4, to: 5 });
+    expect(matchSelection(note, "nothing")).toBeNull();
+    expect(matchSelection(null, "The cells\ndivide.")).toBeNull();
   });
 
   test("a selection that ends at the start of a line ends on the line before it", () => {
-    const notes = [{ path: "A.md", selection: "whole line\n", ranges: [range(3, 0, 4, 0)] }];
-    expect(matchSelection(notes, "whole line\n")).toEqual({ path: "A.md", from: 3, to: 3 });
+    expect(matchSelection({ path: "A.md", selection: "whole line\n", ranges: [range(3, 0, 4, 0)] }, "whole line\n")).toEqual({ path: "A.md", from: 3, to: 3 });
   });
 
   test("an empty selection, or blank text, never matches", () => {
-    expect(matchSelection([{ path: "A.md", selection: "", ranges: [range(1, 0, 1, 0)] }], "")).toBeNull();
-    expect(matchSelection([{ path: "A.md", selection: "  ", ranges: [range(1, 0, 1, 2)] }], "  ")).toBeNull();
+    expect(matchSelection({ path: "A.md", selection: "", ranges: [range(1, 0, 1, 0)] }, "")).toBeNull();
+    expect(matchSelection({ path: "A.md", selection: "  ", ranges: [range(1, 0, 1, 2)] }, "  ")).toBeNull();
+  });
+
+  test("multi-cursor: empty cursors are left out; more than one non-empty range is not matched", () => {
+    const one = { path: "A.md", selection: "cells", ranges: [range(0, 0, 0, 0), range(7, 2, 7, 7), range(9, 1, 9, 1)] };
+    expect(matchSelection(one, "cells")).toEqual({ path: "A.md", from: 7, to: 7 });
+    const two = { path: "A.md", selection: "cells\ncells", ranges: [range(2, 0, 2, 5), range(7, 2, 7, 7)] };
+    expect(matchSelection(two, "cells\ncells")).toBeNull();
   });
 });
 
@@ -165,6 +168,45 @@ describe("linkForText", () => {
     expect((await linkForText(host, "heading", PATH, 2, 2))?.subpath).toBe("#A#Fig");
   });
 
+  test("a heading not told apart from an earlier one by its chain (siblings with one text): block-id links its first block, heading links the note", async () => {
+    const text = ["# A", "## Fig", "x", "## Fig", "y", "", "z"].join("\n");
+    const blockId = setup({ text });
+    expect((await linkForText(blockId, "block-id", PATH, 3, 3))?.subpath).toBe("#^fig-new1");
+    expect(blockId.blockId).toHaveBeenCalledWith(PATH, 4);
+    // A selection over its section, too: the first block of the selection.
+    expect((await linkForText(blockId, "block-id", PATH, 4, 6))?.subpath).toBe("#^fig-new1");
+    expect(blockId.blockId).toHaveBeenLastCalledWith(PATH, 4);
+    const heading = setup({ text });
+    const link = await linkForText(heading, "heading", PATH, 4, 4);
+    expect(link?.subpath).toBe("");
+    expect(link?.notices).toEqual([expect.stringMatching(/heading "Fig" .* is not unique, so the panel links the whole note/)]);
+    expect(heading.blockId).not.toHaveBeenCalled();
+    // The first of the two is still linked by its heading.
+    expect((await linkForText(heading, "heading", PATH, 2, 2))?.subpath).toBe("#A#Fig");
+  });
+
+  test("top-level headings with one text: the later one is not unique either", async () => {
+    const text = ["# Fig", "x", "# Fig", "y"].join("\n");
+    expect((await linkForText(setup({ text }), "heading", PATH, 3, 3))?.subpath).toBe("");
+    expect((await linkForText(setup({ text }), "heading", PATH, 1, 1))?.subpath).toBe("#Fig");
+    const host = setup({ text });
+    expect((await linkForText(host, "block-id", PATH, 2, 2))?.subpath).toBe("#^fig-new1");
+    expect(host.blockId).toHaveBeenCalledWith(PATH, 3);
+  });
+
+  test("heading mode gives at most one Notice per drop", async () => {
+    // Several blocks under no heading, and no heading above the first: two things to say, in one Notice.
+    const link = await linkForText(setup({ text: "a\n\nb" }), "heading", PATH, 0, 2);
+    expect(link?.subpath).toBe("");
+    expect(link?.notices).toEqual([expect.stringMatching(/spans several blocks.*no heading above/)]);
+  });
+
+  test("an image under a heading that is not unique, in heading mode: the whole note, counted across it", async () => {
+    const text = ["# Fig", "![[a.png]]", "# Fig", "![[b.png]]"].join("\n");
+    const link = await linkForImage(setup({ text }), "heading", PATH, (l) => l === "b.png", () => true);
+    expect([link?.subpath, link?.imageIndex, link?.notices.length]).toEqual(["", 1, 1]);
+  });
+
   test("a heading's characters that a link cannot hold are made spaces, as Obsidian does", async () => {
     const host = setup({ text: "# Fig. 2: a|b [c]\n\ntext" });
     expect((await linkForText(host, "heading", PATH, 2, 2))?.subpath).toBe("#Fig. 2 a b c");
@@ -174,18 +216,22 @@ describe("linkForText", () => {
     expect(await linkForText(setup(), "block-id", PATH, 1, 1)).toBeNull();
   });
 
-  test("block-id: an editor ahead of the file is saved and the cache waited for; when it does not catch up, the editor's own text is read", async () => {
+  test("an editor ahead of the file is read from its own text, and not saved by the drop: only blockId, which writes, saves it", async () => {
     const edited = `New\n\n${TEXT}`;
     // The cache is still the old text's: line 6 there is "## Growth", in the edited text it is "The cells divide.".
-    const host = setup({ editorText: edited, reindexes: false });
-    expect(await linkForText(host, "block-id", PATH, 6, 6)).toEqual({ subpath: "#^fig-new1", notices: [] });
-    expect(host.saveAndReindex).toHaveBeenCalledWith(PATH, REINDEX_TIMEOUT_MS);
-    expect(host.blockId).toHaveBeenCalledWith(PATH, 6);
+    for (const mode of ["block-id", "heading"] as const) {
+      const host = setup({ editorText: edited, reindexes: true });
+      expect(await linkForText(host, mode, PATH, 6, 6)).toEqual({ subpath: mode === "block-id" ? "#^fig-new1" : "#Results", notices: [] });
+      expect(host.saveAndReindex).not.toHaveBeenCalled();
+    }
   });
 
-  test("heading: an editor ahead of the file is not saved (nothing is written); its own text is read", async () => {
-    const host = setup({ editorText: `New\n\n${TEXT}`, reindexes: true });
-    expect(await linkForText(host, "heading", PATH, 6, 6)).toEqual({ subpath: "#Results", notices: [] });
+  test("block-id: when no id has to be written (an id, a heading, a heading section), blockId is not called, so nothing is saved", async () => {
+    const host = setup({ editorText: `${TEXT}\nmore`, reindexes: true });
+    await linkForText(host, "block-id", PATH, 9, 9);
+    await linkForText(host, "block-id", PATH, 6, 6);
+    await linkForText(host, "block-id", PATH, 4, 9);
+    expect(host.blockId).not.toHaveBeenCalled();
     expect(host.saveAndReindex).not.toHaveBeenCalled();
   });
 

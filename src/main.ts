@@ -12,6 +12,7 @@ import { drawingCommands } from "./commands/drawing";
 import { panelCommands } from "./commands/panels";
 import { blockIdPrefix } from "./links/block-id";
 import { noteBlockId, type NoteHost } from "./links/note-block-id";
+import { EditorDragTracker } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
@@ -57,6 +58,8 @@ export default class LinkFiguresPlugin extends Plugin {
     openFigure: (path) => this.openFigureView(path),
     noteBlockId: (path, line) => noteBlockId(this.noteHost(), path, line, blockIdPrefix(this.settings.blockIdPrefix)),
   });
+  /** The Markdown view a drag started in (its editor), for a drop of text on a figure to match against: see `EditorDragTracker`. */
+  readonly editorDrag = new EditorDragTracker(() => this.app.workspace.getLeavesOfType("markdown"));
   /** When each figure view was last made active, by a counter: the API acts on the most recent view of a figure. */
   private readonly viewActivity = new WeakMap<LinkFiguresView, number>();
   private activityCount = 0;
@@ -82,6 +85,11 @@ export default class LinkFiguresPlugin extends Plugin {
     const localFonts = localFontSource();
     this.registries.fontSources.register(localFonts);
     void localFonts.prime();
+    // Where a drag starts, before CodeMirror or anything else can stop it; forgotten when it ends. The drop listener is a
+    // bubbling one, so the stage's own drop handler (which reads the record) runs first.
+    this.registerDomEvent(document, "dragstart", (ev) => this.editorDrag.dragStart(ev.target), { capture: true });
+    this.registerDomEvent(document, "dragend", () => this.editorDrag.clear(), { capture: true });
+    this.registerDomEvent(document, "drop", () => this.editorDrag.clear());
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") void localFonts.prime();
     });

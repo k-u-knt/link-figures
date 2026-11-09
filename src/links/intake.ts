@@ -1,5 +1,5 @@
 import { normalizePath, Notice, type App } from "obsidian";
-import { MIN_NODE_PX } from "../constants";
+import { FILE_SUFFIX, MIN_NODE_PX } from "../constants";
 import { splitLinktext } from "../format/links-section";
 import { prepareCall, runInOneCommit } from "../commands/headless";
 import { fileNodeDefaults } from "../model/defaults";
@@ -9,7 +9,6 @@ import type { LinkFiguresView } from "../view/figure-view";
 import { isEditable } from "../view/pointer";
 import { roundPx } from "../view/pointer-math";
 import { pagePointAt, pageWorldRect } from "../view/viewport";
-import { FILE_SUFFIX } from "../constants";
 import { classifyDrop, classifyPaste, dedupeName, extensionOf, linkSafeName, type DropData, type IntakeAction } from "./intake-classify";
 import { linkForImage, linkForText, matchSelection, type NoteDropHost, type OpenNoteSelection } from "./note-drop";
 import { isPanelExtension, resolveFileNode } from "./resolver";
@@ -78,23 +77,16 @@ interface MarkdownViewLike {
 }
 
 /**
- * The selections of the open Markdown editors, the most recently active first (by the leaf's unofficial `activeTime`).
- * A view in Reading mode has no selection to match, and a figure opened as Markdown is not a note.
+ * The selection of the Markdown view a drag started in (`EditorDragTracker`), or null: no such view, a view in Reading
+ * mode (no selection to match), or a figure opened as Markdown (not a note).
  */
-function openNoteSelections(app: App): OpenNoteSelection[] {
-  const workspace = (app as unknown as { workspace?: { getLeavesOfType?: (type: string) => { view?: unknown; activeTime?: unknown }[] } }).workspace;
-  const leaves = workspace?.getLeavesOfType?.("markdown") ?? [];
-  const time = (leaf: { activeTime?: unknown }) => (typeof leaf.activeTime === "number" ? leaf.activeTime : 0);
-  const out: OpenNoteSelection[] = [];
-  for (const leaf of [...leaves].sort((a, b) => time(b) - time(a))) {
-    const view = leaf.view as MarkdownViewLike | undefined;
-    const path = view?.file?.path;
-    const editor = view?.editor;
-    if (typeof path !== "string" || path.endsWith(FILE_SUFFIX) || view?.getMode?.() === "preview") continue;
-    if (typeof editor?.getSelection !== "function" || typeof editor.listSelections !== "function") continue;
-    out.push({ path, selection: editor.getSelection(), ranges: editor.listSelections() });
-  }
-  return out;
+function sourceSelection(source: unknown): OpenNoteSelection | null {
+  const view = source as MarkdownViewLike | null;
+  const path = view?.file?.path;
+  const editor = view?.editor;
+  if (typeof path !== "string" || path.endsWith(FILE_SUFFIX) || view?.getMode?.() === "preview") return null;
+  if (typeof editor?.getSelection !== "function" || typeof editor.listSelections !== "function") return null;
+  return { path, selection: editor.getSelection(), ranges: editor.listSelections() };
 }
 
 /** A note's path as a panel links it: without `.md`, as Obsidian writes a link to a note. */
@@ -194,8 +186,9 @@ export class Intake {
       osFiles: files.map((f) => ({ name: f.name, type: f.type })),
       text: transfer?.getData("text/plain") ?? "",
       fromNote: view.plugin.settings.dropFromNote,
-      // Asked only for text, and only when the setting links drops to their note: the editors' selections as they are now.
-      selection: (text) => matchSelection(openNoteSelections(view.app), text),
+      // Asked only for text, and only when the setting links drops to their note: the selection, as it is now, of the
+      // editor the drag started in. Text dragged in from elsewhere has no such editor and is read as before.
+      selection: (text) => matchSelection(sourceSelection(view.plugin.editorDrag.source), text),
     });
     // Files that are all of a kind not wanted still go to `execute`, which says so.
     if (actions.length === 0 && files.length === 0) return;
@@ -300,7 +293,7 @@ export class Intake {
         try {
           const link = await linkForText(this.noteDropHost(), mode, action.notePath, action.from, action.to);
           if (!link) return null;
-          for (const notice of link.notices) new Notice(notice);
+          if (link.notices.length > 0) new Notice(`Link Figures: ${link.notices.join(" ")}`);
           return { file: noteLinkFile(action.notePath), subpath: link.subpath, show: "content" };
         } catch (error) {
           console.error(`Link Figures: could not link the text from ${action.notePath}`, error);
@@ -329,7 +322,7 @@ export class Intake {
           );
           // The note does not embed it (or cannot be read): the image itself, as before.
           if (!link) return asLink();
-          for (const notice of link.notices) new Notice(notice);
+          if (link.notices.length > 0) new Notice(`Link Figures: ${link.notices.join(" ")}`);
           return { file: noteLinkFile(action.sourcePath), subpath: link.subpath, show: "image", imageIndex: link.imageIndex };
         } catch (error) {
           console.error(`Link Figures: could not link ${action.linktext} in ${action.sourcePath}`, error);

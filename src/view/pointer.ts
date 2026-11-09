@@ -188,7 +188,8 @@ export class PointerController {
    */
   commitTime(): number {
     // A crop session is one step from its first edit to its end, over however many drags.
-    return this.dragStartedAt ?? this.cropSession.startedAt ?? Date.now();
+    // An inspector gesture (a histogram handle's drag) is stamped the same way (`LinkFiguresView.gestureStartedAt`).
+    return this.dragStartedAt ?? this.cropSession.startedAt ?? this.view.gestureStartedAt ?? Date.now();
   }
 
   /**

@@ -234,7 +234,8 @@ function histogramComposite(holder: HTMLElement, field: Field, read: Read, write
     return typeof v === "number" && Number.isFinite(v) ? v : NaN;
   };
   const xOf = (value: number, d: HistogramResult): number => ((value - d.lo) / (d.hi - d.lo)) * HISTOGRAM_WIDTH;
-  const valueAt = (x: number, d: HistogramResult): number => Math.round(d.lo + (Math.min(HISTOGRAM_WIDTH, Math.max(0, x)) / HISTOGRAM_WIDTH) * (d.hi - d.lo));
+  // `+ 0` turns a -0 (a flat plane's span starts at -0.5) into 0.
+  const valueAt = (x: number, d: HistogramResult): number => Math.round(d.lo + (Math.min(HISTOGRAM_WIDTH, Math.max(0, x)) / HISTOGRAM_WIDTH) * (d.hi - d.lo)) + 0;
   /** The pointer's x across the canvas in CSS px, whatever size the canvas is drawn at. */
   const pointerX = (ev: PointerEvent): number => {
     const rect = typeof canvas?.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
@@ -524,6 +525,8 @@ export class Inspector {
       return;
     }
     this.signature = section.signature;
+    // A gesture on the controls about to be taken away (a drag whose release they will never see) ends here.
+    if (this.view.gestureStartedAt != null) this.endGesture();
     this.el.empty();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
@@ -546,7 +549,16 @@ export class Inspector {
 
   /** The node types' context, and how a gesture's writes end their undo step, for drawing the fields. */
   private fieldEnv(): FieldEnv & InspectorContext {
-    return { ...this.context(), endMerge: () => this.view.store.endMerge() };
+    return { ...this.context(), endMerge: () => this.endGesture() };
+  }
+
+  /**
+   * Ends a gesture's undo step (see `runWrite`'s "start"): the next commit is a step of its own, stamped with its own time.
+   * Safe when there is none.
+   */
+  private endGesture(): void {
+    this.view.gestureStartedAt = null;
+    this.view.store.endMerge();
   }
 
   /** A control in this inspector has the focus and holds text that has not been committed. */
@@ -562,7 +574,9 @@ export class Inspector {
    * merges with the same field's commits just before it, as any commit does.
    */
   private runWrite(key: string, fields: readonly Field[], calls: PreparedCall[], step?: UndoStep): void {
-    if (step === "start" || step === "own") this.view.store.endMerge();
+    if (step === "start" || step === "own") this.endGesture();
+    // A gesture's commits are all stamped with its start, so the store merges them however long the pointer rests.
+    if (step === "start") this.view.gestureStartedAt = Date.now();
     try {
       runInOneCommit(this.view.store, this.view.commandContext(), calls, `inspect:${key}`);
     } catch (error) {
@@ -571,7 +585,7 @@ export class Inspector {
       console.error(`Link Figures: the inspector could not set "${key}"`, error);
       this.onWriteFailed(`Link Figures: could not change ${label}: ${reason}`);
     } finally {
-      if (step === "own") this.view.store.endMerge();
+      if (step === "own") this.endGesture();
     }
   }
 

@@ -50,6 +50,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   readonly index = new InvalidationIndex();
   readonly watcher: LinkWatcher;
   readonly resolvedCache = new Map<NodeId, Resolved>();
+  /**
+   * When a gesture made outside the stage (an inspector histogram drag) began, or null when there is none: while it
+   * lasts every commit is stamped with it, as a stage drag's are (see `PointerController.commitTime`), so the gesture
+   * stays one undo step however long the pointer rests.
+   */
+  gestureStartedAt: number | null = null;
 
   stageEl!: HTMLElement;
   viewportEl!: HTMLElement;

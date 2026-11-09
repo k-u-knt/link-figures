@@ -1,7 +1,7 @@
 import { Keymap } from "obsidian";
 import type { Plane } from "../links/decoders/tiff-convert";
-import { extensionOf } from "../links/intake-classify";
-import { resolveFileNode, samplesKey, sourceKindOf } from "../links/resolver";
+import { isVectorFile } from "../links/intake-classify";
+import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
@@ -210,16 +210,15 @@ export class NodeHost {
     if (node?.type !== "file") return null;
     // Not resolved yet (its first resolution is under way): told when it lands, unless it is a vector panel, which has no samples.
     if (!resolved) {
-      const kind = sourceKindOf(extensionOf(node.file));
-      if (kind !== "svg" && kind !== "pdf") this.awaitingResolution.add(id);
+      if (!isVectorFile(node.file)) this.awaitingResolution.add(id);
       return null;
     }
     // A resolution kept on screen while the node's new link resolves is for another file: its samples are not this node's.
-    if (resolved && this.resolvedIdentity.get(id) !== fileIdentity(node)) {
+    if (this.resolvedIdentity.get(id) !== fileIdentity(node)) {
       this.awaitingResolution.add(id);
       return null;
     }
-    if (resolved?.kind !== "image") return null;
+    if (resolved.kind !== "image") return null;
     const { file, source } = resolved;
     if (source !== "tiff" && source !== "raster") return null;
     const { access, decoders } = this.view.plugin;

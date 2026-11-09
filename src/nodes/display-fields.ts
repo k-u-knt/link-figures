@@ -1,10 +1,9 @@
-import { displayChannelsOf, readChannel, seedDisplay, topValue, type DisplayChannel } from "../adjust/display";
+import { displayChannelsOf, seedDisplay, topValue, type DisplayChannel } from "../adjust/display";
 import type { Plane } from "../links/decoders/tiff-convert";
-import { extensionOf } from "../links/intake-classify";
-import { sourceKindOf } from "../links/resolver";
+import { isVectorFile } from "../links/intake-classify";
 import { isLocked } from "../model/groups";
 import { planeHistogram, type HistogramResult } from "../model/histogram";
-import type { FileNode, Range16 } from "../model/types";
+import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { FieldRoute, InspectorContext } from "../registry/node-type";
 
@@ -14,32 +13,22 @@ export const HISTOGRAM_BINS = 220;
 /** A display field's key: `display.<channel>.<property>`. */
 const KEY = /^display\.(\d+)\.(lut|min|max|gamma|visible|histogram)$/;
 
-/** Whether panel `node` shows a vector source (SVG or PDF), which has no samples to display. */
-function isVector(node: FileNode): boolean {
-  const kind = sourceKindOf(extensionOf(node.file));
-  return kind === "svg" || kind === "pdf";
-}
-
 /** Whether `node` shows a picture that may have a display: an image panel, not a vector one, not shown as a badge. */
 function showsSamples(node: FileNode, ctx?: InspectorContext): boolean {
-  return node.show === "image" && !isVector(node) && ctx?.imageStateNow?.(node.id) !== "none";
+  return node.show === "image" && !isVectorFile(node.file) && ctx?.imageStateNow?.(node.id) !== "none";
 }
 
 /** The "auto" seed of each plane, as drawing fills a channel the adjustment lacks: worked out once per plane (a cached plane is never changed). */
 const autoSeeds = new WeakMap<Plane, DisplayChannel[]>();
 
-/** `displayChannelsOf`, with a plane's "auto" seed (a pass over all its samples) remembered. */
-function channelsOf(params: Record<string, unknown> | undefined, plane: Plane | null, range: Range16 | "auto"): DisplayChannel[] {
-  if (!plane || (!params && range !== "auto")) return displayChannelsOf(params, plane, range);
+/** A plane's "auto" seed, remembered. */
+function autoSeedOf(plane: Plane): DisplayChannel[] {
   let seed = autoSeeds.get(plane);
   if (!seed) {
     seed = seedDisplay(plane, "auto");
     autoSeeds.set(plane, seed);
   }
-  if (!params) return seed.map((c) => ({ ...c }));
-  // As `displayChannelsOf` reads them over the plane's seed.
-  const given = Array.isArray(params.channels) ? (params.channels as unknown[]) : [];
-  return seed.map((fallback, c) => readChannel(given[c], fallback));
+  return seed;
 }
 
 /** What the Display section of panel `node` shows: its channels and the plane they come from (null when not decoded). */
@@ -57,7 +46,7 @@ function shownDisplay(node: FileNode, ctx?: InspectorContext): Shown | null {
   const plane = ctx?.samplesNow?.(node.id) ?? null;
   const params = node.adjustments.find((a) => a.type === "display")?.params;
   if (!plane && !params) return null;
-  const channels = channelsOf(params, plane, node.range).slice(0, 3);
+  const channels = displayChannelsOf(params, plane, node.range, autoSeedOf).slice(0, 3);
   return channels.length > 0 ? { channels, plane } : null;
 }
 

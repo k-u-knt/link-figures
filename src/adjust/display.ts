@@ -69,15 +69,22 @@ export function readChannel(value: unknown, fallback: DisplayChannel): DisplayCh
  * with a plane, one per channel of it — the adjustment's own, each missing or malformed one filled as drawing fills it
  * (the plane's "auto" seed), or without an adjustment the seed of what the panel shows by its `range` (§10.1). Without a
  * plane only the adjustment's stored channels are known (each read over a 16-bit grey fallback); none without either.
+ * `autoSeed` gives the plane's "auto" seed (`seedDisplay(plane, "auto")`, a pass over every sample), for a caller that
+ * remembers it per plane; its channels are not changed.
  */
-export function displayChannelsOf(params: Record<string, unknown> | undefined, plane: Plane | null, range: Range16 | "auto"): DisplayChannel[] {
+export function displayChannelsOf(
+  params: Record<string, unknown> | undefined,
+  plane: Plane | null,
+  range: Range16 | "auto",
+  autoSeed: (plane: Plane) => DisplayChannel[] = (p) => seedDisplay(p, "auto"),
+): DisplayChannel[] {
   const given = params && Array.isArray(params.channels) ? (params.channels as unknown[]) : [];
   if (!plane) {
     const fallback: DisplayChannel = { min: 0, max: 65535, gamma: 1, lut: "grey", visible: true };
     return given.map((c) => readChannel(c, fallback));
   }
-  if (!params) return seedDisplay(plane, range);
-  return seedDisplay(plane, "auto").map((fallback, c) => readChannel(given[c], fallback));
+  if (!params) return range === "auto" ? autoSeed(plane).map((c) => ({ ...c })) : seedDisplay(plane, range);
+  return autoSeed(plane).map((fallback, c) => readChannel(given[c], fallback));
 }
 
 /**

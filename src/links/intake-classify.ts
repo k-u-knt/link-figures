@@ -1,5 +1,5 @@
 import { splitLinktext } from "../format/links-section";
-import { isPanelExtension } from "./resolver";
+import { isPanelExtension, sourceKindOf } from "./resolver";
 
 /** What a drop carried, read down to the fields that decide what to do with it. */
 export interface DropData {
@@ -33,6 +33,12 @@ export type IntakeAction =
 export function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
+/** Whether the file at `path` is a vector source (SVG or PDF): a panel of it has no samples to display. */
+export function isVectorFile(path: string): boolean {
+  const kind = sourceKindOf(extensionOf(path));
+  return kind === "svg" || kind === "pdf";
 }
 
 /** `[[…]]` and `![[…]]`, on one line. */

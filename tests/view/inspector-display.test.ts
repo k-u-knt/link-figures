@@ -31,7 +31,7 @@ const rgb16: Plane = { width: 2, height: 1, bitsPerSample: 16, samplesPerPixel: 
  * An inspector on one panel (`file`), selected, with the view's `samplesNow` answering `samples()` for it: the real file
  * node type and the display, crop and drawing commands, as the plugin registers them.
  */
-function setup(opts: { file?: string; samples?: () => Plane | null; second?: boolean } = {}) {
+function setup(opts: { file?: string; samples?: () => Plane | null; second?: boolean; clock?: { now: number } } = {}) {
   const doc = createDocument("a4-portrait");
   const page = doc.pages[0];
   const panel = { ...fileNodeDefaults(page, { file: opts.file ?? "cells.tif", subpath: "", show: "image" }, []), id: "p-1" } as FileNode;
@@ -41,10 +41,13 @@ function setup(opts: { file?: string; samples?: () => Plane | null; second?: boo
   registries.nodeTypes.register(fileNodeType);
   for (const lut of builtinLuts) registries.luts.register(lut);
   for (const command of [...drawingCommands(), ...cropCommands(), ...displayCommands()]) registries.commands.register(command);
-  const store = createFigureStore(doc, registries);
+  // The store's clock as the view wires it: a gesture's start while one lasts (`PointerController.commitTime`), else the time.
+  const clock = opts.clock;
+  const store = createFigureStore(doc, registries, clock ? () => view.gestureStartedAt ?? clock.now : undefined);
   const selection = new SelectionState();
   let samples = opts.samples ?? (() => grey16);
   const view = {
+    gestureStartedAt: null as number | null,
     readOnly: false,
     store,
     selection,
@@ -194,6 +197,39 @@ describe("the histogram", () => {
     expect(t.channels()?.[0].max).toBe(3900);
   });
 
+  test("a drag that rests longer than the merge window between moves is still one undo step", () => {
+    const clock = { now: Date.now() };
+    const t = setup({ clock });
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(WIDTH));
+    canvas.fire("pointermove", at(200));
+    clock.now += 1000;
+    canvas.fire("pointermove", at(150));
+    clock.now += 1000;
+    canvas.fire("pointermove", at(110));
+    canvas.fire("pointerup", at(110));
+    expect(t.labels).toHaveLength(3);
+    expect(t.channels()?.[0].max).toBe(2500);
+    t.store.undo();
+    expect(t.channels()).toBeUndefined();
+    expect(t.store.canUndo()).toBe(false);
+  });
+
+  test("after the release commits are stamped with their own time again: a typed edit soon after is its own step", () => {
+    const clock = { now: Date.now() };
+    const t = setup({ clock });
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(WIDTH));
+    canvas.fire("pointermove", at(110));
+    canvas.fire("pointerup", at(110));
+    t.el.typeInto("display.0.max", "3000");
+    clock.now += 100;
+    t.el.typeInto("display.0.max", "3100");
+    // The two typed edits merge with each other (100 ms apart), not with the drag.
+    t.store.undo();
+    expect(t.channels()?.[0].max).toBe(2500);
+  });
+
   test("the whole drag is undone at once", () => {
     const t = setup();
     const canvas = canvasOf(t.el);
@@ -224,6 +260,16 @@ describe("the histogram", () => {
     canvas.fire("pointermove", at(0));
     canvas.fire("pointerup", at(0));
     expect(t.channels()?.[0]).toMatchObject({ min: 2500, max: 2500 });
+  });
+
+  test("on a flat black plane the min handle at the left writes 0, never -0", () => {
+    const flat: Plane = { width: 2, height: 1, bitsPerSample: 16, samplesPerPixel: 1, data: new Uint16Array(2) };
+    const t = setup({ samples: () => flat });
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(0));
+    canvas.fire("pointermove", at(0));
+    canvas.fire("pointerup", at(0));
+    expect(Object.is(t.channels()?.[0].min, 0)).toBe(true);
   });
 
   test("a move without a press writes nothing", () => {

@@ -1,6 +1,6 @@
 import { channelSamples, displayChannelsOf, topValue, type DisplayChannel } from "../adjust/display";
 import type { Plane } from "../links/decoders/tiff-convert";
-import { extensionOf } from "../links/intake-classify";
+import { extensionOf, isVectorFile } from "../links/intake-classify";
 import { sourceKindOf } from "../links/resolver";
 import { percentiles, planeHistogram, type HistogramResult } from "../model/histogram";
 import type { FileNode, NodeId } from "../model/types";
@@ -63,16 +63,10 @@ const HISTOGRAM_PARAMS: ParamSpec = {
   bins: { type: "integer", minimum: 1, maximum: 4096, default: 256 },
 };
 
-/** Whether panel `node` shows a vector source (SVG or PDF), which has no samples to display. */
-function isVector(node: FileNode): boolean {
-  const kind = sourceKindOf(extensionOf(node.file));
-  return kind === "svg" || kind === "pdf";
-}
-
 /** The file panel `id` showing a TIFF or raster image that may be changed; refuses anything else, naming `command`. */
 function imagePanel(ctx: CommandContext, command: string, id: NodeId): FileNode {
   const node = panelGuard(ctx, command, id);
-  if (isVector(node)) throw new CommandError(`${command}: "${id}" is a vector panel`);
+  if (isVectorFile(node.file)) throw new CommandError(`${command}: "${id}" is a vector panel`);
   return node;
 }
 
@@ -204,7 +198,7 @@ function histogramOf(ctx: CommandContext, args: HistogramArgs): HistogramResult 
 /** The one selected panel showing a TIFF or raster image that may be changed, if that is what is selected. */
 function selectedDisplayPanel(ctx: CommandContext): FileNode | undefined {
   const node = selectedImagePanel(ctx);
-  return node && !isVector(node) ? node : undefined;
+  return node && !isVectorFile(node.file) ? node : undefined;
 }
 
 /** `panel.display`, `panel.display-auto`, `panel.display-reset` and `panel.histogram`. */

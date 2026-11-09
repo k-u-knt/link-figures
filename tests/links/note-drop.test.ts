@@ -1,5 +1,4 @@
 import { linkForImage, linkForText, matchSelection, parseNote, type NoteDropHost } from "../../src/links/note-drop";
-import { REINDEX_TIMEOUT_MS } from "../../src/links/note-block-id";
 
 const TEXT = [
   "Intro line with no heading.", // 0
@@ -192,6 +191,18 @@ describe("linkForText", () => {
     const host = setup({ text });
     expect((await linkForText(host, "block-id", PATH, 2, 2))?.subpath).toBe("#^fig-new1");
     expect(host.blockId).toHaveBeenCalledWith(PATH, 3);
+  });
+
+  test("block-id: a block that cannot hold an id, under a heading that is not unique: one message, the outcome's", async () => {
+    const text = ["# Fig", "x", "# Fig", "<div>a</div>"].join("\n");
+    const cache = parseNote(text);
+    cache.sections![3].type = "html";
+    const host = setup({ text, cache });
+    const link = await linkForText(host, "block-id", PATH, 3, 3);
+    expect(link?.subpath).toBe("");
+    expect(link?.notices).toEqual([expect.stringMatching(/html block cannot hold a block id, and the heading "Fig" above it .* is not unique, so the panel links the whole note\.$/)]);
+    expect(link?.notices[0]).not.toMatch(/the heading above it/);
+    expect(host.blockId).not.toHaveBeenCalled();
   });
 
   test("heading mode gives at most one Notice per drop", async () => {

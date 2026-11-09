@@ -91,9 +91,17 @@ export function mdLinkTarget(raw: string): string {
   }
 }
 
-/** The vault targets of the Markdown links in `text`: a web or other URL (`scheme:`) names no vault file. */
-function mdLinksIn(text: string): string[] {
-  return [...text.matchAll(MD_LINK)].map((m) => mdLinkTarget(m[1])).filter((t) => t.trim() !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(t));
+/** The vault targets of the Markdown links in `text`, with where each is: a web or other URL (`scheme:`) names no vault file. */
+function mdLinksIn(text: string): { linktext: string; at: number }[] {
+  return [...text.matchAll(MD_LINK)]
+    .map((m) => ({ linktext: mdLinkTarget(m[1]), at: m.index ?? 0 }))
+    .filter(({ linktext }) => linktext.trim() !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(linktext));
+}
+
+/** The linktexts of the wikilinks and the Markdown links in `text`, in the order they are written. */
+function linksInOrder(text: string): string[] {
+  const wiki = [...text.matchAll(WIKILINK)].flatMap((m) => wikilinksIn(m[0]).map((linktext) => ({ linktext, at: m.index ?? 0 })));
+  return [...wiki, ...mdLinksIn(text)].sort((a, b) => a.at - b.at).map((l) => l.linktext);
 }
 
 /** Whether `text` is links and embeds only (wikilinks and Markdown ones), with nothing but white space between them. */
@@ -146,7 +154,7 @@ export function classifyDrop(d: DropData): IntakeAction[] {
   // Text selected in an open note's editor links the place it came from, unless it is links only (each is linked, from that note).
   const match = linksToNote(d.fromNote) && d.selection && text.trim() !== "" ? d.selection(text) : null;
   if (match) {
-    if (onlyLinks(text)) return [...wikilinksIn(text), ...mdLinksIn(text)].map((linktext) => ({ kind: "link-text", linktext, sourcePath: match.path }));
+    if (onlyLinks(text)) return linksInOrder(text).map((linktext) => ({ kind: "link-text", linktext, sourcePath: match.path }));
     return [{ kind: "link-block", notePath: match.path, from: match.from, to: match.to }];
   }
   // Text with a wikilink in it is read for its links only, even when none of them names a file.

@@ -301,13 +301,24 @@ async function placeBlock(host: NoteDropHost, mode: DropFromNote, path: string, 
   const id = idOf(state, block);
   if (id) return { subpath: `#^${id}`, start: block.start };
   if (mode === "block-id" && canHoldId(block)) return blockIdLink(host, path, state, block);
+  // A block that cannot hold an id (or heading mode): the heading above it, never another block. One message, for what is linked.
   const index = headingAbove(headings, block.start);
-  if (mode === "block-id") {
-    notices.push(`A ${block.type} block cannot hold a block id, so the panel links ${index >= 0 ? "the heading above it" : "the whole note"}.`);
+  const cannot = `A ${block.type} block cannot hold a block id`;
+  if (index >= 0) {
+    const subpath = headingSubpath(headings, index);
+    if (subpath !== null) {
+      if (mode === "block-id") notices.push(`${cannot}, so the panel links the heading above it.`);
+      return { subpath, start: headings[index].line };
+    }
+    const heading = `the heading "${headings[index].heading}"`;
+    notices.push(
+      mode === "block-id"
+        ? `${cannot}, and ${heading} above it in ${noteName(path)} is not unique, so the panel links the whole note.`
+        : `The ${heading.slice(4)} in ${noteName(path)} is not unique, so the panel links the whole note.`,
+    );
+    return { subpath: "", start: 0 };
   }
-  // Linking the heading here, never another block: a heading that is not unique gives the whole note.
-  if (index >= 0) return sectionLink(host, "heading", path, state, headings, index, [], notices);
-  if (mode !== "block-id") notices.push(`There is no heading above ${what} in ${noteName(path)}, so the panel links the whole note.`);
+  notices.push(mode === "block-id" ? `${cannot}, so the panel links the whole note.` : `There is no heading above ${what} in ${noteName(path)}, so the panel links the whole note.`);
   return { subpath: "", start: 0 };
 }
 

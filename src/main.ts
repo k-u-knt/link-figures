@@ -12,7 +12,7 @@ import { drawingCommands } from "./commands/drawing";
 import { panelCommands } from "./commands/panels";
 import { blockIdPrefix } from "./links/block-id";
 import { noteBlockId, type NoteHost } from "./links/note-block-id";
-import { EditorDragTracker } from "./links/editor-drag";
+import { EditorDragTracker, listenForEditorDrags } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
@@ -85,11 +85,20 @@ export default class LinkFiguresPlugin extends Plugin {
     const localFonts = localFontSource();
     this.registries.fontSources.register(localFonts);
     void localFonts.prime();
-    // Where a drag starts, before CodeMirror or anything else can stop it; forgotten when it ends. The drop listener is a
-    // bubbling one, so the stage's own drop handler (which reads the record) runs first.
-    this.registerDomEvent(document, "dragstart", (ev) => this.editorDrag.dragStart(ev.target), { capture: true });
-    this.registerDomEvent(document, "dragend", () => this.editorDrag.clear(), { capture: true });
-    this.registerDomEvent(document, "drop", () => this.editorDrag.clear());
+    // Where a drag starts in an editor, in the main window and in each popout (removed when the popout closes).
+    this.register(listenForEditorDrags(document, this.editorDrag));
+    const popouts = new Map<Document, () => void>();
+    this.registerEvent(this.app.workspace.on("window-open", (win) => popouts.set(win.doc, listenForEditorDrags(win.doc, this.editorDrag))));
+    this.registerEvent(
+      this.app.workspace.on("window-close", (win) => {
+        popouts.get(win.doc)?.();
+        popouts.delete(win.doc);
+      }),
+    );
+    this.register(() => {
+      for (const off of popouts.values()) off();
+      popouts.clear();
+    });
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") void localFonts.prime();
     });

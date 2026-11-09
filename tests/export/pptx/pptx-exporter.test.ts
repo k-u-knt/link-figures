@@ -73,6 +73,20 @@ describe("pptx exporter", () => {
     expect(one(second, "p:sldSz").getAttribute("cy")).toBe(String(297 * 36000));
   });
 
+  it("names a file by the figure's page sizes, not the exported pages, so a size always maps to the same name", async () => {
+    const doc = createDocument("nature-double");
+    doc.pages.push(createPage("a4-portrait", [doc.pages[0].id], "Big"));
+    // Only the second size exported: still the suffixed name, never the first size's plain name.
+    const only = await run(input(doc, { pages: [doc.pages[1]] }));
+    expect(only.files.map((f) => f.name)).toEqual(["Fig 1 (210×297 mm).pptx"]);
+    // Only the first size exported: the plain name.
+    const first = await run(input(doc, { pages: [doc.pages[0]] }));
+    expect(first.files.map((f) => f.name)).toEqual(["Fig 1.pptx"]);
+    // A figure of one size has no suffix.
+    const single = createDocument("nature-double");
+    expect((await run(input(single))).files.map((f) => f.name)).toEqual(["Fig 1.pptx"]);
+  });
+
   it("skips an item of a type no plugin draws with the spec's warning, said once for several such items", async () => {
     const doc = createDocument("nature-double");
     const page = doc.pages[0];

@@ -117,8 +117,8 @@ function svgWarnings(input: ExportInput): Set<string> {
 }
 
 /**
- * The PowerPoint exporter: one editable `.pptx` per page size (the first `<base>.pptx`, each other
- * `<base> (<w>×<h> mm).pptx`), one slide per page, in the order asked for. Each node is written by its type's `toPptx`;
+ * The PowerPoint exporter: one editable `.pptx` per page size (the size of the figure's first page `<base>.pptx`, each
+ * other `<base> (<w>×<h> mm).pptx`, whichever pages are exported), one slide per page, in the order asked for. Each node is written by its type's `toPptx`;
  * a type without it, or one that answers `"raster"`, is written as a picture of its drawing at the export dpi, with a
  * warning. Groups whose members are next to each other in z order are `p:grpSp`; others are written loose, with a
  * warning. A page outside PowerPoint's slide sizes is scaled to fit, with a warning. Panels are trimmed (`pdfPanels`
@@ -272,20 +272,24 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
       };
 
       // One file per page size, in the order the sizes first come.
+      const sizeKey = (page: Page) => `${page.width}x${page.height}`;
       const bySize = new Map<string, Page[]>();
       for (const page of input.pages) {
-        const key = `${page.width}x${page.height}`;
+        const key = sizeKey(page);
         bySize.set(key, [...(bySize.get(key) ?? []), page]);
       }
+      // The plain name is for the first size among the figure's pages (not the exported ones), so a size always
+      // maps to the same file name, whichever pages are exported.
+      const first = input.doc.pages[0] ?? input.pages[0];
+      const plainSize = first ? sizeKey(first) : undefined;
       const files: { name: string; blob: Blob }[] = [];
-      let first = true;
       for (const pages of bySize.values()) {
         const slides: PptxSlideInput[] = [];
         for (const page of pages) slides.push(await writeSlide(page));
         const fit = slideFit(pages[0].width, pages[0].height);
         const bytes = buildPptx({ sizeEmu: { cx: fit.cx, cy: fit.cy }, slides, title: input.baseName });
-        const name = first ? `${input.baseName}.pptx` : `${input.baseName} (${sizeName(pages[0])}).pptx`;
-        first = false;
+        const key = sizeKey(pages[0]);
+        const name = key === plainSize ? `${input.baseName}.pptx` : `${input.baseName} (${sizeName(pages[0])}).pptx`;
         files.push({ name, blob: new Blob([bytes as Uint8Array<ArrayBuffer>], { type: PPTX_MIME }) });
       }
       return { files, warnings: [...warnings] };

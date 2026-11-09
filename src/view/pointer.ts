@@ -1,7 +1,7 @@
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
-import { descendantsOf, isGroup, isLocked, outermostUnit, parentOf } from "../model/groups";
+import { descendantsOf, isGroup, isLocked, outermostUnit, parentOf, unitsOf } from "../model/groups";
 import { toSvgPath } from "../model/path";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
@@ -48,7 +48,7 @@ type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
   | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean }
-  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: boolean; started: boolean }
+  | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; within: NodeId | null; el: HTMLElement }
   | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null };
@@ -255,6 +255,8 @@ export class PointerController {
     if (entered !== null && !inside) {
       this.setEntered(null);
       entered = null;
+      // What shift keeps selected is then taken as the top-level units it is part of, so as not to mix levels.
+      if (ev.shiftKey) selection.set(unitsOf(doc, selection.ids, null));
     }
     if (!ev.shiftKey || page === null || page.id !== selectedPage) selection.clear();
     if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids], within: entered, leaveOnClick: inside }, null);
@@ -321,8 +323,8 @@ export class PointerController {
       const node = doc.nodes.find((n) => n.id === intent.id);
       if (!node) return null;
       const start = { x: node.x, y: node.y, width: node.width, height: node.height };
-      const group = isGroup(doc, node.id, this.view.plugin.registries);
-      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start, group, started: false };
+      const group = isGroup(doc, node.id, this.view.plugin.registries) ? { pageId: node.page, el: null } : null;
+      return { kind: "resizing", pointerId: g.pointerId, world: g.world, id: node.id, handle: intent.handle, start, group };
     }
     if (intent.kind === "handle") {
       if (!doc.nodes.some((n) => n.id === intent.id)) return null;
@@ -373,30 +375,48 @@ export class PointerController {
   }
 
   /**
-   * Resizes the node to the box the drag has taken it to. A group is resized by `node.update` on its box, which scales
-   * its members (see `scaleUnits`); the calls of one drag make one undo step. Any other node's box is written directly.
+   * Resizes the node to the box the drag has taken it to, always worked out from the box it had when the drag began.
+   * A group is not changed while the drag goes on: its new box is outlined in its page's overlay, and the release
+   * resizes it (see `finishGroupResize`). Any other node's box is written directly, the commits making one undo step.
    */
   private resizeBy(g: Resizing, dx: number, dy: number, keepAspect: boolean): void {
     if (!this.store.doc.nodes.some((n) => n.id === g.id)) {
       this.endGesture();
       return;
     }
-    const next = resizeRect(g.start, g.handle, dx, dy, { keepAspect, min: MIN_NODE_PX });
+    const next = resizedBox(g, dx, dy, keepAspect);
     if (g.group) {
-      const box = { x: roundPx(next.x), y: roundPx(next.y), width: nodeSizePx(roundPx(next.width)), height: nodeSizePx(roundPx(next.height)) };
-      this.view.runCommandById("node.update", { id: g.id, patch: box }, g.started ? "continue" : "start");
-      g.started = true;
+      const host = this.overlayOf(g.group.pageId);
+      if (!host) return;
+      if (g.group.el?.parentElement !== host) {
+        g.group.el?.remove();
+        g.group.el = host.ownerDocument.createElement("div");
+        g.group.el.className = "lf-draw-preview";
+        host.appendChild(g.group.el);
+      }
+      const style = g.group.el.style;
+      style.left = `${next.x}px`;
+      style.top = `${next.y}px`;
+      style.width = `${next.width}px`;
+      style.height = `${next.height}px`;
       return;
     }
     this.store.commit("resize", (draft) => {
       const node = draft.nodes.find((n) => n.id === g.id);
       if (!node) return;
-      node.x = roundPx(next.x);
-      node.y = roundPx(next.y);
-      // Rounding must not take a size back under the least it may be.
-      node.width = nodeSizePx(roundPx(next.width));
-      node.height = nodeSizePx(roundPx(next.height));
+      Object.assign(node, next);
     });
+  }
+
+  /**
+   * The release of a group's resize: one `node.update` on the group, with the box the release point gives from the box
+   * it had when the drag began (Shift: keeping its aspect), which scales its members (see `scaleUnits`). One undo step.
+   */
+  private finishGroupResize(g: Resizing, ev: PointerEvent): void {
+    const now = this.view.viewport.toWorld(this.view.stagePoint(ev));
+    const box = resizedBox(g, now.x - g.world.x, now.y - g.world.y, ev.shiftKey);
+    this.endGesture();
+    if (this.store.doc.nodes.some((n) => n.id === g.id)) this.view.runCommandById("node.update", { id: g.id, patch: box });
   }
 
   /**
@@ -600,6 +620,10 @@ export class PointerController {
       this.finishHandle(g);
       return;
     }
+    if (g.kind === "resizing" && g.group) {
+      this.finishGroupResize(g, ev);
+      return;
+    }
     const selection = this.view.selection;
     if (g.kind === "pressed" && g.collapseTo !== null && selection.ids.length > 1) selection.set([g.collapseTo]);
     // A click on empty paper inside the entered group leaves it, as one anywhere else did on the press.
@@ -626,6 +650,7 @@ export class PointerController {
     if (g.kind === "idle") return;
     this.store.endMerge();
     if (g.kind === "marquee" || g.kind === "drawing" || g.kind === "handling") g.el?.remove();
+    if (g.kind === "resizing") g.group?.el?.remove();
     try {
       if (this.stage?.hasPointerCapture(g.pointerId)) this.stage.releasePointerCapture(g.pointerId);
     } catch {
@@ -665,6 +690,12 @@ export class PointerController {
   // Keyboard
 
   private onKeyDown(ev: KeyboardEvent): void {
+    // Escape during a group's resize drops it: the group is changed only by the release.
+    if (ev.key === "Escape" && this.gesture.kind === "resizing" && this.gesture.group && !this.view.readOnly) {
+      ev.preventDefault();
+      this.endGesture();
+      return;
+    }
     // The stage is the one place these keys are ours; text being typed into inside it, and anything while dragging, are not.
     if (this.view.readOnly || this.gesture.kind !== "idle" || ev.isComposing || isEditable(ev.target)) return;
     const store = this.store;
@@ -990,6 +1021,13 @@ export class PointerController {
       .filter((n) => n.page === page.id && (n.parent ?? null) === within)
       .map((n) => ({ id: n.id, rect: nodeWorldRect(doc, n), locked: isLocked(doc, n.id), whole: !!this.nodeType(n)?.members }));
   }
+}
+
+/** The box a resize drag by (`dx`, `dy`) gives, from the box at its start, rounded and kept to the least size a node may have. */
+function resizedBox(g: Resizing, dx: number, dy: number, keepAspect: boolean): Rect {
+  const next = resizeRect(g.start, g.handle, dx, dy, { keepAspect, min: MIN_NODE_PX });
+  // Rounding must not take a size back under the least it may be.
+  return { x: roundPx(next.x), y: roundPx(next.y), width: nodeSizePx(roundPx(next.width)), height: nodeSizePx(roundPx(next.height)) };
 }
 
 /** The world point `world` as a point on `page`, clamped to its paper. */

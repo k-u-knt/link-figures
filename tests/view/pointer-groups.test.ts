@@ -110,7 +110,7 @@ function setup(build: (doc: Document) => void) {
   const controller = new PointerController(view as never);
   view.store = createFigureStore(doc, registries, () => controller.commitTime());
   controller.attach(stage as never);
-  const pointer = (type: "pointerdown" | "pointermove" | "pointerup", clientX: number, clientY: number, extra: object = {}) =>
+  const pointer = (type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", clientX: number, clientY: number, extra: object = {}) =>
     stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, clientX, clientY, target: {}, ...extra });
   const click = (x: number, y: number, extra: object = {}) => {
     pointer("pointerdown", x, y, extra);
@@ -133,7 +133,7 @@ function setup(build: (doc: Document) => void) {
   const nodeOf = (id: string) => view.store.doc.nodes.find((n) => n.id === id)!;
   /** What was told by a double-click, as `[node id, event type]`. */
   const told = () => [...els].flatMap(([id, el]) => el.dispatchEvent.mock.calls.map(([ev]) => [id, ev.type]));
-  return { view, overlay, ran, click, dblclick, drag, key, nodeOf, told };
+  return { view, overlay, ran, pointer, click, dblclick, drag, key, nodeOf, told };
 }
 
 // On a, on c, on x, and on empty paper inside h's box (between a, b and c), and far from everything.
@@ -217,6 +217,18 @@ describe("entering and leaving groups", () => {
     expect(view.selection.ids).toEqual(["x"]);
   });
 
+  test("a shift-press on empty paper outside the entered group leaves it, and keeps the selection as top-level units", () => {
+    const { view, pointer, dblclick } = setup(nested());
+    dblclick(...ON_C);
+    expect(view.selection.ids).toEqual(["c"]);
+    pointer("pointerdown", ...PAPER, { shiftKey: true });
+    expect(view.enteredGroup).toBe(null);
+    expect(view.selection.ids).toEqual(["h"]);
+    pointer("pointermove", 290, 290, { shiftKey: true });
+    pointer("pointerup", 290, 290, { shiftKey: true });
+    expect(view.selection.ids).toEqual(["h", "x"]);
+  });
+
   test("the entered group is marked by a dashed outline in its page's overlay, gone once it is left", () => {
     const { overlay, dblclick, key } = setup(nested());
     const outlines = () => overlay.children.filter((c) => c.classes.includes("lf-group-entered"));
@@ -297,6 +309,73 @@ describe("moving and resizing groups", () => {
     expect(nodeOf("a")).toMatchObject({ x: 10, width: 100 });
     expect(nodeOf("b")).toMatchObject({ x: 150, width: 100 });
     expect(view.store.undo()).toBe(false);
+  });
+
+  test("a group is not changed during its resize drag, which is outlined; the release scales its members in one undo step", () => {
+    const { view, overlay, ran, pointer, dblclick, nodeOf } = setup(nested());
+    dblclick(...ON_A);
+    const before = view.store.doc;
+    ran.length = 0;
+    const previews = () => overlay.children.filter((c) => c.classes.includes("lf-draw-preview"));
+    pointer("pointerdown", 250, 40);
+    pointer("pointermove", 370, 40);
+    pointer("pointermove", 490, 40);
+    expect(view.store.doc).toBe(before);
+    expect(ran).toEqual([]);
+    expect(previews()).toHaveLength(1);
+    expect(previews()[0].style).toMatchObject({ left: "10px", top: "20px", width: "480px", height: "40px" });
+    pointer("pointerup", 490, 40);
+    expect(previews()).toHaveLength(0);
+    expect(ran).toEqual(["node.update"]);
+    expect(nodeOf("b")).toMatchObject({ x: 290, width: 200 });
+    view.store.undo();
+    expect(view.store.doc.nodes).toEqual(before.nodes);
+    expect(view.store.undo()).toBe(false);
+  });
+
+  test("a group's resize drag taken far left and back to its start size leaves its members as they were", () => {
+    const { view, pointer, dblclick, nodeOf } = setup(nested());
+    dblclick(...ON_A);
+    const a = { ...nodeOf("a") };
+    const b = { ...nodeOf("b") };
+    pointer("pointerdown", 250, 40);
+    pointer("pointermove", 0, 40);
+    pointer("pointermove", -200, 40);
+    pointer("pointermove", 120, 40);
+    pointer("pointerup", 250, 40);
+    expect(nodeOf("a")).toEqual(a);
+    expect(nodeOf("b")).toEqual(b);
+    expect(view.store.canUndo()).toBe(false);
+  });
+
+  test("Escape or a cancelled pointer during a group's resize leaves the document as it was, and the outline goes", () => {
+    const { view, overlay, pointer, dblclick, key } = setup(nested());
+    dblclick(...ON_A);
+    const before = view.store.doc;
+    const previews = () => overlay.children.filter((c) => c.classes.includes("lf-draw-preview"));
+    pointer("pointerdown", 250, 40);
+    pointer("pointermove", 490, 40);
+    key("Escape");
+    pointer("pointerup", 490, 40);
+    expect(view.store.doc).toBe(before);
+    expect(previews()).toHaveLength(0);
+    expect(view.enteredGroup).toBe("h");
+    pointer("pointerdown", 250, 40);
+    pointer("pointermove", 490, 40);
+    pointer("pointercancel", 490, 40);
+    expect(view.store.doc).toBe(before);
+    expect(previews()).toHaveLength(0);
+  });
+
+  test("Shift keeps a group's aspect as it is resized", () => {
+    const { pointer, dblclick, nodeOf } = setup(nested());
+    dblclick(...ON_A);
+    // g is 240 × 40; its south-east handle, at (250, 60), dragged to twice the width.
+    pointer("pointerdown", 250, 60, { shiftKey: true });
+    pointer("pointermove", 490, 60, { shiftKey: true });
+    pointer("pointerup", 490, 60, { shiftKey: true });
+    expect(nodeOf("g")).toMatchObject({ x: 10, y: 20, width: 480, height: 80 });
+    expect(nodeOf("a")).toMatchObject({ width: 200, height: 80 });
   });
 
   test("a node that is not a group is still resized as before", () => {

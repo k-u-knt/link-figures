@@ -444,25 +444,42 @@ const inWinAnsi = (char: string) => {
 };
 /** What a standard font cannot draw is shown as this. */
 const NOT_IN_WIN_ANSI = "?";
+/** Characters outside WinAnsi that a WinAnsi character stands in for without a warning: minus, thin spaces, hyphens. */
+const LOOK_ALIKES: Record<string, string> = { "\u2212": "-", "\u2009": " ", "\u202f": " ", "\u2010": "-", "\u2011": "-" };
 
-/** Replaces, in the text nodes under `el`, each character a standard font cannot encode with "?"; the characters replaced. */
-function toWinAnsi(el: Element): string[] {
+/**
+ * Makes the text a standard font draws encodable in WinAnsi: each character outside it becomes its look-alike, or "?".
+ * `ownOnly` limits this to `el`'s own text nodes (one run); otherwise every text node under it. Gives the characters
+ * shown as "?" (each once) and whether anything changed.
+ */
+function toWinAnsi(el: Element, ownOnly = false): { replaced: string[]; changed: boolean } {
   const replaced: string[] = [];
-  const walker = el.ownerDocument.createTreeWalker(el, 4 /* NodeFilter.SHOW_TEXT */);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+  let changed = false;
+  const nodes: Node[] = [];
+  if (ownOnly) {
+    for (const child of Array.from(el.childNodes)) if (child.nodeType === 3) nodes.push(child);
+  } else {
+    const walker = el.ownerDocument.createTreeWalker(el, 4 /* NodeFilter.SHOW_TEXT */);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+  }
+  for (const node of nodes) {
     const value = node.nodeValue ?? "";
     let out = "";
     for (const char of value) {
       // Line breaks and tabs are white space to svg2pdf.js, not characters it draws.
       if (inWinAnsi(char) || /[\t\n\r]/.test(char)) out += char;
+      else if (Object.hasOwn(LOOK_ALIKES, char)) out += LOOK_ALIKES[char];
       else {
         out += NOT_IN_WIN_ANSI;
         if (!replaced.includes(char)) replaced.push(char);
       }
     }
-    if (out !== value) node.nodeValue = out;
+    if (out !== value) {
+      node.nodeValue = out;
+      changed = true;
+    }
   }
-  return replaced;
+  return { replaced, changed };
 }
 
 /** Sets `font-family` in an element's inline style, which wins over every other source in svg2pdf.js. */
@@ -533,7 +550,8 @@ const prefixed = (label: string, warning: string) => (label === "" ? warning : `
  */
 export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: LabelOf = () => ""): Promise<{ svg: string; faces: RegisteredFace[]; warnings: string[] }> {
   const unchanged = { svg, faces: [], warnings: [] };
-  if (!/font-(family|weight)|font\s*:/i.test(svg) || typeof DOMParser === "undefined") return unchanged;
+  // Text in a standard font may also need its characters made WinAnsi-safe, whatever the SVG says about fonts.
+  if (!/font-(family|weight)|font\s*:|[^\u0000-\u00ff]/i.test(svg) || typeof DOMParser === "undefined") return unchanged;
   const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
   const root = parsed?.documentElement;
   if (!root || typeof root.querySelectorAll !== "function" || parsed.getElementsByTagName("parsererror").length > 0) return unchanged;
@@ -554,8 +572,10 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
       if (chars === "") continue;
       const style = styleKey(el, rules);
       const family = computed(el, "font-family", rules);
-      if (style === null || family === undefined) continue;
-      runs.push({ el, chars, style, family, outcome: await resolveList(parseFamilies(family), style, resolve) });
+      if (style === null) continue;
+      // With no family at all, svg2pdf.js sets the text in Times.
+      const outcome: Outcome = family === undefined ? { kind: "standard", font: "Times", first: null } : await resolveList(parseFamilies(family), style, resolve);
+      runs.push({ el, chars, style, family: family ?? "", outcome });
     }
     let named: string | undefined;
     const label = () => (named ??= labelOf(text));
@@ -568,7 +588,7 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
       const fallback = fallbackFor(lacking[0]!.family, lacking[0]!.face.bytes);
       for (const el of [text, ...Array.from(text.querySelectorAll("tspan"))]) setInlineFamily(el, fallback.toLowerCase());
       // The standard font encodes only WinAnsi: anything else is shown as "?" (and said), not left to garble the string.
-      const shownAs = toWinAnsi(text);
+      const shownAs = toWinAnsi(text).replaced;
       const lost = shownAs.length > 0 ? `; "${shownAs.join(", ")}" shown as ${NOT_IN_WIN_ANSI}` : "";
       changed = true;
       const byFamily = new Map<string, string[]>();
@@ -589,6 +609,10 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
           setInlineFamily(el, outcome.font.toLowerCase());
           changed = true;
         }
+        // jsPDF writes a string with any character outside WinAnsi as UTF-16, which garbles it in a standard font.
+        const safe = toWinAnsi(el, true);
+        if (safe.changed) changed = true;
+        if (safe.replaced.length > 0) warn(prefixed(label(), `"${safe.replaced.join(", ")}" cannot be shown in ${outcome.font} — replaced by "${NOT_IN_WIN_ANSI}" in PDF`));
         continue;
       }
       const { family, face } = outcome;

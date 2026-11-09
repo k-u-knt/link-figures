@@ -237,11 +237,11 @@ describe("prepareFonts", () => {
   test("a character the face lacks: the whole text is set in Helvetica, with the warning, and the face is not registered", async () => {
     const source = fakeSource({ Calibri: family("Calibri", ["normal"], "0123456789 m") });
     const result = await prepareFonts(svgOf('<text font-family="Calibri"><tspan>5 µm −</tspan></text>'), resolverOver(source), () => 'Text "5 µm −" (Page 1)');
-    expect(result.warnings).toEqual(['font "Calibri" lacks "µ, −" — Text "5 µm −" (Page 1) set in Helvetica in PDF; "−" shown as ?']);
+    expect(result.warnings).toEqual(['font "Calibri" lacks "µ, −" — Text "5 µm −" (Page 1) set in Helvetica in PDF']);
     expect(result.faces).toEqual([]);
     expect(result.svg).toMatch(/<text[^>]*style="font-family: ?helvetica;?"/);
-    // The minus sign is not in WinAnsi, so the standard font shows it as "?"; µ is, and stays.
-    expect(result.svg).toContain(">5 µm ?</tspan>");
+    // The minus sign is not in WinAnsi, so the standard font shows its look-alike, "-"; µ is, and stays.
+    expect(result.svg).toContain(">5 µm -</tspan>");
   });
 
   test("a serif family that lacks a character falls back to Times", async () => {
@@ -333,6 +333,29 @@ describe("prepareFonts", () => {
     expect(result.svg).not.toContain("oblique");
     expect(result.svg).toContain('font-style="italic"');
     expect(result.faces.map((f) => f.style).sort()).toEqual(["bolditalic", "italic"]);
+  });
+
+  test("a label in a standard font keeps its bytes when every character is in WinAnsi", async () => {
+    const svg = svgOf('<text font-family="Calibri">5 µm – “x” €</text><text font-family="sans-serif">Ag</text>');
+    const result = await prepareFonts(svg, resolverOver(fakeSource({})), () => "L");
+    expect(result.svg).toBe(svg);
+    expect(result.warnings).toEqual(['L: font "Calibri" not installed — Times used in PDF']);
+  });
+
+  test("every run in a standard font is made WinAnsi-safe: look-alikes first, else ? with one warning per label", async () => {
+    const svg = svgOf(
+      '<text font-family="Calibri">a → b ⇒</text><text font-family="Arial">−5 µm 1\u2009000</text>' +
+        '<text font-family="sans-serif">x<tspan font-weight="bold">→ y</tspan></text><text>no family →</text>',
+    );
+    const result = await prepareFonts(svg, resolverOver(fakeSource({})), (el) => `L${Array.from(el.ownerDocument!.querySelectorAll("text")).indexOf(el as never)}`);
+    const texts = Array.from(new DOMParser().parseFromString(result.svg, "image/svg+xml").querySelectorAll("text")).map((t) => t.textContent);
+    expect(texts).toEqual(["a ? b ?", "-5 µm 1 000", "x? y", "no family ?"]);
+    expect(result.warnings).toEqual([
+      'L0: font "Calibri" not installed — Times used in PDF',
+      'L0: "→, ⇒" cannot be shown in Times — replaced by "?" in PDF',
+      'L2: "→" cannot be shown in Helvetica — replaced by "?" in PDF',
+      'L3: "→" cannot be shown in Times — replaced by "?" in PDF',
+    ]);
   });
 
   test("the same family and style is looked up once per export", async () => {
@@ -538,6 +561,27 @@ describe("PDF export with installed fonts", () => {
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({ "Big Sans": { normal: big } })));
     expect(out.text).toContain("/FontFile2");
     expect(out.bytes.length).toBeLessThan(200 * 1024);
+  });
+
+  test("a Times-fallback label with → is drawn single-byte, the arrow as ?, with the warning", async () => {
+    const f = figure();
+    const node = f.label("a → b", { family: "Nonesuch Sans" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({})));
+    expect(out.warnings).toEqual([
+      `${nodeLabel(f.doc, node)}: font "Nonesuch Sans" not installed — Times used in PDF`,
+      `${nodeLabel(f.doc, node)}: "→" cannot be shown in Times — replaced by "?" in PDF`,
+    ]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Times-Roman"]);
+    expect([...out.content.matchAll(/\(((?:[^()\\]|\\.)*)\) Tj/g)].map((m) => m[1])).toEqual(["a ? b"]);
+  });
+
+  test("a twin label with − not installed is drawn with -, no ?, and no warning", async () => {
+    const f = figure();
+    f.label("−5 µm", { family: "Arial" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({})));
+    expect(out.warnings).toEqual([]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica"]);
+    expect([...out.content.matchAll(/\(((?:[^()\\]|\\.)*)\) Tj/g)].map((m) => m[1])).toEqual(["-5 \xb5m"]);
   });
 
   test.each([

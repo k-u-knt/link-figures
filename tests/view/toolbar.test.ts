@@ -122,3 +122,17 @@ test("a command that shows the view's state has its button's name, icon and pres
   toolbar.render();
   expect(icons).toHaveLength(3);
 });
+
+test("tools and toggles report aria-pressed as they are shown; a one-shot command has none", () => {
+  const tool: Command = { ...cmd("rect", "insert"), place: () => null as never };
+  const drag: Command = { ...cmd("line", "insert"), placeDrag: () => null as never };
+  const toggle: Command = { ...cmd("snap", "insert"), state: () => ({ active: true }) };
+  const { el, toolbar, view } = setup([cmd("undo", "edit"), tool, drag, toggle]);
+  const [undo, rect, line, snap] = el.children.filter((c) => c.tag === "button");
+  const pressed = () => [rect, line, snap].map((b) => b.attrs["aria-pressed"]);
+  expect(pressed()).toEqual(["false", "false", "true"]);
+  view.armedTool = view.plugin.registries.commands.get("rect")!;
+  toolbar.render();
+  expect(pressed()).toEqual(["true", "false", "true"]);
+  expect("aria-pressed" in undo.attrs).toBe(false);
+});

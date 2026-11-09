@@ -34,7 +34,10 @@ export class Toolbar {
       if (shown?.name !== name) button.setAttribute("aria-label", name);
       if (shown?.icon !== icon) setIcon(button, icon);
       this.shown.set(command.id, { name, icon });
-      button.toggleClass("is-active", command.id === armed || state.active === true);
+      const active = command.id === armed || state.active === true;
+      button.toggleClass("is-active", active);
+      // A tool or a toggle is a pressed or an unpressed button; a one-shot command has no such state.
+      if (command.place || command.placeDrag || command.state) button.setAttribute("aria-pressed", String(active));
     }
   }
 

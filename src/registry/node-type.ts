@@ -24,6 +24,11 @@ export interface RenderContext {
 export interface NodeRenderer {
   update(node: Node): void;
   unmount(): void;
+  /**
+   * Resolves once what the node shows now has finished drawing (an image loaded or failed, a note's markdown rendered or
+   * failed to), so the stage can be snapshotted. Never rejects. Without it, the node is drawn as soon as it is mounted.
+   */
+  drawn?(): Promise<void>;
 }
 
 export interface SvgContext {

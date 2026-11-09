@@ -59,8 +59,9 @@ export interface LinkFiguresApi {
    * Exports the figure as the export modal does, to the export folder: `format` is an exporter's id (`svg`, `pdf`, `png`,
    * `tiff`), `pages` the page in focus (`"current"`, the default), `"all"` or a list of page ids, `dpi` the resolution
    * (the settings' when left out), `options` the exporter's own (each left out has its default). A figure that is not
-   * open is opened in the background for it, and closed again. Resolves to the vault paths written and the export
-   * report. Not a figure command: it finishes later. Waits for the calls queued on the figure before it.
+   * open is opened in the background for it, once the request has been checked (a bad one opens nothing), waited on
+   * until its links are resolved and its content cards drawn, and closed again. Resolves to the vault paths written and
+   * the export report. Not a figure command: it finishes later. Waits for the calls queued on the figure before it.
    */
   export(figurePath: string, request: ExportRequest): Promise<ExportOutcome>;
   registries: Registries;

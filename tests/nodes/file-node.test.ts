@@ -6,7 +6,8 @@ import type { FileNode } from "../../src/model/types";
 import { createRegistries } from "../../src/registry";
 
 // `obsidian` ships only typings, so this module cannot be loaded for real; the parts under test never touch it.
-vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
+const render = vi.fn<(...args: unknown[]) => Promise<void>>();
+vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: { render: (...args: unknown[]) => render(...args) }, setIcon: () => {} }));
 const { fileNodeType, fileNodeSvg } = await import("../../src/nodes/file-node");
 const { fileNodeSvg: pureFileNodeSvg, fileFrameSvg } = await import("../../src/nodes/file-node-svg");
 
@@ -236,5 +237,60 @@ describe("the frame on the stage", () => {
 
     renderer.update({ ...n, frame: null });
     expect(frameEl.children).toEqual([]);
+  });
+});
+
+describe("drawn", () => {
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  /** Whether `promise` has settled after the queued work has run. */
+  async function settled(promise: Promise<unknown>): Promise<boolean> {
+    let done = false;
+    void promise.then(() => (done = true));
+    await settle();
+    return done;
+  }
+  const mount = (resolved: unknown) => {
+    const host = new FakeEl();
+    const component = { addChild: () => {}, removeChild: () => {} };
+    const renderer = fileNodeType.mount(node({}), host as unknown as HTMLElement, { resolved: () => resolved, openLink: () => {}, component } as never);
+    return { renderer: renderer as unknown as { drawn(): Promise<void> }, host };
+  };
+  const image = { kind: "image", file: { path: "a.png" }, src: "app://a.png", source: "file", pageCount: 1, deps: [] };
+
+  test("an image panel is drawn once its image has loaded, or failed to", async () => {
+    const loaded = mount(image);
+    const img = loaded.host.children[0].children[0].children[0].children[0];
+    const waiting = loaded.renderer.drawn();
+    expect(await settled(waiting)).toBe(false);
+    img.naturalWidth = 20;
+    img.naturalHeight = 10;
+    img.fire("load");
+    expect(await settled(waiting)).toBe(true);
+    expect(await settled(loaded.renderer.drawn())).toBe(true);
+
+    const failed = mount(image);
+    const waitingToo = failed.renderer.drawn();
+    failed.host.children[0].children[0].children[0].children[0].fire("error");
+    expect(await settled(waitingToo)).toBe(true);
+  });
+
+  test("a content card is drawn once the note's markdown has rendered, also when rendering fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const content = { kind: "content", file: { path: "n.md" }, markdown: "# Hi", deps: [] };
+    let finish: () => void = () => {};
+    render.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+    const card = mount(content);
+    const waiting = card.renderer.drawn();
+    expect(await settled(waiting)).toBe(false);
+    finish();
+    expect(await settled(waiting)).toBe(true);
+
+    render.mockImplementationOnce(() => Promise.reject(new Error("no")));
+    expect(await settled(mount(content).renderer.drawn())).toBe(true);
+  });
+
+  test("a panel with nothing to load (unresolved, or a badge) is drawn at once", async () => {
+    expect(await settled(mount(undefined).renderer.drawn())).toBe(true);
+    expect(await settled(mount({ kind: "missing", reason: "file", deps: [] }).renderer.drawn())).toBe(true);
   });
 });

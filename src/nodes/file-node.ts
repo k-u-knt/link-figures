@@ -82,6 +82,10 @@ class FileNodeRenderer implements NodeRenderer {
   /** The loaded image's own size; null until it has loaded, and while the body shows no image. */
   private natural: Size | null = null;
   private waiters: Waiter[] = [];
+  /** Callers of `drawn()` waiting for the image to load or fail. */
+  private drawWaiters: (() => void)[] = [];
+  /** The rendering of the note content the body shows; settled when there is none. */
+  private contentDrawn: Promise<void> = Promise.resolve();
 
   constructor(node: FileNode, host: HTMLElement, private readonly ctx: RenderContext) {
     this.node = node;
@@ -107,6 +111,13 @@ class FileNodeRenderer implements NodeRenderer {
   unmount(): void {
     this.clearBody("The node was removed");
     this.el.remove();
+  }
+
+  /** Resolves once the body has finished drawing: its image loaded or failed, its note content rendered or failed to. */
+  drawn(): Promise<void> {
+    if (this.bodyKind === "content") return this.contentDrawn;
+    if (this.bodyKind === "image" && !this.natural) return new Promise((resolve) => this.drawWaiters.push(resolve));
+    return Promise.resolve();
   }
 
   /** The size of the image shown: now if it has loaded, else once it has; rejects when the node shows no image. */
@@ -220,7 +231,15 @@ class FileNodeRenderer implements NodeRenderer {
     this.contentEl = null;
     this.natural = null;
     this.bodyKind = "pending";
+    this.contentDrawn = Promise.resolve();
+    this.releaseDrawWaiters();
     if (failWaiters) this.settle((w) => w.reject(new Error(reason)));
+  }
+
+  private releaseDrawWaiters(): void {
+    const waiters = this.drawWaiters;
+    this.drawWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   private showImage(src: string): void {
@@ -246,6 +265,7 @@ class FileNodeRenderer implements NodeRenderer {
     this.placeImage();
     const size = this.measured(this.natural);
     this.settle((w) => w.resolve(size));
+    this.releaseDrawWaiters();
   }
 
   private onImageError(img: HTMLImageElement): void {
@@ -290,7 +310,7 @@ class FileNodeRenderer implements NodeRenderer {
     const card = new Component();
     this.ctx.component.addChild(card);
     this.card = card;
-    MarkdownRenderer.render(this.ctx.app, resolved.markdown, holder, resolved.file.path, card).catch((error: unknown) => {
+    this.contentDrawn = MarkdownRenderer.render(this.ctx.app, resolved.markdown, holder, resolved.file.path, card).catch((error: unknown) => {
       console.error(`Link Figures: could not render the content of node ${this.node.id}`, error);
     });
   }

@@ -119,7 +119,6 @@ export function exportSummary(files: number, folder: string): string {
   return `Exported ${files} file(s) to ${exportDir(folder) || "the vault root"}`;
 }
 
-
 /** The dpi preset buttons of the export modal: the resolutions journals ask for. */
 export const DPI_PRESETS = [300, 600, 1000] as const;
 
@@ -209,19 +208,43 @@ export interface FigureExportTarget {
   deps: ExportDeps;
 }
 
+/** Whether `asked` is a `pages` request in form: `"current"`, `"all"` or a list of page ids (left out is `"current"`). */
+function pagesInForm(asked: unknown): asked is ExportRequest["pages"] {
+  return asked === undefined || asked === "current" || asked === "all" || (Array.isArray(asked) && asked.every((id) => typeof id === "string"));
+}
+
 function pagesOf(doc: Document, current: Page | undefined, asked: ExportRequest["pages"] = "current"): Page[] {
+  if (!pagesInForm(asked)) throw new Error('export: pages must be "current", "all" or a list of page ids');
   let pages: Page[];
   if (asked === "current") pages = current ? [current] : [];
   else if (asked === "all") pages = doc.pages;
-  else if (Array.isArray(asked) && asked.every((id) => typeof id === "string")) {
+  else {
     pages = [...new Set(asked)].map((id) => {
       const page = doc.pages.find((p) => p.id === id);
       if (!page) throw new Error(`export: there is no page "${id}"`);
       return page;
     });
-  } else throw new Error('export: pages must be "current", "all" or a list of page ids');
+  }
   if (pages.length === 0) throw new Error("export: no pages to export");
   return pages;
+}
+
+/**
+ * Checks what of `request` needs no figure: the format, the resolution (the settings' when left out), the exporter's
+ * options and the form of `pages`. Returns the exporter, the dpi and the options to run it with; an Error otherwise.
+ */
+function checkRequest(registries: Registries, exportDpi: number, request: ExportRequest): { exporter: Exporter; dpi: number; options: Record<string, unknown> } {
+  const exporter = registries.exporters.get(request.format);
+  if (!exporter) {
+    throw new Error(`export: there is no format "${request.format}" (${registries.exporters.all().map((e) => e.id).join(", ")})`);
+  }
+  const dpi = request.dpi ?? exportDpi;
+  if (typeof dpi !== "number" || !Number.isFinite(dpi) || dpi < MIN_DPI || dpi > MAX_DPI) {
+    throw new Error(`export: the resolution must be a number from ${MIN_DPI} to ${MAX_DPI} dpi`);
+  }
+  if (!pagesInForm(request.pages)) throw new Error('export: pages must be "current", "all" or a list of page ids');
+  const options = exportOptions(exporter, request.options);
+  return { exporter, dpi: Math.round(dpi), options };
 }
 
 /**
@@ -229,21 +252,50 @@ function pagesOf(doc: Document, current: Page | undefined, asked: ExportRequest[
  * the request is checked whole before anything is drawn, and no file may replace a source of the figure (`deps.isProtected`).
  */
 export async function exportFigure(target: FigureExportTarget, request: ExportRequest): Promise<ExportOutcome & { folder: string }> {
-  const { registries } = target.deps;
-  const exporter = registries.exporters.get(request.format);
-  if (!exporter) {
-    throw new Error(`export: there is no format "${request.format}" (${registries.exporters.all().map((e) => e.id).join(", ")})`);
-  }
-  const dpi = request.dpi ?? target.settings.exportDpi;
-  if (typeof dpi !== "number" || !Number.isFinite(dpi) || dpi < MIN_DPI || dpi > MAX_DPI) {
-    throw new Error(`export: the resolution must be a number from ${MIN_DPI} to ${MAX_DPI} dpi`);
-  }
+  const { exporter, dpi, options } = checkRequest(target.deps.registries, target.settings.exportDpi, request);
   const pages = pagesOf(target.doc, target.currentPage, request.pages);
-  const options = exportOptions(exporter, request.options);
   const folder = exportFolderFor(target.settings, target.figurePath);
   const { paths, warnings } = await runExport(
-    { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi: Math.round(dpi), maxPageSizeMm: target.settings.maxPageSizeMm, options },
+    { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi, maxPageSizeMm: target.settings.maxPageSizeMm, options },
     target.deps,
   );
   return { files: paths, warnings, folder };
+}
+
+/** A figure opened in a background tab for an export: see `exportInBackground`. */
+export interface BackgroundFigure {
+  target: FigureExportTarget;
+  /** Resolves once its links are resolved and its nodes drawn (see `NodeHost.drawn`), so content cards can be snapshotted. */
+  drawn(): Promise<void>;
+  /** Closes the tab. */
+  close(): void;
+}
+
+/** What `exportInBackground` needs of the plugin, so that it can be tested without Obsidian. */
+export interface BackgroundExportHost {
+  registries: Registries;
+  settings: Pick<LinkFiguresSettings, "exportDpi">;
+  /** The figure's document as its file has it; rejects when there is no such file or it is no figure. */
+  read(path: string): Promise<Document>;
+  /** Opens the figure in a background tab; rejects (with the tab closed) when it cannot be opened as a figure. */
+  open(path: string): Promise<BackgroundFigure>;
+}
+
+/**
+ * Exports the figure at `path`, which no view has open, as `exportFigure` does: the request is checked first, against
+ * the figure's file for its pages, so that a refusal opens no tab; then the figure is opened in a background tab, which
+ * is waited on until it is drawn (a content card is snapshotted from the stage) and closed again whatever happens.
+ */
+export async function exportInBackground(host: BackgroundExportHost, path: string, request: ExportRequest): Promise<ExportOutcome> {
+  checkRequest(host.registries, host.settings.exportDpi, request);
+  const doc = await host.read(path);
+  pagesOf(doc, doc.pages[0], request.pages);
+  const figure = await host.open(path);
+  try {
+    await figure.drawn();
+    const { files, warnings } = await exportFigure(figure.target, request);
+    return { files, warnings };
+  } finally {
+    figure.close();
+  }
 }

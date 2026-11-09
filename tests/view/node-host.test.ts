@@ -690,3 +690,62 @@ describe("samplesNow", () => {
     expect(t.view.samplesLanded.mock.calls.length).toBeLessThanOrEqual(RASTERS.length);
   });
 });
+
+describe("drawn", () => {
+  /** Gives each renderer a `drawn()` that waits until its node's gate is opened. */
+  function gated(t: ReturnType<typeof setup>) {
+    const gates = new Map<NodeId, () => void>();
+    const mount = t.recording.type.mount;
+    t.recording.type.mount = (node, host, ctx) => {
+      const renderer = mount(node, host, ctx);
+      let open: () => void = () => {};
+      const drawn = new Promise<void>((resolve) => (open = resolve));
+      gates.set(node.id, open);
+      return { ...renderer, drawn: () => drawn };
+    };
+    return gates;
+  }
+  async function settled(promise: Promise<unknown>): Promise<boolean> {
+    let done = false;
+    void promise.then(() => (done = true));
+    await settle();
+    return done;
+  }
+
+  test("waits for the resolutions under way, then for every node to be drawn", async () => {
+    const t = setup();
+    const gates = gated(t);
+    t.hold(true);
+    t.nodeHost.renderAll(t.doc);
+    void t.nodeHost.resolveStale();
+    await settle();
+    const drawn = t.nodeHost.drawn();
+    for (const id of t.ids) gates.get(id)!();
+    expect(await settled(drawn)).toBe(false);
+    // The resolutions land and the nodes are drawn again; the drawing they started is what is waited for now.
+    for (const d of t.decodes) d.release();
+    await settle();
+    expect(t.view.resolvedCache.size).toBe(3);
+    expect(await settled(drawn)).toBe(true);
+  });
+
+  test("a resolution that starts while it waits is waited for too, and a renderer whose drawing fails does not reject it", async () => {
+    const t = setup();
+    const gates = gated(t);
+    t.nodeHost.renderAll(t.doc);
+    await t.nodeHost.resolveStale();
+    const drawn = t.nodeHost.drawn();
+    t.hold(true);
+    void t.nodeHost.resolve([t.a.id]);
+    for (const id of t.ids) gates.get(id)!();
+    expect(await settled(drawn)).toBe(false);
+    for (const d of t.decodes) d.release();
+    expect(await settled(drawn)).toBe(true);
+
+    const failing = setup();
+    const mount = failing.recording.type.mount;
+    failing.recording.type.mount = (node, host, ctx) => ({ ...mount(node, host, ctx), drawn: () => Promise.reject(new Error("no")) });
+    failing.nodeHost.renderAll(failing.doc);
+    await expect(failing.nodeHost.drawn()).resolves.toBeUndefined();
+  });
+});

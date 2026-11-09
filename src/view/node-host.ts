@@ -53,6 +53,8 @@ export class NodeHost {
   /** The newest resolution started for each node. A result that is no longer the newest, or whose node is gone, is dropped. */
   private readonly tokens = new Map<NodeId, number>();
   private nextToken = 0;
+  /** The resolutions under way (each never rejects), for `drawn` to wait for. */
+  private readonly inFlight = new Set<Promise<void>>();
   /** Samples keys with a `samplesNow` decode under way, so one is started per key at a time. */
   private readonly samplesPending = new Set<string>();
   /** Samples keys whose `samplesNow` decode failed: not tried again (a changed file has a new key). */
@@ -277,9 +279,34 @@ export class NodeHost {
     const pending: Promise<void>[] = [];
     for (const id of ids) {
       const node = byId.get(id);
-      if (node?.type === "file") pending.push(this.resolveFile(node, figure.path));
+      if (node?.type !== "file") continue;
+      const resolution = this.resolveFile(node, figure.path);
+      this.inFlight.add(resolution);
+      void resolution.then(() => this.inFlight.delete(resolution));
+      pending.push(resolution);
     }
     await Promise.all(pending);
+  }
+
+  /**
+   * Resolves once every resolution under way has landed (or failed) and every node has finished drawing what it shows
+   * then (see `NodeRenderer.drawn`): what the stage looks like settled, for an export that snapshots it (content cards).
+   * A resolution started meanwhile is waited for too. Never rejects.
+   */
+  async drawn(): Promise<void> {
+    for (;;) {
+      await Promise.all([...this.inFlight]);
+      await Promise.all(
+        [...this.entries.values()].map(async ({ renderer }) => {
+          try {
+            await renderer.drawn?.();
+          } catch {
+            // A drawing that failed is as drawn as it will get.
+          }
+        }),
+      );
+      if (this.inFlight.size === 0) return;
+    }
   }
 
   private async resolveFile(node: FileNode, figurePath: string): Promise<void> {

@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { createApi, type LinkFiguresApi } from "./api";
+import { readHeadlessFigure, type FigureFiles } from "./commands/headless";
 import { displayAdjustment } from "./adjust/display";
 import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
@@ -17,7 +18,7 @@ import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
 import { viewExportTarget } from "./export/export-modal";
-import { exportFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
+import { exportFigure, exportInBackground, type BackgroundFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
 import { pngExporter, tiffExporter } from "./export/exporters/raster";
 import { svgExporter } from "./export/exporters/svg";
@@ -54,14 +55,16 @@ export default class LinkFiguresPlugin extends Plugin {
     () => this.noteHost(),
     () => blockIdPrefix(this.settings.blockIdPrefix),
   );
+  /** Figure files by vault path, as the API and an export of a closed figure read them. */
+  private readonly figureFiles: FigureFiles = {
+    read: (path) => this.app.vault.read(this.vaultFile(path)),
+    process: async (path, edit) => void (await this.app.vault.process(this.vaultFile(path), edit)),
+  };
   /** The API for other plugins and scripts (the Obsidian CLI's `eval`): see `LinkFiguresApi`. */
   api: LinkFiguresApi = createApi({
     app: this.app,
     registries: this.registries,
-    files: {
-      read: (path) => this.app.vault.read(this.vaultFile(path)),
-      process: async (path, edit) => void (await this.app.vault.process(this.vaultFile(path), edit)),
-    },
+    files: this.figureFiles,
     normalizePath,
     openFigure: (path) => this.openFigureView(path),
     noteBlockId: (path, line) => this.blockIds.blockId(path, line),
@@ -246,10 +249,10 @@ export default class LinkFiguresPlugin extends Plugin {
     };
   }
 
-  /** The file at vault path `path`; a `CommandError` when there is none. */
   /**
    * Exports the figure at `path` as `api.export` asks: from its most recently active view, or, with none, from a view
-   * opened in a background tab for it (its links resolved first), which is closed again afterwards.
+   * opened in a background tab for it once the request has been checked against its file, which is waited on until its
+   * links are resolved and its nodes drawn, and closed again afterwards (`exportInBackground`).
    */
   private async exportFigureAt(path: string, request: ExportRequest): Promise<ExportOutcome> {
     const open = this.openFigureView(path);
@@ -257,6 +260,20 @@ export default class LinkFiguresPlugin extends Plugin {
       const { files, warnings } = await exportFigure(viewExportTarget(open, open.file), request);
       return { files, warnings };
     }
+    return exportInBackground(
+      {
+        registries: this.registries,
+        settings: this.settings,
+        read: (figure) => readHeadlessFigure(this.registries, this.figureFiles, figure),
+        open: (figure) => this.openInBackground(figure),
+      },
+      path,
+      request,
+    );
+  }
+
+  /** Opens the figure at `path` in a background tab, for `exportInBackground`; the tab is closed again if it is no figure. */
+  private async openInBackground(path: string): Promise<BackgroundFigure> {
     const file = this.vaultFile(path);
     const leaf = this.app.workspace.getLeaf("tab");
     try {
@@ -264,15 +281,16 @@ export default class LinkFiguresPlugin extends Plugin {
       await leaf.loadIfDeferred();
       const view = leaf.view;
       if (!(view instanceof LinkFiguresView) || !view.hasDocument() || !view.file) throw new Error(`export: "${path}" could not be opened as a figure`);
-      // The view started resolving its links when it loaded; resolving them again here is what can be waited for.
-      await view.nodeHost.resolve(view.store.doc.nodes.filter((n) => n.type === "file").map((n) => n.id));
-      const { files, warnings } = await exportFigure(viewExportTarget(view, view.file), request);
-      return { files, warnings };
-    } finally {
+      // The view started resolving its links when it loaded; any it has not started yet are started here.
+      void view.nodeHost.resolveStale();
+      return { target: viewExportTarget(view, view.file), drawn: () => view.nodeHost.drawn(), close: () => leaf.detach() };
+    } catch (error) {
       leaf.detach();
+      throw error;
     }
   }
 
+  /** The file at vault path `path`; a `CommandError` when there is none. */
   private vaultFile(path: string): TFile {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
     if (!(file instanceof TFile)) throw new CommandError(`there is no file "${path}"`);

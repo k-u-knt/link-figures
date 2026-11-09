@@ -10,7 +10,7 @@ vi.mock("obsidian", async () => {
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile, Modal: class {}, Notice: class {}, Setting: class {} };
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
-const { exportFigure, exportOptions, optionDefaults, DPI_PRESETS } = await import("../../src/export/export-run");
+const { exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS } = await import("../../src/export/export-run");
 type FigureExportTarget = import("../../src/export/export-run").FigureExportTarget;
 
 const FIELDS: Field[] = [
@@ -132,5 +132,76 @@ describe("exportFigure", () => {
     const out = await exportFigure(t, { format: "spy" });
     expect(out.files).toEqual([]);
     expect(out.warnings).toContain("Refused to overwrite figs/Fig - Page 2.txt: it is a source of this figure");
+  });
+});
+
+describe("exportInBackground", () => {
+  /** A host whose figure opens in a "tab" that records being opened, drawn and closed. */
+  function background(over: { open?: () => Promise<never> } = {}) {
+    const { t, doc, spy } = target();
+    const events: string[] = [];
+    let finishDrawing: () => void = () => {};
+    const host = {
+      registries: t.deps.registries,
+      settings: t.settings,
+      read: vi.fn(async (path: string) => {
+        if (path !== t.figurePath) throw new Error(`there is no file "${path}"`);
+        return doc;
+      }),
+      open:
+        over.open ??
+        vi.fn(async () => {
+          events.push("open");
+          return {
+            target: t,
+            drawn: () => {
+              events.push("drawing");
+              return new Promise<void>((resolve) => (finishDrawing = () => (events.push("drawn"), resolve())));
+            },
+            close: () => void events.push("close"),
+          };
+        }),
+    };
+    return { t, doc, spy, host, events, finishDrawing: () => finishDrawing() };
+  }
+
+  test("opens the figure, waits until it is drawn, exports it, and closes it again", async () => {
+    const b = background();
+    const out = exportInBackground(b.host, b.t.figurePath, { format: "spy", pages: "all" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(b.events).toEqual(["open", "drawing"]);
+    expect(b.spy.runs).toEqual([]);
+    b.finishDrawing();
+    expect((await out).files).toEqual(["figs/Fig - Page 1.txt", "figs/Fig - Page 2.txt", "figs/Fig - Page 3.txt"]);
+    expect(b.events).toEqual(["open", "drawing", "drawn", "close"]);
+    expect(b.spy.runs).toHaveLength(1);
+  });
+
+  test("the tab is closed when the export fails", async () => {
+    const b = background();
+    b.spy.exporter.run = async () => {
+      throw new Error("boom");
+    };
+    const out = exportInBackground(b.host, b.t.figurePath, { format: "spy" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    b.finishDrawing();
+    await expect(out).rejects.toThrow("boom");
+    expect(b.events.at(-1)).toBe("close");
+  });
+
+  test("a bad request, or a path that is no figure, is refused without opening a tab", async () => {
+    const b = background();
+    const refused = async (request: object, path = b.t.figurePath) => exportInBackground(b.host, path, request as never);
+    await expect(refused({ format: "gif" })).rejects.toThrow('export: there is no format "gif" (spy)');
+    await expect(refused({ format: "spy", dpi: 5000 })).rejects.toThrow("export: the resolution must be a number from 72 to 1200 dpi");
+    await expect(refused({ format: "spy", options: { level: 1 } })).rejects.toThrow('unknown option "level"');
+    await expect(refused({ format: "spy", pages: "some" })).rejects.toThrow('export: pages must be "current", "all" or a list of page ids');
+    await expect(refused({ format: "spy", pages: [] })).rejects.toThrow("export: no pages to export");
+    await expect(refused({ format: "spy", pages: ["nope"] })).rejects.toThrow('export: there is no page "nope"');
+    await expect(refused({ format: "spy" }, "figs/Other.lnkfig.md")).rejects.toThrow('there is no file "figs/Other.lnkfig.md"');
+    expect(b.host.open).not.toHaveBeenCalled();
+    expect(b.events).toEqual([]);
+    // The format, dpi, options and the form of pages are checked before the file is even read.
+    expect(b.host.read).toHaveBeenCalledTimes(3);
   });
 });

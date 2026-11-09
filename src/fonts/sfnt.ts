@@ -89,9 +89,20 @@ export function writeSfnt(version: Uint8Array, tables: SfntTable[]): Uint8Array 
   return out;
 }
 
-/** The number of faces in a TrueType Collection; 0 for anything that is not a collection. */
+/** More faces than any real collection has (the largest CJK ones hold a few dozen); a header claiming more is broken. */
+export const MAX_COLLECTION_FACES = 512;
+
+/**
+ * The number of faces in a TrueType Collection; 0 for anything that is not a collection. Throws for a header that
+ * claims more than `MAX_COLLECTION_FACES` faces, or more face offsets than the file holds.
+ */
 export function collectionSize(bytes: Uint8Array): number {
-  return sfntFlavour(bytes) === "collection" ? view(bytes).getUint32(8) : 0;
+  if (sfntFlavour(bytes) !== "collection") return 0;
+  if (bytes.length < 12) throw new Error("the collection header is truncated");
+  const count = view(bytes).getUint32(8);
+  if (count > MAX_COLLECTION_FACES) throw new Error(`the collection claims too many faces (${count})`);
+  if (12 + 4 * count > bytes.length) throw new Error("the collection's face offsets are truncated");
+  return count;
 }
 
 const faceOffset = (bytes: Uint8Array, index: number) => {
@@ -102,6 +113,12 @@ const faceOffset = (bytes: Uint8Array, index: number) => {
   if (flavour !== "truetype" && flavour !== "cff") throw new Error(`collection face ${index} is not an sfnt face`);
   return offset;
 };
+
+/** The outline flavour of a collection's face `index` ("truetype" or "cff"), read from its version tag alone. */
+export function collectionFaceFlavour(bytes: Uint8Array, index: number): "truetype" | "cff" {
+  const offset = faceOffset(bytes, index);
+  return sfntFlavour(bytes.subarray(offset, offset + 4)) as "truetype" | "cff";
+}
 
 /** The tables of a collection's face `index`, as views into `bytes` (nothing is copied). Checks the face's version tag. */
 export function collectionFaceTables(bytes: Uint8Array, index: number): SfntTable[] {

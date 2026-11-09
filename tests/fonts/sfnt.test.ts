@@ -77,6 +77,18 @@ describe("collectionFaces", () => {
     expect(() => collectionFace(ttc, 2)).toThrow(/no face 2/);
     expect(() => collectionFace(regular(), 0)).toThrow(/not a collection/);
   });
+
+  test("a collection that claims more than 512 faces, or more offsets than it holds, is refused", () => {
+    const ttc = buildCollection([buildFont({ family: "Test Sans", style: "Regular", chars: "abc" })]);
+    const claim = (count: number) => {
+      const copy = ttc.slice();
+      new DataView(copy.buffer).setUint32(8, count);
+      return copy;
+    };
+    expect(() => collectionSize(claim(0xffffffff))).toThrow(/too many faces/);
+    expect(() => collectionSize(claim(513))).toThrow(/too many faces/);
+    expect(() => collectionFaces(claim(400))).toThrow(/truncated/);
+  });
 });
 
 describe("hasVariations", () => {

@@ -6,7 +6,7 @@
  * session. Each face's bytes are read from the cached `FontData.blob()` when a face is found.
  */
 import { FontLoadError, FontSourceUnavailableError, type FontSource, type FontStyle, type LoadedFace } from "../registry/font-source";
-import { collectionFace, collectionFaceNames, collectionFaceTables, collectionSize, faceNames, hasTable, hasVariations, sfntFlavour } from "./sfnt";
+import { collectionFace, collectionFaceFlavour, collectionFaceNames, collectionFaceTables, collectionSize, faceNames, hasTable, hasVariations, sfntFlavour } from "./sfnt";
 
 /** The parts of the Local Font Access API's `FontData` this source uses. */
 export interface LocalFontData {
@@ -133,6 +133,8 @@ function pickCollectionFace(bytes: Uint8Array, font: LocalFontData, maxFaceBytes
   if (index < 0) index = names.findIndex((n) => n && fold(n.family) === fold(font.family) && fold(n.subfamily) === fold(font.style));
   if (index < 0 && size === 1) index = 0;
   if (index < 0) throw new FontLoadError("unreadable", `no face of the collection is "${font.postscriptName}"`);
+  // A CFF face is refused by its version tag, before anything of it is read or copied.
+  if (collectionFaceFlavour(bytes, index) === "cff") throw new FontLoadError("cff");
   const tables = collectionFaceTables(bytes, index);
   if (tables.some((t) => BITMAP_TABLES.includes(t.tag))) throw new FontLoadError("unreadable", "the font has colour bitmap glyphs");
   if (tables.reduce((sum, t) => sum + t.data.length, 0) > maxFaceBytes) throw new FontLoadError("unreadable", "the font is too large");
@@ -229,10 +231,14 @@ export function localFontSource(query: LocalFontQuery = defaultQuery, options: L
       }
       const family = (named ?? faces[0]).family;
 
-      // A bad face (CFF, unreadable) is skipped; its error is thrown only if no face works.
+      // A bad face (CFF, unreadable) is skipped; its error is thrown only if no face works. A family's faces are
+      // nearly always all CFF or all TrueType, so the stand-in walk ends at its first CFF face rather than read every
+      // face of a CFF family (Hiragino Sans has ten); an unreadable face is just skipped.
       let firstError: FontLoadError | undefined;
+      let gaveUp = false;
       const tried = new Set<LocalFontData>();
-      const firstOf = async (candidates: LocalFontData[], only: FontStyle | null) => {
+      const firstOf = async (candidates: LocalFontData[], only: FontStyle | null, standIn = false) => {
+        if (gaveUp) return null;
         for (const font of candidates) {
           if (tried.has(font)) continue;
           try {
@@ -248,6 +254,10 @@ export function localFontSource(query: LocalFontQuery = defaultQuery, options: L
           } catch (error) {
             tried.add(font);
             firstError ??= error instanceof FontLoadError ? error : new FontLoadError("unreadable", message(error));
+            if (standIn && error instanceof FontLoadError && error.reason === "cff") {
+              gaveUp = true;
+              return null;
+            }
           }
         }
         return null;
@@ -271,9 +281,9 @@ export function localFontSource(query: LocalFontQuery = defaultQuery, options: L
       if (exact) return { bytes: exact.bytes, family, style: exact.style, exact: true };
       // A stand-in: the named face itself; else the regular face (§8.6); else the family's most suitable face.
       const standIn =
-        (named ? await firstOf([named], null) : null) ??
-        (want !== "normal" ? await firstOf(ofStyle("normal"), "normal") : null) ??
-        (await firstOf(bySuitability, null));
+        (named ? await firstOf([named], null, true) : null) ??
+        (want !== "normal" ? await firstOf(ofStyle("normal"), "normal", true) : null) ??
+        (await firstOf(bySuitability, null, true));
       if (standIn) return { bytes: standIn.bytes, family, style: standIn.style, exact: false };
       if (firstError) throw firstError;
       return null;

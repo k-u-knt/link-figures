@@ -228,6 +228,57 @@ describe("localFontSource.find, fix round 1", () => {
   });
 });
 
+describe("localFontSource.find, all-CFF families (final review Important 2)", () => {
+  /** A face counting how often its bytes are read. */
+  const counted = (fam: string, style: string, bytes: Uint8Array, reads: { n: number }): LocalFontData => ({
+    ...fontData(fam, style, bytes),
+    blob: async () => {
+      reads.n++;
+      return new Blob([bytes as Uint8Array<ArrayBuffer>]);
+    },
+  });
+  const otto = (style: BuildStyle) => buildFont({ family: "Hiragino Sans", style, chars: "abc", flavour: "OTTO" });
+
+  test("a family whose faces are all CFF is given up on after the first face read, whatever the style asked", async () => {
+    for (const style of ["normal", "bold", "italic", "bolditalic"] as const) {
+      const reads = { n: 0 };
+      const fonts = ["W3", "W6", "W0", "W9"].map((w) => counted("Hiragino Sans", w, otto("Regular"), reads));
+      await expect(source(fonts).find("Hiragino Sans", style)).rejects.toMatchObject({ reason: "cff" });
+      expect(reads.n).toBe(1);
+    }
+    // With faces named in the four styles, the exact face and then one stand-in are read, no more.
+    const reads = { n: 0 };
+    const fonts = (["Regular", "Bold", "Italic", "Bold Italic"] as const).map((st) => counted("Hiragino Sans", st, otto(st), reads));
+    await expect(source(fonts).find("Hiragino Sans", "bolditalic")).rejects.toMatchObject({ reason: "cff" });
+    expect(reads.n).toBe(2);
+  });
+
+  test("a CFF face of a collection is refused by its version tag, before its tables are copied", async () => {
+    const ttc = buildCollection([otto("Regular"), otto("Bold")]);
+    // A table of the face that lies past the end: copying the face would fail as unreadable.
+    const v = new DataView(ttc.buffer, ttc.byteOffset, ttc.byteLength);
+    const directory = v.getUint32(12);
+    v.setUint32(directory + 12 + 8, ttc.length + 100);
+    const reads = { n: 0 };
+    const fonts = [counted("Hiragino Sans", "Regular", ttc, reads), counted("Hiragino Sans", "Bold", ttc, reads)];
+    await expect(source(fonts).find("Hiragino Sans", "normal")).rejects.toMatchObject({ reason: "cff" });
+    // The Regular face (exact), then the Bold as the one stand-in tried.
+    expect(reads.n).toBe(2);
+  });
+
+  test("a collection claiming a huge number of faces is unreadable, without a name read per claimed face", async () => {
+    const ttc = buildCollection([built("Test Sans", "Regular")]);
+    new DataView(ttc.buffer, ttc.byteOffset).setUint32(8, 0xffffffff);
+    await expect(source([fontData("Test Sans", "Regular", ttc)]).find("Test Sans", "normal")).rejects.toMatchObject({ reason: "unreadable" });
+  });
+
+  test("an unreadable face still lets the stand-in walk try the next one", async () => {
+    const garbage = new TextEncoder().encode("not a font");
+    const local = source([fontData("Test Sans", "Light", garbage), fontData("Test Sans", "Medium", built("Test Sans", "Regular"))]);
+    expect(await local.find("Test Sans", "normal")).toMatchObject({ exact: false });
+  });
+});
+
 describe("localFontSource priming and caching", () => {
   const securityError = () => Object.assign(new Error("Page needs to be visible"), { name: "SecurityError" });
 

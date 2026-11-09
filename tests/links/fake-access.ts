@@ -6,6 +6,8 @@ export interface FakeVault {
   headings?: Record<string, Record<string, Range>>;
   blocks?: Record<string, Record<string, Range>>;
   embeds?: Record<string, { link: string; offset: number }[]>;
+  /** Path to modification time; a file not listed has none (`mtime` gives null). */
+  mtimes?: Record<string, number | null>;
 }
 
 const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -54,5 +56,14 @@ export class FakeAccess implements VaultAccess {
 
   resourcePath(file: FileRef): string {
     return "app://" + file.path;
+  }
+
+  mtime(file: FileRef): number | null {
+    return this.vault.mtimes?.[file.path] ?? null;
+  }
+
+  /** As a write to the file on disk changes its modification time. */
+  setMtime(path: string, mtime: number | null): void {
+    this.vault.mtimes = { ...this.vault.mtimes, [path]: mtime };
   }
 }

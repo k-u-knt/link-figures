@@ -8,7 +8,7 @@ import { testRegistry } from "../adjust/fixtures";
 import { FakeAccess } from "./fake-access";
 
 const access = new FakeAccess({ files: { "Notes/analysis.md": "# A\n\n## Results\ntext\n\n![[plot.png]] ^fig2b\n\n## Figure 2 legend\n**Figure 2.** Counts.\n", "Notes/plot.png": "BINARY", "Notes/plot.svg": "<svg/>", "Notes/plot.pdf": "BINARY", "Notes/cells.tif": "BINARY" }, headings: { "Notes/analysis.md": { "Results": { start: 5, end: 40 }, "Figure 2 legend": { start: 40, end: null } } }, blocks: { "Notes/analysis.md": { "fig2b": { start: 22, end: 38 } } }, embeds: { "Notes/analysis.md": [{ link: "plot.png", offset: 22 }] } });
-const decoders = { pdf: vi.fn(async (_bytes: ArrayBuffer, _pageIndex: number, _scale: number) => ({ dataUrl: "data:pdf", width: 300, height: 200, pageCount: 3 })), tiff: vi.fn(async (..._args: unknown[]) => ({ dataUrl: "data:tif", width: 256, height: 256, pageCount: 3 })), raster: vi.fn(async (..._args: unknown[]) => ({ dataUrl: "data:raster", width: 64, height: 48, pageCount: 1 })), adjusts: (recipe: PixelRecipe) => hasActiveAdjustments(recipe, testRegistry()) };
+const decoders = { pdf: vi.fn(async (_bytes: ArrayBuffer, _pageIndex: number, _scale: number) => ({ dataUrl: "data:pdf", width: 300, height: 200, pageCount: 3 })), tiff: vi.fn(async (..._args: unknown[]) => ({ dataUrl: "data:tif", width: 256, height: 256, pageCount: 3 })), raster: vi.fn(async (..._args: unknown[]) => ({ dataUrl: "data:raster", width: 64, height: 48, pageCount: 1 })), adjusts: (recipe: PixelRecipe) => hasActiveAdjustments(recipe, testRegistry()), samples: () => undefined, decodeSamples: vi.fn() };
 const node = (over: Partial<FileNode>): FileNode => ({ ...fileNodeDefaults(createPage("a4-portrait", []), { file: "", subpath: "", show: "image" }, []), ...over });
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -18,8 +18,8 @@ test("image through a note block", async () => { const r = await resolveFileNode
 test("content of a heading section", async () => { const r = await resolveFileNode(node({ file: "analysis", subpath: "#Figure 2 legend", show: "content" }), "f.lnkfig.md", access, decoders); expect(r.kind).toBe("content"); expect((r as any).markdown).toContain("**Figure 2.**"); });
 test("svg source is native", async () => { const r = await resolveFileNode(node({ file: "plot.svg" }), "f.lnkfig.md", access, decoders); expect(r).toMatchObject({ kind: "image", source: "svg", src: "app://Notes/plot.svg" }); });
 test("pdf source is decoded at the node's page and screen dpi", async () => { const r = await resolveFileNode(node({ file: "plot.pdf", pageIndex: 2 }), "f.lnkfig.md", access, decoders); expect(r).toMatchObject({ kind: "image", source: "pdf", src: "data:pdf", pageCount: 3, deps: ["Notes/plot.pdf"] }); expect(decoders.pdf).toHaveBeenCalledWith(expect.any(ArrayBuffer), 2, PDF_SCREEN_DPI / 72); });
-test("tiff source is decoded with the node's range", async () => { const r = await resolveFileNode(node({ file: "cells.tif", range: { min: 100, max: 4000 } }), "f.lnkfig.md", access, decoders); expect(r).toMatchObject({ kind: "image", source: "tiff", src: "data:tif" }); expect(decoders.tiff).toHaveBeenCalledWith(expect.any(ArrayBuffer), 0, { range: { min: 100, max: 4000 }, adjustments: [] }); });
-test("tiff source is decoded with the node's adjustments", async () => { const adjustments = [{ type: "test.invert", enabled: true, params: { a: 1 } }]; await resolveFileNode(node({ file: "cells.tif", adjustments }), "f.lnkfig.md", access, decoders); expect(decoders.tiff).toHaveBeenCalledWith(expect.any(ArrayBuffer), 0, { range: "auto", adjustments }); });
+test("tiff source is decoded with the node's range", async () => { const r = await resolveFileNode(node({ file: "cells.tif", range: { min: 100, max: 4000 } }), "f.lnkfig.md", access, decoders); expect(r).toMatchObject({ kind: "image", source: "tiff", src: "data:tif" }); expect(decoders.tiff).toHaveBeenCalledWith(expect.any(ArrayBuffer), 0, { range: { min: 100, max: 4000 }, adjustments: [] }, undefined); });
+test("tiff source is decoded with the node's adjustments", async () => { const adjustments = [{ type: "test.invert", enabled: true, params: { a: 1 } }]; await resolveFileNode(node({ file: "cells.tif", adjustments }), "f.lnkfig.md", access, decoders); expect(decoders.tiff).toHaveBeenCalledWith(expect.any(ArrayBuffer), 0, { range: "auto", adjustments }, undefined); });
 test("raster source without an active adjustment is its resource path, never read or decoded", async () => {
   const readBinary = vi.spyOn(access, "readBinary");
   // An enabled entry of a type that is not registered draws nothing, so it does not count.
@@ -34,7 +34,7 @@ test("raster source with an enabled adjustment is decoded with the node's recipe
   const adjustments = [{ type: "test.invert", enabled: false, params: {} }, { type: "test.double", enabled: true, params: {} }];
   const r = await resolveFileNode(node({ file: "plot.png", range: { min: 1, max: 9 }, adjustments }), "f.lnkfig.md", access, decoders);
   expect(r).toMatchObject({ kind: "image", source: "raster", src: "data:raster", pageCount: 1, deps: ["Notes/plot.png"] });
-  expect(decoders.raster).toHaveBeenCalledWith(expect.any(ArrayBuffer), { range: { min: 1, max: 9 }, adjustments });
+  expect(decoders.raster).toHaveBeenCalledWith(expect.any(ArrayBuffer), { range: { min: 1, max: 9 }, adjustments }, undefined);
 });
 test("svg and pdf sources ignore adjustments", async () => {
   const adjustments = [{ type: "test.invert", enabled: true, params: {} }];

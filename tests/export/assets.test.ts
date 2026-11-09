@@ -21,7 +21,7 @@ const { FakeAccess } = await import("../links/fake-access");
 const { testRegistry } = await import("../adjust/fixtures");
 
 /** The decoders collectAssets is given; only TIFF and raster go through them. */
-const decoders = { pdf: vi.fn(), tiff: mocks.tiff, raster: mocks.raster, adjusts: (recipe: PixelRecipe) => hasActiveAdjustments(recipe, testRegistry()) };
+const decoders = { pdf: vi.fn(), tiff: mocks.tiff, raster: mocks.raster, adjusts: (recipe: PixelRecipe) => hasActiveAdjustments(recipe, testRegistry()), samples: () => undefined, decodeSamples: vi.fn() };
 
 /** An image decoder that reports 640 x 480 for any data URI, and fails for the bytes 0xff 0xff 0xff. */
 class FakeImage {
@@ -246,7 +246,8 @@ describe("tiff sources", () => {
     await s.run();
     expect(mocks.tiff).toHaveBeenCalledTimes(2);
     const [stage, exported] = mocks.tiff.mock.calls;
-    expect(exported.slice(1)).toEqual(stage.slice(1));
+    // The page and the recipe; the stage may also pass a samples key, which the export does not need.
+    expect(exported.slice(1, 3)).toEqual(stage.slice(1, 3));
   });
 });
 

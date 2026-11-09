@@ -1,4 +1,5 @@
 import { InvalidationIndex } from "../../src/links/invalidation";
+import type { Plane } from "../../src/links/decoders/tiff-convert";
 import type { Decoders, FileRef, Resolved } from "../../src/links/types";
 import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { DocumentStore } from "../../src/model/store";
@@ -63,7 +64,7 @@ function setup() {
   const label = textNodeDefaults(page, {}, doc.nodes.map((n) => n.id));
   doc.nodes.push(label);
 
-  const access = new FakeAccess({ files: Object.fromEntries([...PATHS, "d.pdf", "e.png"].map((p) => [p, "BINARY"])) });
+  const access = new FakeAccess({ files: Object.fromEntries([...PATHS, "d.pdf", "e.png", "f.tif"].map((p) => [p, "BINARY"])), mtimes: { "e.png": 1, "f.tif": 1 } });
   const reads: string[] = [];
   const readBinary = access.readBinary.bind(access);
   access.readBinary = (file: FileRef) => {
@@ -72,14 +73,25 @@ function setup() {
   };
   const decodes: { release: () => void }[] = [];
   let hold = false;
+  /** The decoders' samples cache, and the `decodeSamples` calls held back while `holdSamples` is on. */
+  const planes = new Map<string, Plane>();
+  const sampleDecodes: { release: () => void }[] = [];
+  let holdSamples = false;
   const decoders: Decoders = {
     pdf: vi.fn(async (_bytes, pageIndex) => {
       if (hold) await new Promise<void>((release) => decodes.push({ release }));
       return { dataUrl: `data:page-${pageIndex}`, width: 10, height: 10, pageCount: 2 };
     }),
-    tiff: vi.fn(),
+    tiff: vi.fn(async () => ({ dataUrl: "data:tiff", width: 2, height: 1, pageCount: 1 })),
     raster: vi.fn(),
     adjusts: () => false,
+    samples: (key) => planes.get(key),
+    decodeSamples: vi.fn(async (_bytes, _source, _pageIndex, key) => {
+      if (holdSamples) await new Promise<void>((release) => sampleDecodes.push({ release }));
+      const plane: Plane = { width: 2, height: 1, bitsPerSample: 8, samplesPerPixel: 4, data: new Uint8Array(8) };
+      planes.set(key, plane);
+      return plane;
+    }),
   };
 
   const view = {
@@ -90,6 +102,7 @@ function setup() {
     index: new InvalidationIndex(),
     plugin: { access, decoders, registries: { adjustments: testRegistry() } },
     openLink: vi.fn(),
+    samplesLanded: vi.fn(),
   };
   const hosts = new Map<string, FakeHost>([[page.id, new FakeHost()]]);
   const pageLayer = {
@@ -109,7 +122,8 @@ function setup() {
     return next;
   };
   return {
-    doc, view, nodeHost, access, reads, decoders, decodes, hold: (on: boolean) => (hold = on), recording, a, b, c, label, relink, host: hosts.get(page.id)!,
+    doc, view, nodeHost, access, reads, decoders, decodes, hold: (on: boolean) => (hold = on), recording, planes, sampleDecodes,
+    holdSamples: (on: boolean) => (holdSamples = on), a, b, c, label, relink, host: hosts.get(page.id)!,
     ids: doc.nodes.map((n) => n.id),
     fileIds: [a.id, b.id, c.id],
   };
@@ -359,5 +373,83 @@ describe("resolve", () => {
     t.reads.length = 0;
     await t.nodeHost.resolve([t.b.id]);
     expect(t.reads).toEqual(["b.pdf"]);
+  });
+});
+
+describe("samplesNow", () => {
+  test("a raster panel with no adjustments is drawn by <img> (no decode) until its samples are asked for", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    expect(t.view.resolvedCache.get(t.a.id)).toMatchObject({ kind: "image", source: "raster", src: "app://e.png" });
+    expect(t.reads).not.toContain("e.png");
+    expect(t.decoders.raster).not.toHaveBeenCalled();
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
+  test("returns null and starts one decode, then the plane once it lands; the chrome is drawn again once", async () => {
+    const t = setup();
+    t.holdSamples(true);
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    t.reads.length = 0;
+
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    // Asked again while that decode is under way: no second one.
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await settle();
+    expect(t.reads).toEqual(["e.png"]);
+    expect(t.decoders.decodeSamples).toHaveBeenCalledTimes(1);
+    expect(t.decoders.decodeSamples).toHaveBeenCalledWith(expect.any(ArrayBuffer), "raster", 0, expect.any(String));
+    expect(t.view.samplesLanded).not.toHaveBeenCalled();
+
+    for (const d of t.sampleDecodes) d.release();
+    await settle();
+    expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
+    const plane = t.nodeHost.samplesNow(t.a.id);
+    expect(plane).not.toBeNull();
+    expect(plane).toBe([...t.planes.values()][0]);
+    expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
+    expect(t.reads).toEqual(["e.png"]);
+  });
+
+  test("the key follows the file's mtime: a changed file is decoded again", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    t.nodeHost.samplesNow(t.a.id);
+    await settle();
+    expect(t.nodeHost.samplesNow(t.a.id)).not.toBeNull();
+    t.access.setMtime("e.png", 2);
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await settle();
+    expect(t.decoders.decodeSamples).toHaveBeenCalledTimes(2);
+  });
+
+  test("is null, and decodes nothing, for a PDF panel, a node that is not a panel, or one not resolved", async () => {
+    const t = setup();
+    t.nodeHost.renderAll(t.doc);
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    await t.nodeHost.resolveStale();
+    expect(t.nodeHost.samplesNow(t.a.id)).toBeNull();
+    expect(t.nodeHost.samplesNow(t.label.id)).toBeNull();
+    await settle();
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
+  });
+
+  test("a TIFF panel is resolved with its samples key, which samplesNow then reads", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "f.tif" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    const key = vi.mocked(t.decoders.tiff).mock.calls[0][3];
+    expect(typeof key).toBe("string");
+    const plane: Plane = { width: 1, height: 1, bitsPerSample: 16, samplesPerPixel: 1, data: new Uint16Array(1) };
+    t.planes.set(key as string, plane);
+    expect(t.nodeHost.samplesNow(t.a.id)).toBe(plane);
+    expect(t.decoders.decodeSamples).not.toHaveBeenCalled();
   });
 });

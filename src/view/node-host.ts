@@ -1,5 +1,6 @@
 import { Keymap } from "obsidian";
-import { resolveFileNode } from "../links/resolver";
+import type { Plane } from "../links/decoders/tiff-convert";
+import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
@@ -45,6 +46,10 @@ export class NodeHost {
   /** The newest resolution started for each node. A result that is no longer the newest, or whose node is gone, is dropped. */
   private readonly tokens = new Map<NodeId, number>();
   private nextToken = 0;
+  /** Samples keys with a `samplesNow` decode under way, so one is started per key at a time. */
+  private readonly samplesPending = new Set<string>();
+  /** Samples keys whose `samplesNow` decode failed: not tried again (a changed file has a new key). */
+  private readonly samplesFailed = new Set<string>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
   private readonly warnedUnknown = new Set<string>();
   private readonly ctx: RenderContext;
@@ -167,6 +172,40 @@ export class NodeHost {
   imageSourceNow(id: NodeId): string | null {
     const renderer = this.entries.get(id)?.renderer;
     return renderer && isMeasuring(renderer) ? renderer.imageSourceNow?.() ?? null : null;
+  }
+
+  /**
+   * The decoded samples of the TIFF page or raster image panel `id` shows, as the file is now, if they are cached; null
+   * otherwise (and for any other node). When they are not cached yet, one decode into the cache starts (none if one for
+   * the same file is under way) and the view is told when it lands (`samplesLanded`), so what asked can ask again. A
+   * raster panel without adjustments stays drawn by the browser; this only fills the cache.
+   */
+  samplesNow(id: NodeId): Plane | null {
+    const node = this.view.store.doc.nodes.find((n) => n.id === id);
+    const resolved = this.view.resolvedCache.get(id);
+    if (node?.type !== "file" || resolved?.kind !== "image") return null;
+    const { file, source } = resolved;
+    if (source !== "tiff" && source !== "raster") return null;
+    const { access, decoders } = this.view.plugin;
+    const key = samplesKey(file, source, node.pageIndex, access);
+    if (key === undefined) return null;
+    const plane = decoders.samples(key);
+    if (plane) return plane;
+    if (this.samplesPending.has(key) || this.samplesFailed.has(key)) return null;
+    this.samplesPending.add(key);
+    void (async () => {
+      let landed = false;
+      try {
+        await decoders.decodeSamples(await access.readBinary(file), source, node.pageIndex, key);
+        landed = true;
+      } catch (error) {
+        this.samplesFailed.add(key);
+        console.error(`Link Figures: could not decode the samples of ${file.path}`, error);
+      }
+      this.samplesPending.delete(key);
+      if (landed) this.view.samplesLanded();
+    })();
+    return null;
   }
 
   /**

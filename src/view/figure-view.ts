@@ -9,6 +9,7 @@ import { loadDocument } from "../format/load";
 import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
+import type { Plane } from "../links/decoders/tiff-convert";
 import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
 import { renamedLinkFiles } from "../links/resolver";
 import type { Resolved } from "../links/types";
@@ -480,6 +481,19 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** Whether node `id` shows an image now (see `ImageState`): `none` for a panel that shows only its badge. */
   imageStateNow(id: NodeId): ImageState | null {
     return this.nodeHost.imageStateNow(id);
+  }
+
+  /**
+   * The decoded samples of the TIFF or raster image panel `id` shows, if they are cached; null otherwise. A null starts
+   * their decode, and the toolbar and the inspector are drawn again when it lands (see `NodeHost.samplesNow`).
+   */
+  samplesNow(id: NodeId): Plane | null {
+    return this.nodeHost.samplesNow(id);
+  }
+
+  /** Samples asked for by `samplesNow` have been decoded: what asked for them (the inspector, a command's state) asks again. */
+  samplesLanded(): void {
+    this.renderChrome();
   }
 
   /** The URL the image a node shows was loaded from, if it has loaded; null otherwise (the crop ghost draws an outline then). */

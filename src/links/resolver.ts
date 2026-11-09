@@ -28,6 +28,18 @@ function splitWithoutAlias(linktext: string): { file: string; subpath: string } 
   return splitLinktext((bar === -1 ? linktext : linktext.slice(0, bar)).trim());
 }
 
+/**
+ * The key a file's decoded samples are cached under: its path and modification time, and for a TIFF the page. A file
+ * changed on disk has a new mtime, so its old samples are never served for it. Undefined (nothing cached) for a source
+ * that has no samples, or a file whose mtime is unknown.
+ */
+export function samplesKey(file: FileRef, source: SourceKind, pageIndex: number, access: Pick<VaultAccess, "mtime">): string | undefined {
+  if (source !== "tiff" && source !== "raster") return undefined;
+  const mtime = access.mtime?.(file);
+  if (mtime === null || mtime === undefined) return undefined;
+  return JSON.stringify(source === "tiff" ? [file.path, mtime, pageIndex] : [file.path, mtime]);
+}
+
 function missing(reason: "file" | "subpath" | "no-image" | "decode", deps: string[]): Resolved {
   return { kind: "missing", reason, deps };
 }
@@ -45,14 +57,16 @@ async function resolvePanel(
   if (source === "svg" || (source === "raster" && !decoders.adjusts(node))) {
     return { kind: "image", file, src: access.resourcePath(file), source, pageCount: 1, deps };
   }
-  const bytes = await access.readBinary(file);
+  const key = samplesKey(file, source, node.pageIndex, access);
+  // Samples already decoded for this file as it is now are drawn again without reading it.
+  const bytes = key !== undefined && decoders.samples(key) ? new ArrayBuffer(0) : await access.readBinary(file);
   try {
     const decoded =
       source === "pdf"
         ? await decoders.pdf(bytes, node.pageIndex, PDF_SCREEN_DPI / 72)
         : source === "tiff"
-          ? await decoders.tiff(bytes, node.pageIndex, recipeOf(node))
-          : await decoders.raster(bytes, recipeOf(node));
+          ? await decoders.tiff(bytes, node.pageIndex, recipeOf(node), key)
+          : await decoders.raster(bytes, recipeOf(node), key);
     return { kind: "image", file, src: decoded.dataUrl, source, pageCount: decoded.pageCount, deps };
   } catch (error) {
     return { kind: "missing", reason: "decode", deps, message: error instanceof Error ? error.message : String(error) };

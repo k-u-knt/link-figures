@@ -4,6 +4,7 @@ import type { Attachable } from "../model/attach";
 import type { Pt, Rect } from "../model/geometry";
 import type { PathData } from "../model/path";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
+import type { Plane } from "../links/decoders/tiff-convert";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
 import type { Registries } from "./index";
@@ -55,6 +56,11 @@ export interface InspectorContext {
   imageSizeNow?(id: NodeId): { width: number; height: number } | null;
   /** What the view shows for node `id` (see `ImageState`); absent or null without a view, or for a node not drawn. */
   imageStateNow?(id: NodeId): ImageState | null;
+  /**
+   * The decoded samples of the TIFF or raster image node `id` shows, if they are cached; absent or null otherwise (a
+   * null starts their decode, and the inspector is drawn again when they land).
+   */
+  samplesNow?(id: NodeId): Plane | null;
 }
 
 /** What a node type's part in `node.update` may depend on besides the node. */

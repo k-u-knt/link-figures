@@ -11,6 +11,7 @@ import type LinkFiguresPlugin from "../main";
 import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
 import type { ImageState } from "../registry/node-type";
+import type { Plane } from "../links/decoders/tiff-convert";
 import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
 
@@ -32,6 +33,11 @@ export interface EditorView extends FigureViewLike {
   imageSourceNow(id: NodeId): string | null;
   /** Whether node `id` shows an image now (see `ImageState`): `none` for a panel that shows only its badge. */
   imageStateNow(id: NodeId): ImageState | null;
+  /**
+   * The decoded samples of the TIFF or raster image panel `id` shows, if they are cached, else null (and their decode
+   * starts; the chrome is drawn again when it lands). Absent on a view that cannot decode.
+   */
+  samplesNow?(id: NodeId): Plane | null;
   /** Starts crop mode on the page for the image panel `id`; a rotated panel shows a Notice instead. */
   startCrop(id: NodeId): void;
   /** Shows `message` to the user as a Notice. */

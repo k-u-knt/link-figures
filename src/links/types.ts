@@ -1,4 +1,5 @@
 import type { PixelRecipe } from "../adjust/render";
+import type { Plane } from "./decoders/tiff-convert";
 
 export interface FileRef {
   path: string;
@@ -21,6 +22,8 @@ export interface VaultAccess {
   readText(file: FileRef): Promise<string>;
   readBinary(file: FileRef): Promise<ArrayBuffer>;
   resourcePath(file: FileRef): string;
+  /** When the file was last modified (ms), for keying its decoded samples (see `samplesKey`); null or absent when unknown, which caches nothing. */
+  mtime?(file: FileRef): number | null;
 }
 
 export type SourceKind = "raster" | "svg" | "pdf" | "tiff";
@@ -35,12 +38,19 @@ export interface DecodedImage {
 export interface Decoders {
   /** `scale` 1 is 72 dpi. */
   pdf(bytes: ArrayBuffer, pageIndex: number, scale: number): Promise<DecodedImage>;
-  /** One page's native samples drawn through the panel's recipe (see `renderSamples`). */
-  tiff(bytes: ArrayBuffer, pageIndex: number, recipe: PixelRecipe): Promise<DecodedImage>;
-  /** A PNG, JPEG or other browser-decodable image drawn through the panel's recipe; used only when `adjusts` is true. */
-  raster(bytes: ArrayBuffer, recipe: PixelRecipe): Promise<DecodedImage>;
+  /**
+   * One page's native samples drawn through the panel's recipe (see `renderSamples`). With a samples `key` (see
+   * `samplesKey`) the decoded page is cached under it, and when it is cached already `bytes` are not looked at.
+   */
+  tiff(bytes: ArrayBuffer, pageIndex: number, recipe: PixelRecipe, key?: string): Promise<DecodedImage>;
+  /** A PNG, JPEG or other browser-decodable image drawn through the panel's recipe; used only when `adjusts` is true. `key` as for `tiff`. */
+  raster(bytes: ArrayBuffer, recipe: PixelRecipe, key?: string): Promise<DecodedImage>;
   /** Whether the recipe has an adjustment that is switched on and registered (see `hasActiveAdjustments`). */
   adjusts(recipe: PixelRecipe): boolean;
+  /** The decoded samples cached under `key`, if they are (a cached plane is shared: never write into it). */
+  samples(key: string): Plane | undefined;
+  /** Decodes a TIFF page or a raster image into the samples cache under `key`, without drawing it (a cached one is not decoded again). */
+  decodeSamples(bytes: ArrayBuffer, source: "tiff" | "raster", pageIndex: number, key: string): Promise<Plane>;
 }
 
 /** `deps` are the vault paths whose change should trigger re-resolution. */

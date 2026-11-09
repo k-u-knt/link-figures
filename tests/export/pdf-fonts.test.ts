@@ -470,11 +470,40 @@ describe("PDF export with installed fonts", () => {
     expect(out.text).not.toMatch(/\/BaseFont \/Calibri[\s/>]/);
   });
 
+  test("a face with a non-ASCII family and no usable PostScript name exports, under an ASCII BaseFont", async () => {
+    const jp = "日本語ゴシック";
+    const f = figure();
+    // Quoted, as svg2pdf.js cannot read an unquoted non-ASCII name; the export then falls back (below) rather than failing.
+    f.label("Hello", { family: `'${jp}'` });
+    f.label("World", { family: `'${jp}'`, weight: "bold" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ [jp]: family(jp, ["normal", "bold"]) })));
+    expect(out.warnings).toEqual([]);
+    const baseFonts = [...out.text.matchAll(/\/(?:BaseFont|FontName) \/(\S+)/g)].map((m) => m[1]);
+    expect(baseFonts.every((n) => /^[!-~]+$/.test(n))).toBe(true);
+    expect(out.text).toMatch(/\/BaseFont \/Font[A-Z]{6}/);
+    expect(out.text).toMatch(/\/BaseFont \/Font[A-Z]{6}-Bold/);
+  });
+
+  test("when output() fails over fonts, the export falls back to standard fonts with one warning", async () => {
+    const f = figure();
+    f.label("Hello", { family: "Calibri" });
+    // jsPDF's pub/sub swallows a font handler's error, so a font failure is forced where output() itself throws: a plug-in
+    // method overrides the built-in one on each new document, and removes itself so the retry gets the real output().
+    const api = jsPDF.API as unknown as { output?: () => never };
+    api.output = () => {
+      delete api.output;
+      throw new Error("Invalid PDF Name Object: forced");
+    };
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Calibri: family("Calibri") }))).finally(() => delete api.output);
+    expect(out.warnings).toEqual([expect.stringMatching(/^fonts could not be embedded: Invalid PDF Name Object: forced$/)]);
+    expect(out.text).not.toContain("/FontFile2");
+  });
+
   test("a PostScript name that is a standard font's own (Helvetica-Bold) is not used as a BaseFont", async () => {
     const f = figure();
     f.label("World", { family: "Helvetica", weight: "bold" });
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Helvetica: family("Helvetica", ["bold"]) })));
-    expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica-Embedded"]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica-Embedded-Bold"]);
   });
 
   test("a linked SVG's <style> font is embedded, and a warning about it names the panel", async () => {

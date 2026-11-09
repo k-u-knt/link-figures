@@ -637,6 +637,17 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
   return { svg: changed ? new XMLSerializer().serializeToString(root) : svg, faces: [...faces.values()], warnings };
 }
 
+const STYLE_SUFFIX: Record<FontStyle, string> = { normal: "", bold: "-Bold", italic: "-Italic", bolditalic: "-BoldItalic" };
+
+/**
+ * An ASCII BaseFont for a face with no usable PostScript name: the family's letters, digits and hyphens (or, when
+ * there are none, "Font" and a short hash of the family), then the style. jsPDF throws on a non-ASCII name at output.
+ */
+export function safeFontName(family: string, style: FontStyle): string {
+  const base = family.replace(/[^A-Za-z0-9-]/g, "") || `Font${tagOf(family)}`;
+  return `${base}${STYLE_SUFFIX[style]}`;
+}
+
 /** The parts of a jsPDF font record and of its event bus that naming a face's BaseFont needs. */
 interface JsPdfFont {
   fontName: string;
@@ -650,7 +661,7 @@ interface JsPdfEvents {
  * Puts the faces in a jsPDF document's virtual file system and registers each under its family and style (Identity-H).
  *
  * jsPDF writes a font's lookup name (`fontName`, the family svg2pdf.js finds it by) as its BaseFont and FontName, so
- * every style of a family would be called the family. A face with a PostScript name is called that in the file instead:
+ * every style of a family would be called the family. A face is called its PostScript name in the file instead (or a safe ASCII name made from its family, when it has none):
  * its `fontName` is swapped for the PostScript name only while the fonts are written (after the pages, before the
  * resource dictionaries), and put back after, so drawing and `getFontList()` keep the family.
  */
@@ -667,7 +678,8 @@ export function registerFaces(pdf: JsPdf, faces: RegisteredFace[]): void {
     } finally {
       events.unsubscribe(token);
     }
-    if (added && face.postscriptName) renamed.push({ font: added, family: face.family, postscriptName: face.postscriptName });
+    // A face with no usable PostScript name is called a safe ASCII name instead, as its family may not be writable.
+    if (added) renamed.push({ font: added, family: face.family, postscriptName: face.postscriptName ?? safeFontName(face.family, face.style) });
   }
   if (renamed.length === 0) return;
   events.subscribe("postPutPages", () => {

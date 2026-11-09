@@ -115,17 +115,36 @@ async function drawSvg(pdf: JsPdf, svg: string, doc: Document, page: Page, warni
   await pdf.svg(parseSvg(normalisePatternOrigins(outlined.svg), page), { x: 0, y: 0, width: page.width, height: page.height });
 }
 
+/**
+ * Builds a document with the faces its pages need and, if that fails (jsPDF can still throw on a font at `output()`),
+ * once more with none: the SVGs as they were, in standard fonts, WinAnsi-safe. That is said once; it does not fail the export.
+ */
+async function withFontFallback<T>(fonts: FontPass, originals: string[], prepared: { svg: string; faces: RegisteredFace[] }[], build: (svgs: string[], faces: RegisteredFace[]) => Promise<T>): Promise<T> {
+  try {
+    return await build(prepared.map((p) => p.svg), mergeFaces(prepared.map((p) => p.faces)));
+  } catch (error) {
+    if (prepared.every((p) => p.faces.length === 0)) throw error;
+    fonts.warnings.add(`fonts could not be embedded: ${error instanceof Error ? error.message : String(error)}`);
+    const none: FaceResolver = async () => ({ face: null, reason: "missing" });
+    const plain: string[] = [];
+    for (const svg of originals) plain.push((await prepareFonts(svg, none)).svg);
+    return build(plain, []);
+  }
+}
+
 /** One PDF holding a page per figure page, each drawn from its own SVG. */
 async function plainPdf(jsPDF: JsPdfConstructor, doc: Document, pages: Page[], svgs: string[], fonts: FontPass, warnings: Set<string>): Promise<Blob> {
   const prepared: { svg: string; faces: RegisteredFace[] }[] = [];
   for (const [i, page] of pages.entries()) prepared.push(await fontsFor(fonts, svgs[i], doc, page));
-  // jsPDF starts with one page, so the first page sets the document up and the rest are added.
-  const pdf = createPdf(jsPDF, pages[0], mergeFaces(prepared.map((p) => p.faces)));
-  for (const [i, page] of pages.entries()) {
-    if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
-    await drawSvg(pdf, prepared[i].svg, doc, page, warnings);
-  }
-  return pdf.output("blob");
+  return withFontFallback(fonts, svgs, prepared, async (drawn, faces) => {
+    // jsPDF starts with one page, so the first page sets the document up and the rest are added.
+    const pdf = createPdf(jsPDF, pages[0], faces);
+    for (const [i, page] of pages.entries()) {
+      if (i > 0) pdf.addPage([page.width, page.height], orientationOf(page));
+      await drawSvg(pdf, drawn[i], doc, page, warnings);
+    }
+    return pdf.output("blob");
+  });
 }
 
 interface PdfPanel {
@@ -169,9 +188,11 @@ interface PagePlan {
 /** The layer's SVG drawn by svg2pdf.js on a jsPDF page of its own, as the bytes of that one-page PDF. */
 async function svgLayerPdf(jsPDF: JsPdfConstructor, svg: string, doc: Document, page: Page, fonts: FontPass, warnings: Set<string>): Promise<ArrayBuffer> {
   const prepared = await fontsFor(fonts, svg, doc, page);
-  const pdf = createPdf(jsPDF, page, prepared.faces);
-  await drawSvg(pdf, prepared.svg, doc, page, warnings);
-  return pdf.output("arraybuffer");
+  return withFontFallback(fonts, [svg], [prepared], async ([drawn], faces) => {
+    const pdf = createPdf(jsPDF, page, faces);
+    await drawSvg(pdf, drawn, doc, page, warnings);
+    return pdf.output("arraybuffer");
+  });
 }
 
 /** True when the placement can be drawn: finite numbers, and a part of the source page that has an area. */

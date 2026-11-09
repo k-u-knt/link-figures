@@ -59,7 +59,9 @@ function setup(host: Partial<ApiHost> = {}) {
   };
   const api = createApi({ app: {} as never, registries: r, files, normalizePath, openFigure: () => null, ...host });
   const saved = () => loadDocument(text.get(PATH)!).doc;
-  return { api, saved };
+  /** Writes `doc` as the figure file, as an edit outside the API would. */
+  const write = (doc: Document) => void text.set(PATH, serializeFigureFile(doc, emptyParsed()));
+  return { api, saved, write };
 }
 
 const refuses = async (run: Promise<unknown>, message: RegExp) => {
@@ -250,5 +252,26 @@ describe("a stroke with a key no stroke has is refused (check 16), the same for 
     (c.stroke as unknown as Record<string, unknown>).color = "#00ff00";
     expect((loadDocument(serializeFigureFile(doc, emptyParsed())).doc.nodes.find((n) => n.id === "c") as ConnectorNode).stroke).toEqual({ ...stroke, color: "#00ff00" });
   });
-});
 
+  test("a stray key a stroke already has in the file is kept and blocks no edit; only the keys a patch gives are judged", async () => {
+    const { api, saved, write } = await withConnector();
+    // Written before strokes were checked (or by hand): `color` beside `paint`, in a connector's stroke and a shape's border.
+    const doc = saved();
+    const strokeOf = (id: string) => {
+      const n = doc.nodes.find((m) => m.id === id)!;
+      const fields = n as unknown as Record<string, Record<string, unknown>>;
+      return n.type === "connector" ? fields.stroke : fields.border;
+    };
+    strokeOf("c").color = "#00ff00";
+    strokeOf("s").color = "#00ff00";
+    write(doc);
+    await api.run(PATH, "node.update", { id: "c", patch: { stroke: { width: 3 } } });
+    await api.run(PATH, "node.update", { id: "s", patch: { border: { dash: "dot" } } });
+    const after = saved();
+    expect((after.nodes.find((n) => n.id === "c") as ConnectorNode).stroke).toMatchObject({ width: 3, color: "#00ff00" });
+    expect(after.nodes.find((n) => n.id === "s")).toMatchObject({ border: { dash: "dot", color: "#00ff00" } });
+    // A key the patch itself gives is judged, whatever the stroke had.
+    await refuses(api.run(PATH, "node.update", { id: "c", patch: { stroke: { colour: "#ff0000" } } }), /"stroke\.colour" is not a stroke key/);
+    await refuses(api.run(PATH, "node.update", { id: "c", patch: { stroke: { width: 1, color: "#ff0000" } } }), /"stroke\.color" is not a stroke key/);
+  });
+});

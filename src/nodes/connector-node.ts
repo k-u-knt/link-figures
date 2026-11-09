@@ -268,7 +268,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
       const left = ends.some((e) => isRecord(e) && e.kind === "attached" && pageOf(e.node) !== undefined && pageOf(e.node) !== value);
       return left ? "a connector attached to items moves to another page with them: use node.move on the items and the connector" : null;
     }
-    return fieldError(CONNECTOR_FIELDS, key, value);
+    return fieldError(CONNECTOR_FIELDS, key, value, ctx);
   },
 
   /** Within `tolerance` of the line (or a cap's outline), widened by half the line's width. */

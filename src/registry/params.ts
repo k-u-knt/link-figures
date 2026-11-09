@@ -121,16 +121,19 @@ export function validateArgs(spec: ParamSpec, args: unknown): ValidatedArgs {
 /**
  * What is wrong with `value` as the parameter (or field) `name` that `param` describes: `"name" must be …`, or null
  * when it is fine. Whether it is required, and its default, are the caller's. A stroke with a key not in `STROKE_KEYS`
- * is refused, naming the key: every command that takes a stroke (a connector's `stroke`, a shape's `border`, a panel's
+ * is refused, naming the key (with `given`, only a key that it gives: what a patch merged into the field gives): every command that takes a stroke (a connector's `stroke`, a shape's `border`, a panel's
  * `frame`) checks it here. A file is not: its strokes are read by `migrateStroke`, which keeps what it does not know.
  */
-export function paramError(name: string, param: Param, value: unknown): string | null {
+export function paramError(name: string, param: Param, value: unknown, given?: { value: unknown }): string | null {
   if (value === null && param.nullable) return null;
   const check = CHECKS[param.type];
   if (!check.test(value)) return `"${name}" must be ${check.what}${param.nullable ? " or null" : ""}`;
   // A stroke is drawn from its own keys only: another (a `color` beside `paint`) would be kept and never drawn.
-  if (param.type === "stroke" && isRecord(value)) {
-    const unknown = Object.keys(value).find((key) => !STROKE_KEYS.includes(key));
+  // Only the keys the caller gave are judged (`given`, a patch's part of the field): a key the stroke already had in
+  // the file, from before strokes were checked, is kept and blocks no edit.
+  const judged = given ? given.value : value;
+  if (param.type === "stroke" && isRecord(value) && isRecord(judged)) {
+    const unknown = Object.keys(judged).find((key) => !STROKE_KEYS.includes(key));
     if (unknown !== undefined) return `"${name}.${unknown}" is not a stroke key: a stroke has ${listed(STROKE_KEYS)}`;
   }
   if (param.enum && !param.enum.includes(value)) return `"${name}" must be one of ${param.enum.map((v) => JSON.stringify(v)).join(", ")}`;
@@ -165,7 +168,11 @@ export function paramError(name: string, param: Param, value: unknown): string |
 /** A colour as the model keeps it: `#rrggbb`. For a param's `pattern`. */
 export const COLOR_PATTERN = "#[0-9a-fA-F]{6}";
 
-/** For a node type's `checkField`: what is wrong with `value` as the field `key` when `fields` describes it, else null. */
-export function fieldError(fields: ParamSpec, key: string, value: unknown): string | null {
-  return Object.hasOwn(fields, key) ? paramError(key, fields[key], value) : null;
+/**
+ * For a node type's `checkField`: what is wrong with `value` as the field `key` when `fields` describes it, else null.
+ * Pass `checkField`'s context, so that a stroke is judged by the keys its patch gives (see `paramError`).
+ */
+export function fieldError(fields: ParamSpec, key: string, value: unknown, ctx?: { patch?: Record<string, unknown> }): string | null {
+  if (!Object.hasOwn(fields, key)) return null;
+  return paramError(key, fields[key], value, ctx?.patch ? { value: ctx.patch[key] } : undefined);
 }

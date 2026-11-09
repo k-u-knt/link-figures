@@ -131,6 +131,11 @@ export interface UpdateContext {
   /** The document as it is before the update: what a node that refers to other nodes (a connector's ends) is checked against. */
   doc: Document;
   /**
+   * The patch the update was given (`node.update`), which the node's fields were merged with: a check that judges only
+   * what the caller gave (a stroke's keys, see `fieldError`) reads it. Absent, the whole value is judged.
+   */
+  patch?: Record<string, unknown>;
+  /**
    * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
    * type's hooks may be called on them. A node drawn from other nodes (a connector) passes it on (`resolveConnector`).
    */

@@ -150,7 +150,7 @@ export const shapeNodeType: NodeType<ShapeNode> = {
     return rotateAttachable(node, { outline: kind.outline(box, node.params), anchors: kind.anchors(box, node.params) });
   },
 
-  checkField: (key, value) => fieldError(SHAPE_FIELDS, key, value),
+  checkField: (key, value, ctx) => fieldError(SHAPE_FIELDS, key, value, ctx),
 
   toSvg(node: ShapeNode, ctx: SvgContext): string {
     const warnings: string[] = [];

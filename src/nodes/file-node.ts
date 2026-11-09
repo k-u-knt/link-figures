@@ -364,8 +364,8 @@ const FILE_FIELDS: ParamSpec = {
 const RANGE: ParamSpec = { min: { type: "number", required: true }, max: { type: "number", required: true } };
 
 /** What `node.update` checks of a file node's field `key`: `range` by `RANGE`, the rest by `FILE_FIELDS`. */
-function fileFieldError(key: string, value: unknown): string | null {
-  if (key !== "range" || value === "auto") return fieldError(FILE_FIELDS, key, value);
+function fileFieldError(key: string, value: unknown, ctx?: { patch?: Record<string, unknown> }): string | null {
+  if (key !== "range" || value === "auto") return fieldError(FILE_FIELDS, key, value, ctx);
   return paramError(key, { type: "object", properties: RANGE }, value) === null ? null : '"range" must be "auto" or { min, max } (finite numbers)';
 }
 
@@ -457,7 +457,7 @@ export const fileNodeType: NodeType<FileNode> = {
     return { ...after, adjustments: filled as FileNode["adjustments"] };
   },
 
-  checkField: (key, value) => fileFieldError(key, value),
+  checkField: (key, value, ctx) => fileFieldError(key, value, ctx),
 
   toSvg(node: FileNode, ctx: SvgContext): string | "raster" {
     const asset = ctx.assets.get(node.id);

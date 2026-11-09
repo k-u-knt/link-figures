@@ -245,7 +245,7 @@ export const textNodeType: NodeType<TextNode> = {
     return { ...after, font: { ...DEFAULT_FONT, ...after.font } };
   },
 
-  checkField: (key, value) => fieldError(TEXT_FIELDS, key, value),
+  checkField: (key, value, ctx) => fieldError(TEXT_FIELDS, key, value, ctx),
 
   toSvg(node: TextNode, ctx: SvgContext): string {
     return textNodeSvg(node, ctx);

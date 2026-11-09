@@ -17,6 +17,10 @@ export const CURATED_FONT_OPTIONS: { value: string; label: string }[] = CURATED_
 function fontOptions(families: string[] | null, current: string): { value: string; label: string }[] {
   const base = families && families.length > 0 ? families.map((family) => ({ value: family, label: family })) : CURATED_FONT_OPTIONS;
   if (base.some((o) => o.value === current)) return base;
+  // The same family spelt in another case (fonts match case-insensitively) is that entry, carrying the node's spelling.
+  const folded = current.toLowerCase();
+  const same = base.findIndex((o) => o.value.toLowerCase() === folded);
+  if (same >= 0) return base.map((o, i) => (i === same ? { value: current, label: o.label } : o));
   // Installed families are sorted; the node's own is put where it sorts. The curated six keep their order, with it last.
   const withCurrent = [...base, { value: current, label: current }];
   return families && families.length > 0 ? withCurrent.sort((a, b) => compareFamilies(a.value, b.value)) : withCurrent;

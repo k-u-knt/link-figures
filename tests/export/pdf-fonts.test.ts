@@ -320,6 +320,21 @@ describe("prepareFonts", () => {
     expect(result.warnings).toEqual(["installed fonts could not be read (Obsidian was not visible) — fonts substituted"]);
   });
 
+  test("a family named like an Object prototype key is just a family no source has", async () => {
+    const result = await prepareFonts(svgOf('<text font-family="constructor">A</text><text font-family="valueOf, sans-serif">B</text>'), resolverOver(fakeSource({})), () => "L");
+    expect(result.warnings).toEqual(['L: font "constructor" not installed — Times used in PDF', 'L: font "valueOf" not installed — Helvetica used in PDF']);
+  });
+
+  test("an oblique style is written as italic, so a bold oblique run finds the bold italic face", async () => {
+    const source = fakeSource({ Calibri: family("Calibri", ["normal", "bolditalic", "italic"]) });
+    const svg = svgOf('<text font-family="Calibri" font-weight="bold" font-style="oblique">A</text><text font-family="Calibri" style="font-style: oblique">B</text>', "<style>.t { font: oblique bold 9px Calibri }</style>");
+    const result = await prepareFonts(svg, resolverOver(source), () => "L");
+    expect(result.warnings).toEqual([]);
+    expect(result.svg).not.toContain("oblique");
+    expect(result.svg).toContain('font-style="italic"');
+    expect(result.faces.map((f) => f.style).sort()).toEqual(["bolditalic", "italic"]);
+  });
+
   test("the same family and style is looked up once per export", async () => {
     const source = fakeSource({ Calibri: family("Calibri") });
     const resolve = resolverOver(source);
@@ -499,6 +514,20 @@ describe("PDF export with installed fonts", () => {
     expect(out.warnings).toEqual(["installed fonts could not be read (Obsidian was not visible) — fonts substituted"]);
     expect(out.bytes.length).toBeGreaterThan(0);
     expect(out.text).not.toContain("/FontFile2");
+  });
+
+  test("a font pass that fails leaves the page's SVG as it was, with one warning, and the PDF is still made", async () => {
+    const f = figure();
+    f.label("Hello", { family: "Calibri" });
+    f.label("World", { family: "Georgia" });
+    const r = registries(fakeSource({ Calibri: family("Calibri") }));
+    r.fontSources.all = () => {
+      throw new Error("boom");
+    };
+    const out = await exportPdf(f.doc, f.page, r);
+    expect(out.warnings).toEqual(["fonts could not be prepared: boom"]);
+    expect(out.text).not.toContain("/FontFile2");
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Times-Roman"]);
   });
 
   test("Review Focus 5: a 1 MB font used for one word gives a PDF under 200 KB", async () => {

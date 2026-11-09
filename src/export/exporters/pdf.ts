@@ -87,11 +87,19 @@ interface FontPass {
   warnings: Set<string>;
 }
 
-/** The PDF copy of a page's SVG, with the faces it uses (see `prepareFonts`); its warnings go to the pass. */
+/**
+ * The PDF copy of a page's SVG, with the faces it uses (see `prepareFonts`); its warnings go to the pass. A font pass
+ * that fails does not fail the export: the SVG is drawn as it is, with no faces, and that is said once.
+ */
 async function fontsFor(fonts: FontPass, svg: string, doc: Document, page: Page): Promise<{ svg: string; faces: RegisteredFace[] }> {
-  const prepared = await prepareFonts(svg, fonts.resolve, textOwnerLabel(doc, page));
-  for (const warning of prepared.warnings) fonts.warnings.add(warning);
-  return prepared;
+  try {
+    const prepared = await prepareFonts(svg, fonts.resolve, textOwnerLabel(doc, page));
+    for (const warning of prepared.warnings) fonts.warnings.add(warning);
+    return prepared;
+  } catch (error) {
+    fonts.warnings.add(`fonts could not be prepared: ${error instanceof Error ? error.message : String(error)}`);
+    return { svg, faces: [] };
+  }
 }
 
 /**

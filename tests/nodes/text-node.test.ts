@@ -151,6 +151,17 @@ describe("the type", () => {
     expect(options(null, "Gone Sans")).toEqual([...CURATED_FONT_OPTIONS.map((o) => o.value), "Gone Sans"]);
   });
 
+  test("a current family spelt in another case is the installed family's entry, not a second one", () => {
+    const menu = (families: string[] | null, family: string) =>
+      textNodeType.inspector({ ...base(), font: { ...base().font, family } }, { registries: createRegistries(), fontFamilies: () => families })[0].options!;
+    // The entry keeps the node's spelling as its value, so the menu shows it chosen and choosing it changes nothing.
+    expect(menu(["Fira Sans", "Georgia"], "georgia")).toEqual([
+      { value: "Fira Sans", label: "Fira Sans" },
+      { value: "georgia", label: "Georgia" },
+    ]);
+    expect(menu(null, "ARIAL").filter((o) => o.label.toLowerCase() === "arial")).toEqual([{ value: "ARIAL", label: "Arial" }]);
+  });
+
   test("the inspector offers the seven font fields, in order, and each key reads a value off a text node", () => {
     const fields = textNodeType.inspector(base(), { registries: createRegistries() });
     expect(fields.map((f) => `${f.kind}:${f.key}`)).toEqual([

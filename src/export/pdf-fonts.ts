@@ -244,7 +244,11 @@ function weightKeyword(value: string): string {
   return value;
 }
 
+/** svg2pdf.js keys only "italic": an oblique style would be no face at all when bold, and upright when not. */
+const slantKeyword = (value: string) => (value.trim().toLowerCase() === "oblique" ? "italic" : value);
+
 const WEIGHT_DECL_RE = /(font-weight\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
+const SLANT_DECL_RE = /(font-style\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
 /**
  * CSS text with each `font` shorthand written out as its longhands, which every reader understands, and each weight
  * as a keyword svg2pdf.js can key.
@@ -256,10 +260,12 @@ function rewriteFontDecls(css: string): string {
     const trailing = /\s*$/.exec(value)?.[0] ?? "";
     return longhands ? `${lead}${longhands.map(([p, v]) => `${p}: ${v}${important}`).join("; ")}${trailing}` : all;
   });
-  return expanded.replace(WEIGHT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${weightKeyword(value)}${tail}`);
+  return expanded
+    .replace(WEIGHT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${weightKeyword(value)}${tail}`)
+    .replace(SLANT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${slantKeyword(value)}${tail}`);
 }
 
-/** Rewrites the weights (and `font` shorthands) in attributes, inline styles and `<style>` text; true when anything changed. */
+/** Rewrites the weights and oblique styles (and `font` shorthands) in attributes, inline styles and `<style>` text; true when anything changed. */
 function rewriteWeights(root: Element): boolean {
   let changed = false;
   const set = (el: Element, name: string, value: string) => {
@@ -270,6 +276,8 @@ function rewriteWeights(root: Element): boolean {
   for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
     const weight = el.getAttribute("font-weight");
     if (weight !== null) set(el, "font-weight", weightKeyword(weight));
+    const slant = el.getAttribute("font-style");
+    if (slant !== null) set(el, "font-style", slantKeyword(slant));
     const style = el.getAttribute("style");
     if (style !== null && /font/i.test(style)) set(el, "style", rewriteFontDecls(style));
     if (el.localName === "style" && el.textContent && /font/i.test(el.textContent)) {
@@ -362,7 +370,7 @@ async function resolveList(names: string[], style: FontStyle, resolve: FaceResol
   for (const [index, name] of names.entries()) {
     const lower = name.toLowerCase();
     // jsPDF's own font-list keys (lower case) are found as they are; a generic name ends the search with its alias.
-    if (JSPDF_STANDARD[name]) return { kind: "standard", font: JSPDF_STANDARD[name], first };
+    if (Object.hasOwn(JSPDF_STANDARD, name)) return { kind: "standard", font: JSPDF_STANDARD[name], first };
     if (!GENERIC.has(lower)) {
       const { face, reason } = await resolve(name, style);
       // A twin of a standard font is set in that font rather than in a stand-in for a missing style.
@@ -370,7 +378,7 @@ async function resolveList(names: string[], style: FontStyle, resolve: FaceResol
       if (index === 0 && !face) first = { name, reason: reason ?? "missing" };
       if (isTwin(lower)) return { kind: "standard", font: STANDARD_TWINS[lower], first, twin: true };
     }
-    if (SVG2PDF_ALIASES[lower]) return { kind: "standard", font: SVG2PDF_ALIASES[lower], first };
+    if (Object.hasOwn(SVG2PDF_ALIASES, lower)) return { kind: "standard", font: SVG2PDF_ALIASES[lower], first };
   }
   return { kind: "standard", font: "Times", first };
 }

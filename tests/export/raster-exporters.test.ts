@@ -1,7 +1,7 @@
 import UTIF from "utif";
 import { crc32 } from "node:zlib";
 import { createPngExporter, createTiffExporter, pngExporter, tiffExporter } from "../../src/export/exporters/raster";
-import type { RasterBackend, RasterImage } from "../../src/export/rasterise";
+import type { RasterBackend } from "../../src/export/rasterise";
 import { createDocument, createPage } from "../../src/model/defaults";
 import type { ExportInput } from "../../src/registry/exporter";
 import { createRegistries } from "../../src/registry";
@@ -32,24 +32,28 @@ function tinyPng(): Uint8Array {
   return Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...chunk("IHDR", [0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]), ...chunk("IDAT", [1]), ...chunk("IEND", [])]);
 }
 
-/** A rasteriser that records its calls and answers with a flat image of the size asked for, in a colour per call. */
+/** A backend that records its calls; it draws a flat image of the size asked for, in a colour per call. */
 function fakeBackend(fail: (svg: string) => boolean = () => false) {
   const calls: { svg: string; width: number; height: number; background: string }[] = [];
-  const encoded: RasterImage[] = [];
+  const rendered: { width: number; height: number }[] = [];
+  const draw = (svg: string, width: number, height: number, background: string) => {
+    calls.push({ svg, width, height, background });
+    if (fail(svg)) throw new Error("the page's SVG could not be loaded as an image");
+  };
   const backend: RasterBackend = {
     async rasterise(svg, width, height, background) {
-      calls.push({ svg, width, height, background });
-      if (fail(svg)) throw new Error("the page's SVG could not be loaded as an image");
+      draw(svg, width, height, background);
       const data = new Uint8ClampedArray(width * height * 4);
       for (let i = 0; i < data.length; i += 4) data.set([calls.length * 10, 20, 30, 255], i);
       return { width, height, data };
     },
-    async encodePng(image) {
-      encoded.push(image);
+    async renderPng(svg, width, height, background) {
+      draw(svg, width, height, background);
+      rendered.push({ width, height });
       return tinyPng();
     },
   };
-  return { backend, calls, encoded };
+  return { backend, calls, rendered };
 }
 
 const bytesOf = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
@@ -64,7 +68,7 @@ test("PNG and TIFF describe themselves, and embed PDF panels as rasters", () => 
 });
 
 test("PNG: one file per page, each page drawn at dpi / 96 onto its paper, with the dpi in pHYs", async () => {
-  const { backend, calls, encoded } = fakeBackend();
+  const { backend, calls, rendered } = fakeBackend();
   const run = input();
   run.pages[1].paper = "#ffeecc";
   const { files, warnings } = await createPngExporter(backend).run(run, {});
@@ -75,7 +79,7 @@ test("PNG: one file per page, each page drawn at dpi / 96 onto its paper, with t
     { svg: '<svg id="Page 1"/>', width: 2161, height: 2008, background: "#ffffff" },
     { svg: '<svg id="Page 2"/>', width: 2480, height: 3508, background: "#ffeecc" },
   ]);
-  expect(encoded.map((i) => [i.width, i.height])).toEqual([[2161, 2008], [2480, 3508]]);
+  expect(rendered).toEqual([{ width: 2161, height: 2008 }, { width: 2480, height: 3508 }]);
   const png = await bytesOf(files[0].blob);
   const at = png.findIndex((_, i) => String.fromCharCode(...png.subarray(i, i + 4)) === "pHYs");
   expect(new DataView(png.buffer).getUint32(at + 4)).toBe(11811);

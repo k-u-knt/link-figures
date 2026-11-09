@@ -2,8 +2,8 @@ import type { Field } from "../../registry/fields";
 import type { Exporter, ExportInput } from "../../registry/exporter";
 import { withPhys } from "../png-phys";
 import { fitDpi } from "../raster-size";
-import { browserRaster, paperBackground, type RasterBackend, type RasterImage } from "../rasterise";
-import { encodeTiffRgb, rgbaToRgb, type TiffCompression } from "../tiff-write";
+import { browserRaster, paperBackground, type RasterBackend } from "../rasterise";
+import { encodeTiffRgb, type TiffCompression } from "../tiff-write";
 
 /** The SVG builder's note that a PDF panel was drawn from its raster: true of everything in a raster export. */
 const PLAIN_RASTERISED_PANEL = /: PDF panel rasterised$/;
@@ -14,7 +14,8 @@ interface RasterFormat {
   ext: string;
   mime: string;
   options(): Field[];
-  encode(image: RasterImage, dpi: number, opts: Record<string, unknown>, backend: RasterBackend): Promise<Uint8Array>;
+  /** The page drawn at `widthPx` × `heightPx` on `background`, as the file's parts. */
+  render(page: { svg: string; widthPx: number; heightPx: number; background: string }, dpi: number, opts: Record<string, unknown>, backend: RasterBackend): Promise<Uint8Array[]>;
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -44,12 +45,9 @@ function rasterExporter(format: RasterFormat, backend: RasterBackend): Exporter 
         const fit = fitDpi(page, input.dpi);
         if (fit.reduced) warnings.push(`"${page.name}": drawn at ${fit.dpi} dpi (the largest that fits)`);
         try {
-          const image = await backend.rasterise(svgs[i], fit.widthPx, fit.heightPx, paperBackground(page.paper));
-          if (image.width !== fit.widthPx || image.height !== fit.heightPx) {
-            throw new Error(`the drawn image is ${image.width} × ${image.height} px, not ${fit.widthPx} × ${fit.heightPx}`);
-          }
-          const bytes = await format.encode(image, fit.dpi, opts, backend);
-          files.push({ name: `${input.baseName} - ${page.name}.${format.ext}`, blob: new Blob([bytes as Uint8Array<ArrayBuffer>], { type: format.mime }) });
+          const drawn = { svg: svgs[i], widthPx: fit.widthPx, heightPx: fit.heightPx, background: paperBackground(page.paper) };
+          const parts = await format.render(drawn, fit.dpi, opts, backend);
+          files.push({ name: `${input.baseName} - ${page.name}.${format.ext}`, blob: new Blob(parts as Uint8Array<ArrayBuffer>[], { type: format.mime }) });
         } catch (error) {
           warnings.push(`"${page.name}": could not be drawn: ${message(error)}`);
         }
@@ -59,7 +57,7 @@ function rasterExporter(format: RasterFormat, backend: RasterBackend): Exporter 
   };
 }
 
-/** PNG: the canvas's own PNG, with the dpi written into a `pHYs` chunk. */
+/** PNG: the canvas's own PNG, with the dpi in a `pHYs` chunk and an `sRGB` chunk. */
 export function createPngExporter(backend: RasterBackend = browserRaster): Exporter {
   return rasterExporter(
     {
@@ -68,7 +66,7 @@ export function createPngExporter(backend: RasterBackend = browserRaster): Expor
       ext: "png",
       mime: "image/png",
       options: () => [],
-      encode: async (image, dpi, _opts, raster) => withPhys(await raster.encodePng(image), dpi),
+      render: async (page, dpi, _opts, raster) => withPhys(await raster.renderPng(page.svg, page.widthPx, page.heightPx, page.background), dpi),
     },
     backend,
   );
@@ -93,9 +91,13 @@ export function createTiffExporter(backend: RasterBackend = browserRaster): Expo
       ext: "tif",
       mime: "image/tiff",
       options: () => [COMPRESSION_FIELD],
-      encode: async (image, dpi, opts) => {
+      render: async (page, dpi, opts, raster) => {
+        const image = await raster.rasterise(page.svg, page.widthPx, page.heightPx, page.background);
+        if (image.width !== page.widthPx || image.height !== page.heightPx) {
+          throw new Error(`the drawn image is ${image.width} × ${image.height} px, not ${page.widthPx} × ${page.heightPx}`);
+        }
         const compression: TiffCompression = opts.compression === "none" ? "none" : "deflate";
-        return encodeTiffRgb(rgbaToRgb(image.data), image.width, image.height, dpi, compression);
+        return encodeTiffRgb(image.data, image.width, image.height, dpi, compression);
       },
     },
     backend,

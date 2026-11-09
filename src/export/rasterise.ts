@@ -11,13 +11,16 @@ export interface RasterImage {
  */
 export type Rasterise = (svg: string, widthPx: number, heightPx: number, background: string) => Promise<RasterImage>;
 
-/** The pixels as a PNG file's bytes. */
-export type EncodePng = (image: RasterImage) => Promise<Uint8Array>;
+/** Draws a page's SVG as `Rasterise` does, and answers with the canvas encoded as a PNG file's bytes. */
+export type RenderPng = (svg: string, widthPx: number, heightPx: number, background: string) => Promise<Uint8Array>;
 
-/** What the raster exporters draw and encode with: the browser's canvas, or a fake in tests. */
+/**
+ * What the raster exporters draw with: the browser's canvas, or a fake in tests. TIFF needs the pixels (`rasterise`);
+ * PNG takes the canvas's own encoding (`renderPng`), so the pixels are never copied out of the canvas.
+ */
 export interface RasterBackend {
   rasterise: Rasterise;
-  encodePng: EncodePng;
+  renderPng: RenderPng;
 }
 
 const WHITE = "#ffffff";
@@ -45,62 +48,88 @@ export function sizedSvg(svg: string, widthPx: number, heightPx: number): string
 }
 
 type Context2d = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+type AnyCanvas = OffscreenCanvas | HTMLCanvasElement;
 
-/** A 2D canvas of the size: an `OffscreenCanvas`, or a `<canvas>` where there is none. */
-function canvas2d(width: number, height: number): { canvas: OffscreenCanvas | HTMLCanvasElement; context: Context2d } {
-  let canvas: OffscreenCanvas | HTMLCanvasElement;
-  if (typeof OffscreenCanvas !== "undefined") {
-    canvas = new OffscreenCanvas(width, height);
-  } else {
-    canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
+/** A canvas of the size: an `OffscreenCanvas`, or a `<canvas>` where there is none. */
+function makeCanvas(width: number, height: number): AnyCanvas {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Every pixel is opaque once the background is filled, so a transparent corner means the canvas never got its pixels
+ * (a canvas the browser could not allocate draws nothing and says nothing).
+ */
+function checkDrawn(context: Context2d, width: number, height: number): void {
+  const corner = (x: number, y: number) => context.getImageData(x, y, 1, 1).data[3];
+  let opaque: boolean;
+  try {
+    opaque = corner(0, 0) === 255 && corner(width - 1, height - 1) === 255;
+  } catch {
+    opaque = false;
   }
-  const context = canvas.getContext("2d") as Context2d | null;
-  if (!context) throw new Error(`a canvas of ${width} × ${height} px could not be made`);
-  return { canvas, context };
+  if (!opaque) throw new Error(`the canvas could not be drawn at ${width} × ${height} px`);
 }
 
 /**
- * The browser's rasteriser: the SVG loaded from a Blob URL into an `Image`, decoded, and drawn onto a canvas filled
- * with the background first. The page's SVG is self-contained (its images are data URIs), so nothing else is fetched.
+ * The page drawn on a canvas, handed to `use`: the SVG loaded from a Blob URL into an `Image`, decoded, and drawn onto a
+ * canvas filled with white and then the background. The page's SVG is self-contained (its images are data URIs), so
+ * nothing else is fetched. The URL is revoked and the canvas's memory let go (its size set to 0) whatever happens.
  */
-export const rasteriseSvg: Rasterise = async (svg, widthPx, heightPx, background) => {
-  const url = URL.createObjectURL(new Blob([sizedSvg(svg, widthPx, heightPx)], { type: "image/svg+xml" }));
+async function drawPage<T>(svg: string, width: number, height: number, background: string, use: (canvas: AnyCanvas, context: Context2d) => Promise<T>): Promise<T> {
+  const url = URL.createObjectURL(new Blob([sizedSvg(svg, width, height)], { type: "image/svg+xml" }));
+  let canvas: AnyCanvas | undefined;
   try {
     const image = new Image();
     image.src = url;
     try {
       await image.decode();
-    } catch {
-      throw new Error("the page's SVG could not be loaded as an image");
-    }
-    const { context } = canvas2d(widthPx, heightPx);
-    context.fillStyle = WHITE;
-    context.fillRect(0, 0, widthPx, heightPx);
-    context.fillStyle = background;
-    context.fillRect(0, 0, widthPx, heightPx);
-    context.drawImage(image, 0, 0, widthPx, heightPx);
-    try {
-      return context.getImageData(0, 0, widthPx, heightPx);
     } catch (error) {
-      throw new Error(`the pixels of a ${widthPx} × ${heightPx} px canvas could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`the page's SVG could not be loaded as an image: ${message(error)}`);
     }
+    canvas = makeCanvas(width, height);
+    const context = canvas.getContext("2d", { alpha: false }) as Context2d | null;
+    if (!context) throw new Error(`the canvas could not be drawn at ${width} × ${height} px`);
+    context.fillStyle = WHITE;
+    context.fillRect(0, 0, width, height);
+    context.fillStyle = background;
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    return await use(canvas, context);
   } finally {
     URL.revokeObjectURL(url);
+    if (canvas) canvas.width = canvas.height = 0;
   }
-};
+}
 
-/** The browser's PNG encoder: the pixels put on a canvas, and the canvas encoded as a PNG. */
-export const encodePngOnCanvas: EncodePng = async (image) => {
-  const { canvas, context } = canvas2d(image.width, image.height);
-  context.putImageData(new ImageData(image.data as Uint8ClampedArray<ArrayBuffer>, image.width, image.height), 0, 0);
-  const blob =
-    "convertToBlob" in canvas
-      ? await canvas.convertToBlob({ type: "image/png" })
-      : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) throw new Error(`a ${image.width} × ${image.height} px image is too large to encode as a PNG`);
-  return new Uint8Array(await blob.arrayBuffer());
-};
+/** The browser's rasteriser: the page drawn on a canvas, and its pixels read back. */
+export const rasteriseSvg: Rasterise = (svg, widthPx, heightPx, background) =>
+  drawPage(svg, widthPx, heightPx, background, async (_canvas, context) => {
+    let image: ImageData;
+    try {
+      image = context.getImageData(0, 0, widthPx, heightPx);
+    } catch (error) {
+      throw new Error(`the pixels of a ${widthPx} × ${heightPx} px canvas could not be read: ${message(error)}`);
+    }
+    if (image.data[3] !== 255 || image.data[image.data.length - 1] !== 255) throw new Error(`the canvas could not be drawn at ${widthPx} × ${heightPx} px`);
+    return image;
+  });
 
-export const browserRaster: RasterBackend = { rasterise: rasteriseSvg, encodePng: encodePngOnCanvas };
+/** The browser's PNG: the page drawn on a canvas, and the canvas encoded as a PNG straight from it. */
+export const renderPngOnCanvas: RenderPng = (svg, widthPx, heightPx, background) =>
+  drawPage(svg, widthPx, heightPx, background, async (canvas, context) => {
+    checkDrawn(context, widthPx, heightPx);
+    const blob =
+      "convertToBlob" in canvas
+        ? await canvas.convertToBlob({ type: "image/png" })
+        : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error(`a ${widthPx} × ${heightPx} px image is too large to encode as a PNG`);
+    return new Uint8Array(await blob.arrayBuffer());
+  });
+
+export const browserRaster: RasterBackend = { rasterise: rasteriseSvg, renderPng: renderPngOnCanvas };

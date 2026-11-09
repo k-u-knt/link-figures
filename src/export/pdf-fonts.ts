@@ -17,7 +17,10 @@ import { findFace, type FindFaceReason, type FontSourceRegistry, type FontStyle,
 export interface RegisteredFace {
   /** The file name in jsPDF's virtual file system, with a six-letter tag (`ABCDEF+Name-style.ttf`). */
   vfsName: string;
-  /** The exact family string the SVG uses: svg2pdf.js looks the font up by it, and jsPDF writes it as the BaseFont. */
+  /**
+   * The name svg2pdf.js looks the font up by: the exact family string the SVG uses, or for a family jsPDF would take as
+   * one of its standard fonts (Helvetica, Times, Courier…), `<family>-Embedded`, which the PDF copy's runs are renamed to.
+   */
   family: string;
   style: FontStyle;
   base64: string;
@@ -59,6 +62,13 @@ const GENERIC = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy
  */
 const STANDARD_TWINS: Record<string, Standard> = { arial: "Helvetica", helvetica: "Helvetica", "times new roman": "Times" };
 const isTwin = (name: string) => Object.hasOwn(STANDARD_TWINS, name.toLowerCase());
+/**
+ * jsPDF's `getFont` tries the lower-cased name first, so a face registered as "Helvetica" (macOS installs one) would be
+ * written but never drawn: the standard font wins. Such a face is registered under `<family>-Embedded` instead, and its
+ * runs are renamed to that in the PDF copy.
+ */
+const JSPDF_KEYS = new Set(["helvetica", "times", "courier", "symbol", "zapfdingbats"]);
+const registeredName = (family: string) => (JSPDF_KEYS.has(family.toLowerCase()) ? `${family}-Embedded` : family);
 
 const REASONS: Record<Exclude<FindFaceReason, "unavailable">, string> = {
   missing: "not installed",
@@ -556,17 +566,22 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
         }
         continue;
       }
+      const { family, face } = outcome;
+      const name = registeredName(family);
       // svg2pdf.js resolves a family on the element that declares it, in that element's style; a run that inherits
       // it in another style would be set in Times. The run gets the family itself, to resolve in its own style.
+      // A face registered under another name gets that name on the run itself.
       const declarer = declaringElement(el, rules);
-      if (declarer && declarer !== el && styleKey(declarer, rules) !== style) {
+      if (name !== family) {
+        setInlineFamily(el, name);
+        changed = true;
+      } else if (declarer && declarer !== el && styleKey(declarer, rules) !== style) {
         setInlineFamily(el, list);
         changed = true;
       }
-      const { family, face } = outcome;
       if (!face.exact) warn(prefixed(label(), `font "${family}" has no ${STYLE_WORDS[style]} face — ${STYLE_WORDS[face.style]} used`));
-      const key = `${family}\u0000${style}`;
-      if (!faces.has(key)) faces.set(key, registeredFace(family, style, face));
+      const key = `${name}\u0000${style}`;
+      if (!faces.has(key)) faces.set(key, registeredFace(name, style, face));
     }
   }
 

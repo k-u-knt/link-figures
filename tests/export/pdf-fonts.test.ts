@@ -405,6 +405,20 @@ describe("PDF export with installed fonts", () => {
     expect(shown.join("")).not.toContain("\0");
   });
 
+  test.each(["Helvetica", "Times", "COURIER"])("m2d checks 8/9: an installed face named %s is registered under an alias and drawn, not left unused", async (name) => {
+    const f = figure();
+    f.label("Hello", { family: name });
+    f.label("World", { family: `${name}, Calibri`, weight: "bold" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ [name]: family(name, ["normal", "bold"]), Calibri: family("Calibri") })));
+    expect(out.warnings).toEqual([]);
+    // Each FontFile2 written is drawn: jsPDF resolves the lower-cased family to its standard font first, so the face goes by another name.
+    expect(out.text.match(/\/FontFile2/g)).toHaveLength(2);
+    const drawn = fontsDrawn(out.text, out.content);
+    expect(drawn).toHaveLength(2);
+    expect(drawn.every((font) => !/^(Helvetica|Times-Roman|Times-Bold|Courier|Courier-Bold)$/.test(font))).toBe(true);
+    expect(out.text).not.toMatch(/Calibri/);
+  });
+
   test("a linked SVG's <style> font is embedded, and a warning about it names the panel", async () => {
     const f = figure();
     const plot =

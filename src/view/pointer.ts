@@ -203,6 +203,10 @@ export class PointerController {
     this.endGesture();
     this.cropSession.finish();
     if (this.view.armedTool) this.view.disarmTool();
+    // The panel is selected at its own level: its group is entered (a panel at top level leaves any group), so the
+    // selection is not taken up to the group by the next store change (see `onStoreChange`), which would end the session.
+    const parent = parentOf(this.store.doc, id);
+    if ((this.view.enteredGroup ?? null) !== parent) this.setEntered(parent);
     this.select([id]);
     const started = this.cropSession.start(id);
     this.sync();

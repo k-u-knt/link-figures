@@ -1,4 +1,4 @@
-import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect, cropWithInset, visibleCrop } from "../../src/model/geometry";
+import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect, cropWithInset, visibleCrop, clampCrop } from "../../src/model/geometry";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -96,4 +96,8 @@ describe("visibleCrop: what a panel shows now, as a crop of its image", () => {
   test("a crop whose aspect is the box's is what shows", () => {
     expect(visibleCrop({ width: 100, height: 100, crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, fit: "cover" }, natural)).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
   });
+});
+
+test("clampCrop rounds to 1e-6 so float noise does not reach the file", () => {
+  expect(clampCrop({ x: 0.1 + 0.2, y: 0.29999999999, w: 0.3999994, h: 0.5 })).toEqual({ x: 0.3, y: 0.3, w: 0.399999, h: 0.5 });
 });

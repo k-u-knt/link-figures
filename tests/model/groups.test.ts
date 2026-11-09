@@ -64,6 +64,10 @@ describe("helpers", () => {
     expect(outermostUnit(doc, "a", "h")).toBe("g");
     expect(outermostUnit(doc, "d", null)).toBe("d");
   });
+  test("outermostUnit of the entered group itself is that group, not a group it is in", () => {
+    expect(outermostUnit(doc, "g", "g")).toBe("g");
+    expect(outermostUnit(doc, "h", "h")).toBe("h");
+  });
   test("expandUnits([h]) holds every node of h, in document order", () => expect(expandUnits(doc, ["h"])).toEqual(["a", "b", "g", "c", "h"]));
   test("expandUnits deduplicates", () => expect(expandUnits(doc, ["g", "a", "d"])).toEqual(["a", "b", "g", "d"]));
   test("isLocked follows the ancestors", () => {

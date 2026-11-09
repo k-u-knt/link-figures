@@ -290,6 +290,16 @@ describe("the selection after a store change is of units at the entered level", 
     expect(view.selection.ids).toEqual(["pq"]);
   });
 
+  test("the entered group itself (g, inside h), when selected, stays selected after a store change", () => {
+    const { view, dblclick } = setup(nested());
+    dblclick(...ON_A);
+    dblclick(...ON_A);
+    expect(view.enteredGroup).toBe("g");
+    view.selection.set(["g"]);
+    view.store.commit("touch", (d) => { d.nodes.find((n) => n.id === "x")!.x = 301; });
+    expect(view.selection.ids).toEqual(["g"]);
+  });
+
   test("inside an entered group the selection is mapped to its direct children, in order and once each", () => {
     const { view, dblclick } = setup(nested());
     dblclick(...ON_A);

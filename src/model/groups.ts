@@ -67,9 +67,11 @@ export function isLocked(doc: Document, id: NodeId): boolean {
 
 /**
  * The unit node `id` is acted on as: its top-level ancestor, or, when group `within` is entered, its ancestor that is a
- * direct member of `within`. A node that is not inside `within` is taken to its top-level ancestor.
+ * direct member of `within`. A node that is not inside `within` is taken to its top-level ancestor; `within` itself is
+ * its own unit (it stays what it is, not the group it is in).
  */
 export function outermostUnit(doc: Document, id: NodeId, within: NodeId | null): NodeId {
+  if (id === within) return id;
   const line = lineage(doc, id);
   if (line.length === 0) return id;
   const at = within === null ? -1 : line.indexOf(within);

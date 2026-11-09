@@ -144,12 +144,16 @@ export function visibleCrop(
 /** The least share of the image's width or height a crop keeps. */
 export const MIN_CROP = 0.01;
 
-/** `crop` kept within the image: `x` and `y` within 0 to 1 − `MIN_CROP`, `w` and `h` at least `MIN_CROP` and not past the far edge. */
+/**
+ * `crop` kept within the image: `x` and `y` within 0 to 1 − `MIN_CROP`, `w` and `h` at least `MIN_CROP` and not past the
+ * far edge; each to 1e-6, so that float noise from a drag or an inset (0.30000000000000004) does not reach the file.
+ */
 export function clampCrop(crop: Crop): Crop {
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-  const x = clamp(crop.x, 0, 1 - MIN_CROP);
-  const y = clamp(crop.y, 0, 1 - MIN_CROP);
-  return { x, y, w: clamp(crop.w, MIN_CROP, 1 - x), h: clamp(crop.h, MIN_CROP, 1 - y) };
+  const round = (v: number) => Math.round(v * 1e6) / 1e6;
+  const x = round(clamp(crop.x, 0, 1 - MIN_CROP));
+  const y = round(clamp(crop.y, 0, 1 - MIN_CROP));
+  return { x, y, w: round(clamp(crop.w, MIN_CROP, 1 - x)), h: round(clamp(crop.h, MIN_CROP, 1 - y)) };
 }
 
 /** The side of a crop that an inspector inset field names. */

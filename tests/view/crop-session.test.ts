@@ -424,6 +424,27 @@ describe("crop session", () => {
     expect(session().id).toBe("p");
   });
 
+  test("crop.edit on a grouped panel selected while its group is not entered enters the group, and the session survives its edits", () => {
+    const { controller, view, drag, session, box } = setup(
+      panel({ parent: "g" }, (doc) => {
+        doc.nodes.push({ ...fileNodeDefaults(doc.pages[0], { file: "b.png", subpath: "", show: "image" }, ["p"]), id: "q", x: 300, y: 10, width: 50, height: 50, z: 1, parent: "g" } as Node);
+        doc.nodes.push({ ...groupNodeDefaults(doc.pages[0], { id: "g" }, ["p", "q"]), x: 10, y: 10, width: 340, height: 100 } as Node);
+      }),
+    );
+    // As `view().setSelection(["p"])` does: the panel itself, below the level shown (g is not entered).
+    view.selection.set(["p"]);
+    expect(controller.startCrop("p")).toBe(true);
+    expect((view as { enteredGroup?: string | null }).enteredGroup).toBe("g");
+    // The east handle, 50 px left, then again: each drag edits, and the session goes on.
+    drag([210, 60], [160, 60]);
+    expect(session().active).toBe(true);
+    expect(view.selection.ids).toEqual(["p"]);
+    expect(box().width).toBe(150);
+    drag([160, 60], [110, 60]);
+    expect(session().active).toBe(true);
+    expect(box().width).toBe(100);
+  });
+
   test("a double-click on a rotated panel shows the Notice and starts no session", () => {
     const { dblclick, session, notices, activated } = setup(panel({ rotation: 30 }));
     dblclick(60, 60);

@@ -103,9 +103,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /**
    * The nodes a plugin's `migrate` hook could not read when the figure was loaded (see `HookFailure`): drawn, inspected
    * and pressed as placeholders, whatever type is registered for them, and saved as the file has them; copies of them
-   * join it (`markUnreadable`), and it only grows until the next load, so undo and redo of a copy keep it right.
+   * join it (`markUnreadable`), and it only grows until the next load, so undo and redo of a copy keep it right. It is
+   * the store's own set (`DocumentStore.unreadable`), so the store's normalisers skip their type's hooks too.
    */
-  unreadableNodes: Set<NodeId> = new Set();
+  get unreadableNodes(): Set<NodeId> {
+    return this.store.unreadable;
+  }
 
   /** The file text as `setViewData` received it. */
   private rawText = "";
@@ -196,7 +199,6 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       loaded = loadDocument(data, this.plugin.registries);
     } catch (error) {
       // Refuse to open, and with it to save: the file is shown as it is and never replaced by a default document.
-      this.unreadableNodes = new Set();
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
       this.showError(describeLoadError(error), data);
@@ -207,7 +209,6 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
-    this.unreadableNodes = new Set(loaded.unreadable);
     // Said once per type as the figure opens, not again each time the file is read back.
     if (!reload) {
       for (const report of hookFailureReports(loaded.hookFailures)) {
@@ -215,7 +216,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
         console.warn(report);
       }
     }
-    this.setDocument(loaded.doc, loaded.parsed, reload);
+    this.setDocument(loaded.doc, loaded.parsed, reload, loaded.unreadable);
     this.rawText = data;
     this.serializedAtLoad = serializeFigureFile(loaded.doc, loaded.parsed);
     this.loaded = true;
@@ -762,7 +763,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    * Swaps in a fresh store and drops everything derived from the previous document. With `keepResolutions` (the same
    * file read again) what was resolved for a node whose link is the same is kept, and only the rest is resolved.
    */
-  private setDocument(doc: Document, parsed: ParsedFigureFile, keepResolutions = false): void {
+  private setDocument(doc: Document, parsed: ParsedFigureFile, keepResolutions = false, unreadable: Iterable<NodeId> = []): void {
     this.ensureDom();
     // A tool armed for the document that was just replaced is not to land on this one.
     this.disarmTool();
@@ -771,7 +772,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.unsubscribe?.();
     if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;
-    const store = createFigureStore(doc, this.plugin.registries, () => this.pointer.commitTime());
+    const store = createFigureStore(doc, this.plugin.registries, () => this.pointer.commitTime(), unreadable);
     this.store = store;
     // Nothing selected, in progress or drawn belongs to the document that was just replaced.
     this.selection.clear();

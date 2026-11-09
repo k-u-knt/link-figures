@@ -2,7 +2,7 @@ import { PT_TO_PX } from "../constants";
 import { attachTarget, type AttachTarget } from "../model/attach";
 import { unionRect, type Pt, type Rect } from "../model/geometry";
 import { clipToOutline, pathBounds, pointAtEnd, transformPath, type PathData, type Seg } from "../model/path";
-import type { ConnectorNode, Document, End } from "../model/types";
+import type { ConnectorNode, Document, End, NodeId } from "../model/types";
 import type { Registries } from "../registry";
 import { DEFAULT_CAP_SIZE } from "../registry/cap";
 import { maxLead, type EndPoint } from "../registry/route";
@@ -40,11 +40,11 @@ type Placed = { pt: Pt; dir: Pt | null; clipTo: AttachTarget | null } | null;
  * another page, or one whose type is not attachable. An anchor id the item does not have (its kind changed) snaps to
  * the item's centre, so the end stays attached.
  */
-function place(doc: Document, c: ConnectorNode, end: End, registries: Registries): Placed {
+function place(doc: Document, c: ConnectorNode, end: End, registries: Registries, unreadable?: ReadonlySet<NodeId>): Placed {
   if (end.kind === "free") return { pt: { x: end.x, y: end.y }, dir: null, clipTo: null };
   const node = doc.nodes.find((n) => n.id === end.node);
   if (!node || node.page !== c.page) return null;
-  const target = attachTarget(doc, registries, end.node);
+  const target = attachTarget(doc, registries, end.node, unreadable);
   if (!target) return null;
   if (end.snap === "anchor") {
     const anchor = target.anchors.find((a) => a.id === end.anchor);
@@ -313,10 +313,12 @@ function atLeast(r: Rect, min: number): Rect {
  *   straight `lead` of the inset plus a pixel (never more than half the way to an end that genuinely lies ahead, see `maxLead`), so in
  *   the usual case the remaining line is straight there and the cap sits square on the anchor.
  *
- * Every number is finite for any ends, including both ends on one item or at one point.
+ * Every number is finite for any ends, including both ends on one item or at one point. `unreadable` holds the nodes
+ * their plugin could not read (see `DocumentStore.unreadable`): an end attached to one is placed by the item's box,
+ * and its type's `attachable` is not called. Every caller that has such a set passes it.
  */
-export function resolveConnector(doc: Document, c: ConnectorNode, registries: Registries): ResolvedConnector {
-  const placed: [Placed, Placed] = [place(doc, c, c.ends[0], registries), place(doc, c, c.ends[1], registries)];
+export function resolveConnector(doc: Document, c: ConnectorNode, registries: Registries, unreadable?: ReadonlySet<NodeId>): ResolvedConnector {
+  const placed: [Placed, Placed] = [place(doc, c, c.ends[0], registries, unreadable), place(doc, c, c.ends[1], registries, unreadable)];
   const widthPx = size(c.stroke.width, 0) * PT_TO_PX;
   const capped = [0, 1].map((i) => {
     const kind = registries.caps.get(c.caps[i].kind);

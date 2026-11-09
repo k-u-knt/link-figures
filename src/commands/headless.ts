@@ -175,7 +175,7 @@ export interface FigureFiles {
 /** A figure file's text loaded into a store with a figure's normalisers, and what loading it gave. */
 function loadFigure(text: string, registries: Registries): { store: DocumentStore; parsed: ParsedFigureFile; unreadable: ReadonlySet<NodeId> } {
   const { doc, parsed, unreadable } = loadDocument(text, registries);
-  return { store: createFigureStore(doc, registries), parsed, unreadable };
+  return { store: createFigureStore(doc, registries, undefined, unreadable), parsed, unreadable };
 }
 
 /** The document of the figure file at `path`, as a view would load it. */
@@ -212,9 +212,9 @@ export async function withHeadlessFigure<T>(
   await files.process(path, (text) => {
     const loadedFigure = loadFigure(text, registries);
     const { store, parsed } = loadedFigure;
-    // The nodes their plugin could not read, as a view holds them: no hook of their type is called on them, and a
-    // duplicate adds its copies of them for the calls after it.
-    const unreadable = new Set(loadedFigure.unreadable);
+    // The nodes their plugin could not read, held by the store as a view's is: no hook of their type is called on them
+    // (by the commands or the store's normalisers), and a duplicate adds its copies of them for the calls after it.
+    const unreadable = store.unreadable;
     // After the normalisers, so a file that only they would change is not rewritten when the call changes nothing.
     const loaded = store.doc;
     const ctx: CommandContext = {

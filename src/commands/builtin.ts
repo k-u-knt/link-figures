@@ -309,7 +309,7 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
     // group that is entered) joins its own group.
     if (original.parent !== undefined) copy.parent = copyOf.get(original.parent) ?? original.parent;
     if (copy.type !== "connector" || original.type !== "connector") return;
-    const resolved = resolveConnector(doc, original, ctx.registries);
+    const resolved = resolveConnector(doc, original, ctx.registries, unreadableIn(ctx));
     copy.ends = copy.ends.map((end, which): End => {
       if (end.kind === "free") return { kind: "free", x: roundPx(end.x + offset), y: roundPx(end.y + offset) };
       const target = copyOf.get(end.node);

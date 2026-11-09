@@ -241,7 +241,7 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   let after: Record<string, unknown> = { ...before };
   for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
   const type = nodeTypeFor(ctx.registries, node, unreadableIn(ctx));
-  const updateCtx = { registries: ctx.registries, doc: ctx.store.doc };
+  const updateCtx = { registries: ctx.registries, doc: ctx.store.doc, unreadable: unreadableIn(ctx) };
   // A size the patch gives is kept to the least a node may have, as a resize by a handle keeps it; one that is not a
   // size at all (negative, not a number) is left for the checks below to refuse. A type's derived size is its own.
   const derived = new Set(type?.derivedFields ?? []);
@@ -642,7 +642,7 @@ const connectorTool: Command = {
     if (!from) return { marks };
     const doc = ctx.store.doc;
     const line = connectorNodeDefaults(from.page, { ends: toolEnds(ctx, from, to, targets), caps: defaultCaps() }, doc.nodes.map((n) => n.id));
-    return { path: resolveConnector(doc, line, ctx.registries).path, marks };
+    return { path: resolveConnector(doc, line, ctx.registries, unreadableIn(ctx)).path, marks };
   },
 };
 

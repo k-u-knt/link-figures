@@ -98,7 +98,7 @@ export async function fileNodePptx(node: FileNode, base: PptxContext): Promise<P
         const defs: string[] = [];
         const warnings: string[] = [];
         let n = 0;
-        const svgCtx: SvgContext = { registries: ctx.registries, doc: ctx.doc, page: ctx.page, assets: ctx.assets, defs, warnings, uid: (prefix) => `pptx-${prefix}-${++n}` };
+        const svgCtx: SvgContext = { registries: ctx.registries, doc: ctx.doc, page: ctx.page, assets: ctx.assets, defs, warnings, uid: (prefix) => `pptx-${prefix}-${++n}`, unreadable: ctx.unreadable };
         const fragment = fileNodeSvg(node, asset, svgCtx);
         for (const warning of warnings) base.warn(warning);
         ctx.warn("SVG panel written as a picture");

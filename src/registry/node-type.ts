@@ -19,6 +19,11 @@ export interface RenderContext {
   resolved(id: NodeId): Resolved | undefined;
   openLink(linktext: string, evt: MouseEvent): void;
   component: Component;
+  /**
+   * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
+   * type's hooks may be called on them. A node drawn from other nodes (a connector) passes it on (`resolveConnector`).
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 export interface NodeRenderer {
@@ -40,6 +45,11 @@ export interface SvgContext {
   defs: string[];
   warnings: string[];
   uid(prefix: string): string;
+  /**
+   * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
+   * type's hooks may be called on them. A node drawn from other nodes (a connector) passes it on (`resolveConnector`).
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /**
@@ -72,6 +82,11 @@ export interface PptxContext {
   rasterise(svgFragment: string, box: Rect, warn?: (message: string) => void): Promise<Uint8Array>;
   /** Says what the slide could not keep; the same message is reported once per export. Say which item it is about. */
   warn(message: string): void;
+  /**
+   * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
+   * type's hooks may be called on them. A node drawn from other nodes (a connector) passes it on (`resolveConnector`).
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /**
@@ -115,6 +130,11 @@ export interface UpdateContext {
   registries: Registries;
   /** The document as it is before the update: what a node that refers to other nodes (a connector's ends) is checked against. */
   doc: Document;
+  /**
+   * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
+   * type's hooks may be called on them. A node drawn from other nodes (a connector) passes it on (`resolveConnector`).
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /** What a node type's pointer hooks (`hitTest`, `handles`, `dragHandle`) may depend on besides the node. */

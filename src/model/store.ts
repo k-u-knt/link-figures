@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from "immer";
 import { COALESCE_MS } from "../constants";
-import type { Normaliser } from "./normalise";
+import type { NormaliseContext, Normaliser } from "./normalise";
 import type { Document, Node, NodeId } from "./types";
 
 enablePatches();
@@ -37,9 +37,17 @@ export class DocumentStore {
   private mergeTarget: HistoryEntry | null = null;
   private listeners = new Set<Listener>();
   private readonly normalisers: Normaliser[] = [];
+  /**
+   * The nodes their plugin's `migrate` hook could not read when the figure was loaded (see `loadDocument`), and the
+   * copies of them made since: none of their type's hooks is called on them, by the normalisers (which get it in their
+   * context) or by anything else that reads the store. It only grows, so undo and redo of a copy keep it right. The view
+   * (`unreadableNodes`) and a headless call (`CommandContext.unreadable`) hand out this same set.
+   */
+  readonly unreadable: Set<NodeId>;
 
-  constructor(doc: Document, private readonly now: () => number = Date.now) {
+  constructor(doc: Document, private readonly now: () => number = Date.now, unreadable: Iterable<NodeId> = []) {
     this.current = doc;
+    this.unreadable = new Set(unreadable);
   }
 
   get doc(): Document {
@@ -54,7 +62,7 @@ export class DocumentStore {
   addNormaliser(fn: Normaliser): void {
     this.normalisers.push(fn);
     const loaded = this.current;
-    this.current = produce(loaded, draft => { fn(draft, loaded); });
+    this.current = produce(loaded, draft => { fn(draft, loaded, this.normaliseContext()); });
   }
 
   /**
@@ -177,7 +185,13 @@ export class DocumentStore {
    * each step sees a consistent document and is normalised against the step before it.
    */
   normalise(draft: Document, before: Document): void {
-    for (const fn of this.normalisers) fn(draft, before);
+    const ctx = this.normaliseContext();
+    for (const fn of this.normalisers) fn(draft, before, ctx);
+  }
+
+  /** What every normaliser is told besides the documents (see `NormaliseContext`). */
+  private normaliseContext(): NormaliseContext {
+    return { unreadable: this.unreadable };
   }
 
   subscribe(fn: (ev: ChangeEvent) => void): () => void {

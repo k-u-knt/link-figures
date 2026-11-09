@@ -31,7 +31,7 @@ function lineEnd(tag: "a:headEnd" | "a:tailEnd", cap: Cap, ctx: Pick<PptxContext
 export function connectorNodePptx(node: ConnectorNode, base: PptxContext): PptxPart {
   const ctx = labelled(base, nodeLabel(base.doc, node));
   if (!ctx.registries.routes.get(node.route)) ctx.warn(`no route "${node.route}" is registered, drawn straight`);
-  const resolved = resolveConnector(ctx.doc, node, ctx.registries);
+  const resolved = resolveConnector(ctx.doc, node, ctx.registries, ctx.unreadable);
   const box = pathBounds(resolved.full);
   const xfrm = xfrmXml({ x: ctx.px(box.x), y: ctx.px(box.y), cx: ctx.px(box.width), cy: ctx.px(box.height) }, 0);
   const ends = lineEnd("a:headEnd", node.caps[0], ctx) + lineEnd("a:tailEnd", node.caps[1], ctx);

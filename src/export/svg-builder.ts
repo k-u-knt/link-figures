@@ -75,6 +75,7 @@ export function buildPageSvg(
       counters.set(prefix, n);
       return `${prefix}-${n}`;
     },
+    unreadable: opts.unreadable,
   };
 
   // `sort` is stable, so nodes with the same `z` keep the document's order.

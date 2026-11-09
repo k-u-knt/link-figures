@@ -14,14 +14,24 @@ import type { ConnectorNode, Document, End, Node, NodeId, PageId } from "./types
  * as it was before the edit being normalised: the committed document for a commit, the draft as the previous call left
  * it for one call of a batch, and the document itself for a load.
  */
-export type Normaliser = (draft: Document, before: Document) => void;
+export type Normaliser = (draft: Document, before: Document, ctx?: NormaliseContext) => void;
+
+/** What a normaliser is told by its store besides the documents. */
+export interface NormaliseContext {
+  /**
+   * The nodes their plugin could not read (see `DocumentStore.unreadable`): none of their type's hooks is called on
+   * them, so a connector attached to one attaches to it as its box.
+   */
+  unreadable: ReadonlySet<NodeId>;
+}
 
 /**
  * A store for a figure with every normaliser a figure has: the one way a store for a figure is made, by the view and by
- * the API's headless calls alike, so the two cannot keep a document differently. `now` is the store's clock.
+ * the API's headless calls alike, so the two cannot keep a document differently. `now` is the store's clock, and
+ * `unreadable` the nodes its plugin could not read as the document was loaded (see `DocumentStore.unreadable`).
  */
-export function createFigureStore(doc: Document, registries: Registries, now?: () => number): DocumentStore {
-  const store = new DocumentStore(doc, now);
+export function createFigureStore(doc: Document, registries: Registries, now?: () => number, unreadable?: Iterable<NodeId>): DocumentStore {
+  const store = new DocumentStore(doc, now, unreadable);
   // Every connector is kept in step with its items in each commit, and the document is brought in line now.
   store.addNormaliser(connectorNormaliser(registries));
   // After the connectors, so a group whose member is a connector takes in the connector's box as it now is.
@@ -40,24 +50,25 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
  * Connectors never attach to connectors, so the order they are visited in does not matter.
  */
 export function connectorNormaliser(registries: Registries): Normaliser {
-  return (draft, before) => {
+  return (draft, before, ctx) => {
     if (!draft.nodes.some(isConnector)) return;
+    const unreadable = ctx?.unreadable;
     // Resolving reads the whole document, so it reads plain snapshots rather than the draft's proxies.
     let now: Document = isDraft(draft) ? current(draft) : draft;
     for (const node of draft.nodes) {
       if (!isConnector(node)) continue;
       const snapshot = now.nodes.find((n) => n.id === node.id) as ConnectorNode;
-      if (keptAsItWas(before, now, snapshot, registries)) continue;
-      const resolved = resolveConnector(now, snapshot, registries);
+      if (keptAsItWas(before, now, snapshot, registries, unreadable)) continue;
+      const resolved = resolveConnector(now, snapshot, registries, unreadable);
       let ends: [End, End] = snapshot.ends;
       for (const i of [0, 1] as const) {
         const end = ends[i];
         if (end.kind !== "attached") continue;
         if (resolved.detached[i]) {
-          const pt = lastPoint(before, snapshot, i, registries) ?? resolved.ends[i].pt;
+          const pt = lastPoint(before, snapshot, i, registries, unreadable) ?? resolved.ends[i].pt;
           ends = withEnd(ends, i, { kind: "free", x: pt.x, y: pt.y });
         } else if (end.snap === "anchor") {
-          const target = attachTarget(now, registries, end.node);
+          const target = attachTarget(now, registries, end.node, unreadable);
           // An item attached to as its box (see `AttachTarget.fallback`) does not know its own anchors: the id stays.
           const anchors = target && !target.fallback ? target.anchors : [];
           if (anchors.length > 0 && !anchors.some((a) => a.id === end.anchor)) {
@@ -71,7 +82,7 @@ export function connectorNormaliser(registries: Registries): Normaliser {
         node.ends = ends;
         now = isDraft(draft) ? current(draft) : draft;
       }
-      const { bounds } = ends === snapshot.ends ? resolved : resolveConnector(now, now.nodes.find((n) => n.id === node.id) as ConnectorNode, registries);
+      const { bounds } = ends === snapshot.ends ? resolved : resolveConnector(now, now.nodes.find((n) => n.id === node.id) as ConnectorNode, registries, unreadable);
       if (node.x !== bounds.x) node.x = bounds.x;
       if (node.y !== bounds.y) node.y = bounds.y;
       if (node.width !== bounds.width) node.width = bounds.width;
@@ -87,9 +98,9 @@ export function connectorNormaliser(registries: Registries): Normaliser {
  * attached to has changed since `before`. Its box and anchors were worked out by the item's own plugin, which the box
  * cannot redo, so an edit elsewhere leaves the file as it was.
  */
-function keptAsItWas(before: Document, now: Document, c: ConnectorNode, registries: Registries): boolean {
+function keptAsItWas(before: Document, now: Document, c: ConnectorNode, registries: Registries, unreadable?: ReadonlySet<NodeId>): boolean {
   const attached = c.ends.flatMap((end) => (end.kind === "attached" ? [end.node] : []));
-  if (!attached.some((id) => attachTarget(now, registries, id)?.fallback)) return false;
+  if (!attached.some((id) => attachTarget(now, registries, id, unreadable)?.fallback)) return false;
   const same = (id: NodeId): boolean => {
     const was = before.nodes.find((n) => n.id === id);
     const is = now.nodes.find((n) => n.id === id);
@@ -108,13 +119,13 @@ function withEnd(ends: [End, End], i: 0 | 1, end: End): [End, End] {
  * with that end attached to the same item and the item was there to resolve it; otherwise null. A connector that has
  * changed page since gets the point in its new page's pixels, at the same place on the canvas.
  */
-function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Registries): Pt | null {
+function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Registries, unreadable?: ReadonlySet<NodeId>): Pt | null {
   const was = before.nodes.find((n) => n.id === c.id);
   if (!was || !isConnector(was)) return null;
   const end = was.ends[i];
   const now = c.ends[i];
   if (end.kind !== "attached" || now.kind !== "attached" || end.node !== now.node) return null;
-  const resolved = resolveConnector(before, was, registries);
+  const resolved = resolveConnector(before, was, registries, unreadable);
   if (resolved.detached[i]) return null;
   const pt = resolved.ends[i].pt;
   if (was.page === c.page) return pt;
@@ -144,12 +155,12 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
 export function groupNormaliser(registries: Registries): Normaliser {
   const once = groupPass(registries);
   const connectors = connectorNormaliser(registries);
-  return (draft, before) => {
+  return (draft, before, ctx) => {
     // A member this pass took to its group's page may have a connector attached to it from its old page; the connector
     // rule (an end attached to an item on another page is freed) is applied again at once, in this same commit, and the
     // boxes are then worked out again from the connectors as they now are.
     if (once(draft, before)) {
-      connectors(draft, before);
+      connectors(draft, before, ctx);
       once(draft, before);
     }
   };

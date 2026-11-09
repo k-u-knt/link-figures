@@ -175,6 +175,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
           nextId: () => ++id,
           rasterise: (fragment, box, say) => rasterise(fragment, box, say ?? ((m) => warn(`"${page.name}": ${m}`))),
           warn,
+          unreadable: input.unreadable,
         };
 
         /** A node drawn as the SVG export draws it (turned and faded), as a picture of the box it reaches. */

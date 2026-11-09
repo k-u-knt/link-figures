@@ -101,6 +101,10 @@ export class NodeHost {
       resolved: (id) => view.resolvedCache.get(id),
       openLink: (linktext, evt) => view.openLink(linktext, Keymap.isModEvent(evt)),
       component: view,
+      // A getter: the view's set is its store's, and a new document comes with a new store.
+      get unreadable() {
+        return view.unreadableNodes;
+      },
     };
   }
 

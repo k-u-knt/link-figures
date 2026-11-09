@@ -27,7 +27,7 @@ import { connectorNodePptx } from "./connector-node-pptx";
  * What drawing a connector needs: the registries (its route, caps and paint) and the SVG it goes into. Warnings are said
  * without the node's label; the caller adds it.
  */
-export type ConnectorSvgContext = Pick<SvgContext, "registries" | "defs" | "warnings" | "uid">;
+export type ConnectorSvgContext = Pick<SvgContext, "registries" | "defs" | "warnings" | "uid" | "unreadable">;
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -47,7 +47,7 @@ export function connectorNodeSvg(doc: Document, node: ConnectorNode, ctx: Connec
   for (const cap of node.caps) {
     if (!caps.get(cap.kind)) ctx.warnings.push(`no cap kind "${cap.kind}" is registered, drawn without it`);
   }
-  const resolved = resolveConnector(doc, node, ctx.registries);
+  const resolved = resolveConnector(doc, node, ctx.registries, ctx.unreadable);
   const paint = paintToSvg(paints, node.stroke.paint, resolved.paintBox, ctx);
   ctx.defs.push(...paint.defs);
   const parts = [`<path d="${toSvgPath(resolved.path)}" fill="none" ${strokeAttrs(node.stroke, paint.ref, paint.opacity)}/>`];
@@ -87,7 +87,7 @@ class ConnectorNodeRenderer implements NodeRenderer {
       counters.set(prefix, n);
       return `${this.idPrefix}-${prefix}-${n}`;
     };
-    const { svg, bounds } = connectorNodeSvg(this.ctx.doc(), node, { registries: this.ctx.registries, defs, warnings, uid });
+    const { svg, bounds } = connectorNodeSvg(this.ctx.doc(), node, { registries: this.ctx.registries, defs, warnings, uid, unreadable: this.ctx.unreadable });
     const said = warnings.join("\n");
     if (said !== "" && said !== this.warned) console.warn(`Link Figures: connector ${node.id}: ${warnings.join("; ")}`);
     this.warned = said;
@@ -149,7 +149,7 @@ function withEnd(node: ConnectorNode, which: 0 | 1, end: End): ConnectorNode {
 
 /** The line `node` would draw in `ctx`'s document: what a handle drag shows while it is under way. */
 function previewOf(node: ConnectorNode, ctx: InteractionContext): PathData {
-  return resolveConnector(ctx.doc, node, ctx.registries).path;
+  return resolveConnector(ctx.doc, node, ctx.registries, ctx.unreadable).path;
 }
 
 /**
@@ -169,10 +169,10 @@ function withNearestAnchors(node: ConnectorNode, ctx: UpdateContext): ConnectorN
   // line is not drawn, and each end takes the anchor nearest its item's centre, so the ends are well formed and the
   // malformed field is what the patch is refused for. Any other error in drawing it is a real one, and goes on up.
   const drawable = pairOf(node.caps, isCap) && isStroke(node.stroke);
-  const drawn: Pt[] | null = drawable ? resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends.map((e) => e.pt) : null;
+  const drawn: Pt[] | null = drawable ? resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries, ctx.unreadable).ends.map((e) => e.pt) : null;
   const filled = ends.map((end, i) => {
     if (!lacking(end)) return end;
-    const target = attachTarget(ctx.doc, ctx.registries, end.node);
+    const target = attachTarget(ctx.doc, ctx.registries, end.node, ctx.unreadable);
     const anchors = target?.anchors ?? [];
     return anchors.length === 0 || !target ? end : { ...end, anchor: nearestAnchor(anchors, drawn?.[i] ?? target.center).id };
   }) as [End, End];
@@ -252,7 +252,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     if (key === "ends") {
       if (!pairOf(value, isEnd)) return '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
       for (const i of [0, 1] as const) {
-        const error = endError(ctx.doc, ctx.registries, (value as End[])[i], node.page);
+        const error = endError(ctx.doc, ctx.registries, (value as End[])[i], node.page, ctx.unreadable);
         if (error !== null) return `"ends.${i}" ${error}`;
       }
       return null;
@@ -274,7 +274,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
   /** Within `tolerance` of the line (or a cap's outline), widened by half the line's width. */
   hitTest(node: ConnectorNode, pt: Pt, tolerance: number, ctx: InteractionContext): boolean {
     const reach = tolerance + (Math.max(node.stroke.width, 0) * PT_TO_PX) / 2;
-    const resolved = resolveConnector(ctx.doc, node, ctx.registries);
+    const resolved = resolveConnector(ctx.doc, node, ctx.registries, ctx.unreadable);
     const b = resolved.bounds;
     if (!rectContainsPt({ x: b.x - reach, y: b.y - reach, width: b.width + 2 * reach, height: b.height + 2 * reach }, pt)) return false;
     const parts = [resolved.path, ...resolved.caps.filter((c): c is PathData => c !== null)];
@@ -283,7 +283,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
 
   /** A handle on each end where it is drawn (on an item's edge for a centre-snapped end), then the route's own handles. */
   handles(node: ConnectorNode, ctx: InteractionContext): NodeHandle[] {
-    const { ends } = resolveConnector(ctx.doc, node, ctx.registries);
+    const { ends } = resolveConnector(ctx.doc, node, ctx.registries, ctx.unreadable);
     const route = ctx.registries.routes.get(node.route);
     const own = route?.handles?.(ends[0], ends[1], node.routeParams) ?? [];
     return [
@@ -310,7 +310,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     }
     const route = ctx.registries.routes.get(node.route);
     if (!handle.startsWith(ROUTE_HANDLE) || !route?.dragHandle) return null;
-    const { ends } = resolveConnector(ctx.doc, node, ctx.registries);
+    const { ends } = resolveConnector(ctx.doc, node, ctx.registries, ctx.unreadable);
     const routeParams = route.dragHandle(handle.slice(ROUTE_HANDLE.length), to, ends[0], ends[1], node.routeParams);
     return {
       call: { id: "node.update", args: { id: node.id, patch: { routeParams } } },
@@ -345,7 +345,7 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
 
   toSvg(node: ConnectorNode, ctx: SvgContext): string {
     const warnings: string[] = [];
-    const { svg } = connectorNodeSvg(ctx.doc, node, { registries: ctx.registries, defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix) });
+    const { svg } = connectorNodeSvg(ctx.doc, node, { registries: ctx.registries, defs: ctx.defs, warnings, uid: (prefix) => ctx.uid(prefix), unreadable: ctx.unreadable });
     for (const warning of warnings) ctx.warnings.push(`${nodeLabel(ctx.doc, node)}: ${warning}`);
     return svg;
   },

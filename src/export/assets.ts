@@ -128,7 +128,7 @@ async function turnedPhotoAsset(doc: Document, node: FileNode, data: ArrayBuffer
     // The browser reports the turned size; orientations 5 to 8 swap the sides of the stored pixels.
     const natural = await loadNaturalSize(dataUri);
     const swapped = orientation >= 5;
-    deps.warnings.push(`${nodeLabel(doc, node)}: photo exported unrotated (too large to turn)`);
+    deps.warnings.push(`${nodeLabel(doc, node)}: photo exported unrotated (it could not be turned upright)`);
     return { kind: "image", dataUri, naturalWidth: swapped ? natural.height : natural.width, naturalHeight: swapped ? natural.width : natural.height };
   }
 }

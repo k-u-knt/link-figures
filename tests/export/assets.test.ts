@@ -171,7 +171,7 @@ describe("raster sources", () => {
       const assets = await s.run();
       // The stored pixels, at their stored size: the image reports its turned size (640 x 480), so the two are swapped.
       expect(assets.get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: bytesToDataUri(turned, "image/jpeg"), naturalWidth: 480, naturalHeight: 640 });
-      expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: photo exported unrotated (too large to turn)`]);
+      expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: photo exported unrotated (it could not be turned upright)`]);
     }
   });
 

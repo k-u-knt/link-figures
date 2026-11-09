@@ -9,6 +9,7 @@ import type { AssetMap, PdfAsset } from "../asset-types";
 import { pdfPanelPlacement, splitLayers, type Layer, type PdfPlacement } from "../pdf-layers";
 import { buildPageSvg } from "../svg-builder";
 import { normaliseUserSpaceMarkers } from "../svg-markers";
+import { normalisePatternOrigins } from "../svg-patterns";
 import { outlinePaintedStrokes } from "../svg-stroke-paints";
 
 const PDF_MIME = "application/pdf";
@@ -64,13 +65,14 @@ function ownerLabel(doc: Document, page: Page): (el: Element) => string {
 /**
  * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
  * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width), and gradient
- * and pattern strokes, which svg2pdf.js leaves unpainted, for their outlines filled with the paint. What could not be
+ * and pattern strokes, which svg2pdf.js leaves unpainted, for their outlines filled with the paint. Patterns placed by
+ * `x`/`y` are moved to the origin with a translate, as svg2pdf.js clips their tiles away otherwise. What could not be
  * drawn so is added to `warnings`.
  */
 async function drawSvg(pdf: JsPdf, svg: string, doc: Document, page: Page, warnings: Set<string>): Promise<void> {
   const outlined = outlinePaintedStrokes(normaliseUserSpaceMarkers(svg), ownerLabel(doc, page));
   for (const warning of outlined.warnings) warnings.add(warning);
-  await pdf.svg(parseSvg(outlined.svg, page), { x: 0, y: 0, width: page.width, height: page.height });
+  await pdf.svg(parseSvg(normalisePatternOrigins(outlined.svg), page), { x: 0, y: 0, width: page.width, height: page.height });
 }
 
 /** One PDF holding a page per figure page, each drawn from its own SVG. */

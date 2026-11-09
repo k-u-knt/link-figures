@@ -15,7 +15,7 @@ import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries } from "../../src/registry";
 import type { NodeType, SvgContext } from "../../src/registry/node-type";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
-import { connector, docWith, panel, panelAssets, STOPS } from "./shapes-fixtures";
+import { connector, docWith, hatch, panel, panelAssets, shape, STOPS } from "./shapes-fixtures";
 
 // The exporter imports svg2pdf.js by its package name, whose UMD build wants a global jsPDF; the ES build above already patched it.
 vi.mock("svg2pdf.js", () => ({}));
@@ -92,6 +92,13 @@ describe("svg2pdf.js 2.8.1", () => {
       expect(filled).toMatch(/\/Sh\d+ sh|\/Pattern cs\n\/P\d+ scn\nf/);
     }
   });
+
+  // The probe the pattern pre-pass rests on: the /BBox follows the pattern's x and y, but the tile is drawn at the
+  // origin. Should this start failing, the pre-pass (`normalisePatternOrigins`) can go.
+  test("writes a pattern's /BBox at its x and y, away from where the tile is drawn", async () => {
+    const offset = await draw(PATTERN.replace('width="8"', 'x="30" y="40" width="8"'), '<rect width="100" height="100" fill="url(#p)"/>');
+    expect(offset).toMatch(/\/BBox \[30\. 40\. 38\. 48\.\]/);
+  });
 });
 
 describe("PDF export", () => {
@@ -128,6 +135,18 @@ describe("PDF export", () => {
     expect(text).toMatch(/\/PatternType 1/);
     expect(content).toMatch(/\/Pattern cs\s+\/P\d+ scn\s+f/);
     expect(text).not.toMatch(/\/Subtype \/Image/);
+  });
+
+  test("a pattern fill away from the page's origin keeps its tile: every pattern's /BBox starts at the origin", async () => {
+    const result = await exportPdf(docWith((d) => ({ ...shape(d), fill: hatch, x: 60, y: 60 })));
+    const { text } = await pdfParts(result.files[0].blob);
+    const dictionaries = text.match(/<<[^>]*\/PatternType 1[^>]*>>/g) ?? [];
+    expect(dictionaries.length).toBeGreaterThan(0);
+    for (const dictionary of dictionaries) {
+      const [, xStep] = /\/XStep ([\d.]+)/.exec(dictionary)!;
+      const [, yStep] = /\/YStep ([\d.]+)/.exec(dictionary)!;
+      expect(dictionary).toContain(`/BBox [0. 0. ${xStep} ${yStep}]`);
+    }
   });
 });
 

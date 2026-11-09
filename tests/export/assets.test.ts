@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   tiff: vi.fn(),
   raster: vi.fn(),
   snapdom: vi.fn(),
+  turnJpeg: vi.fn(),
 }));
 // pdf.js and the DOM are not available here; what matters is what collectAssets asks of them.
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: mocks.decodePdf, pdfPageSizePt: mocks.pdfPageSizePt }));
@@ -97,6 +98,7 @@ function setup(specs: { node?: Partial<FileNode>; resolved?: Resolved }[]): Setu
         decoders,
         dpi,
         warnings,
+        turnJpeg: mocks.turnJpeg,
       }),
   };
 }
@@ -137,18 +139,40 @@ describe("raster sources", () => {
     expect(s.warnings).toEqual([]);
   });
 
-  test("a JPEG with an EXIF orientation other than 1 is drawn upright as a PNG (as the stage shows it), not embedded as is", async () => {
+  /** The `exif6.jpg` fixture (EXIF orientation 6: turned a quarter) as the file `path`, beside an upright JPEG. */
+  async function turnedPhoto(s: Setup, path: string): Promise<ArrayBuffer> {
     const { readFileSync } = await import("node:fs");
     const file = readFileSync(new URL("./fixtures/exif6.jpg", import.meta.url));
+    const data = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+    s.files[path] = data;
+    return data;
+  }
+
+  test("a JPEG with an EXIF orientation other than 1 is turned upright and embedded as a JPEG (as the stage shows it), not as is", async () => {
     const s = setup([{ resolved: image("fig/turned.jpg", "raster") }, { resolved: image("fig/upright.jpg", "raster") }]);
-    s.files["fig/turned.jpg"] = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+    const turned = await turnedPhoto(s, "fig/turned.jpg");
     s.files["fig/upright.jpg"] = bytes(0xff, 0xd8, 0xff, 0xd9);
-    mocks.raster.mockResolvedValue({ dataUrl: "data:image/png;base64,UFVQ", width: 12, height: 20, pageCount: 1 });
+    mocks.turnJpeg.mockResolvedValue({ bytes: bytes(1, 2, 3), width: 12, height: 20 });
     const assets = await s.run();
-    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: "data:image/png;base64,UFVQ", naturalWidth: 12, naturalHeight: 20 });
-    expect(mocks.raster).toHaveBeenCalledTimes(1);
-    expect(mocks.raster.mock.calls[0][0]).toBe(s.files["fig/turned.jpg"]);
+    expect(assets.get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: "data:image/jpeg;base64,AQID", naturalWidth: 12, naturalHeight: 20 });
+    expect(mocks.turnJpeg).toHaveBeenCalledTimes(1);
+    expect(mocks.turnJpeg.mock.calls[0][0]).toBe(turned);
+    // Not drawn through the raster decoder's full-size PNG.
+    expect(mocks.raster).not.toHaveBeenCalled();
     expect((assets.get(s.nodes[1].id) as { dataUri: string }).dataUri).toBe("data:image/jpeg;base64,/9j/2Q==");
+    expect(s.warnings).toEqual([]);
+  });
+
+  test("a photo that cannot be turned (over the decode budget, or not decoded) is embedded as it is, with a warning, never skipped", async () => {
+    for (const failure of [new DecodeLimitError("Photo is 10000×6000 px (60 MP); the limit is 50 MP", 10000, 6000), new Error("decode failed")]) {
+      const s = setup([{ resolved: image("fig/turned.jpg", "raster") }]);
+      const turned = await turnedPhoto(s, "fig/turned.jpg");
+      mocks.turnJpeg.mockReset().mockRejectedValue(failure);
+      const assets = await s.run();
+      // The stored pixels, at their stored size: the image reports its turned size (640 x 480), so the two are swapped.
+      expect(assets.get(s.nodes[0].id)).toEqual({ kind: "image", dataUri: bytesToDataUri(turned, "image/jpeg"), naturalWidth: 480, naturalHeight: 640 });
+      expect(s.warnings).toEqual([`${nodeLabel(s.doc, s.nodes[0])}: photo exported unrotated (too large to turn)`]);
+    }
   });
 
   test("an AVIF image is embedded, with a warning that the PDF export cannot show it", async () => {

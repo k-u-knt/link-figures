@@ -11,6 +11,7 @@ import { skippedReason } from "../nodes/file-node-svg";
 import type { AssetMap, FileAsset, RasterAsset } from "./asset-types";
 import { svgIntrinsicSize } from "./inline-svg";
 import { withLaidOut } from "./laid-out";
+import { turnJpegUpright, type JpegTurner } from "./upright-jpeg";
 
 export type { AssetMap, FileAsset, ImageAsset, PdfAsset, RasterAsset, SkippedAsset, SvgAsset } from "./asset-types";
 
@@ -77,6 +78,8 @@ export interface AssetDeps {
   dpi: number;
   /** Where the reason goes when one node's asset could not be made: `{label}: {reason}`. */
   warnings: string[];
+  /** Turns a JPEG upright by its EXIF orientation (`turnJpegUpright` when absent; a stand-in in a test). */
+  turnJpeg?: JpegTurner;
 }
 
 /** The node's body as the DOM draws it, rasterised at `dpi`. `dpr: 1` so the pixel size does not also depend on the monitor. */
@@ -109,6 +112,27 @@ async function decodePdfWithinBudget(doc: Document, node: FileNode, bytes: Array
   }
 }
 
+/**
+ * A JPEG with an EXIF orientation other than 1. The stage (the browser) draws it turned by that orientation; a PDF, a
+ * slide or another SVG viewer may draw the stored pixels as they are. So it is turned upright and encoded again as a
+ * JPEG (not a PNG, many times larger), and every export matches the stage. With no recipe: unadjusted, the stage draws
+ * the file's pixels as they are. A photo that cannot be turned (over the decode budget, or not decoded) is embedded as
+ * it is, at its stored size, with a warning: the panel is never lost for it.
+ */
+async function turnedPhotoAsset(doc: Document, node: FileNode, data: ArrayBuffer, orientation: number, deps: AssetDeps): Promise<FileAsset> {
+  try {
+    const upright = await (deps.turnJpeg ?? turnJpegUpright)(data);
+    return { kind: "image", dataUri: bytesToDataUri(upright.bytes, "image/jpeg"), naturalWidth: upright.width, naturalHeight: upright.height };
+  } catch {
+    const dataUri = bytesToDataUri(data, "image/jpeg");
+    // The browser reports the turned size; orientations 5 to 8 swap the sides of the stored pixels.
+    const natural = await loadNaturalSize(dataUri);
+    const swapped = orientation >= 5;
+    deps.warnings.push(`${nodeLabel(doc, node)}: photo exported unrotated (too large to turn)`);
+    return { kind: "image", dataUri, naturalWidth: swapped ? natural.height : natural.width, naturalHeight: swapped ? natural.width : natural.height };
+  }
+}
+
 async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resolved, { kind: "image" }>, deps: AssetDeps): Promise<FileAsset> {
   const path = resolved.file.path;
   switch (resolved.source) {
@@ -121,12 +145,9 @@ async function imageAsset(doc: Document, node: FileNode, resolved: Extract<Resol
       const mime = MIME_BY_EXTENSION[extensionOf(path)];
       if (!mime) throw new Error(`"${path}" is not an image type that can be embedded`);
       const data = await deps.readBinary(path);
-      if (mime === "image/jpeg" && jpegOrientation(data) !== 1) {
-        // The stage (the browser) draws a JPEG turned by its EXIF orientation; a PDF, a slide or another SVG viewer
-        // may draw the stored pixels as they are. Drawn upright as a PNG by the browser, so every export matches the
-        // stage. With no recipe: unadjusted, the stage draws the file's pixels as they are.
-        const decoded = await deps.decoders.raster(data, { range: "auto", adjustments: [] });
-        return { kind: "image", dataUri: decoded.dataUrl, naturalWidth: decoded.width, naturalHeight: decoded.height };
+      if (mime === "image/jpeg") {
+        const orientation = jpegOrientation(data);
+        if (orientation !== 1) return turnedPhotoAsset(doc, node, data, orientation, deps);
       }
       const dataUri = bytesToDataUri(data, mime);
       const natural = await loadNaturalSize(dataUri);

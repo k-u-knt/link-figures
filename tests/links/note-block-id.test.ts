@@ -1,4 +1,5 @@
-import { noteBlockId, REINDEX_TIMEOUT_MS, writableEditor, type NoteHost } from "../../src/links/note-block-id";
+import { BlockIdQueue, noteBlockId, REINDEX_TIMEOUT_MS, writableEditor, type NoteHost } from "../../src/links/note-block-id";
+import { parseNote } from "../../src/links/note-drop";
 
 const TEXT = ["# Results", "", "The cells divide.", "", "| a |", "| - |", "", "Has one ^old-1"].join("\n");
 
@@ -31,9 +32,18 @@ type Cache = ReturnType<typeof cacheOf>;
  * A vault with one note, `Notes/a.md`, and its cache; with `open`, an editor has it open (holding `editorText`, else
  * the file's). Saving the editor writes its text to the file; the cache is then `reindexTo` (null: the wait times out).
  */
-function setup(options: { open?: boolean; editorText?: string; reindexTo?: Cache | null; indexed?: boolean } = {}) {
+/**
+ * With `lagging`, the cache follows the file as Obsidian's does: a moment after each write (and at once on a save of
+ * the editor), and `nextIndex` resolves on that.
+ */
+function setup(options: { open?: boolean; editorText?: string; reindexTo?: Cache | null; indexed?: boolean; lagging?: boolean } = {}) {
   const files = new Map([["Notes/a.md", TEXT]]);
-  let cache: Cache | null = options.indexed === false ? null : cacheOf(TEXT);
+  let cache: Cache | ReturnType<typeof parseNote> | null = options.indexed === false ? null : cacheOf(TEXT);
+  const indexListeners = new Set<() => void>();
+  const reindex = () => {
+    cache = parseNote(files.get("Notes/a.md")!);
+    for (const listener of [...indexListeners]) listener();
+  };
   const editor = options.open
     ? {
         text: options.editorText ?? TEXT,
@@ -48,10 +58,16 @@ function setup(options: { open?: boolean; editorText?: string; reindexTo?: Cache
       }
     : null;
   const process = vi.fn(async (path: string, edit: (t: string) => string) => {
-    files.set(path, edit(files.get(path)!));
+    const before = files.get(path)!;
+    files.set(path, edit(before));
+    if (options.lagging && files.get(path) !== before) setTimeout(reindex, 5);
   });
   const saveAndReindex = vi.fn(async (path: string, _timeoutMs: number) => {
     files.set(path, editor!.text);
+    if (options.lagging) {
+      reindex();
+      return true;
+    }
     if (!options.reindexTo) return false;
     cache = options.reindexTo;
     return true;
@@ -62,11 +78,27 @@ function setup(options: { open?: boolean; editorText?: string; reindexTo?: Cache
     read: async (path) => files.get(path)!,
     editor: () => editor,
     saveAndReindex,
+    nextIndex: vi.fn((_path: string, _timeoutMs: number) => {
+      let settle: (indexed: boolean) => void = () => undefined;
+      const indexed = new Promise<boolean>((resolve) => (settle = resolve));
+      const listener = () => {
+        indexListeners.delete(listener);
+        settle(true);
+      };
+      indexListeners.add(listener);
+      return {
+        indexed,
+        cancel: () => {
+          indexListeners.delete(listener);
+          settle(false);
+        },
+      };
+    }),
     process,
   };
   let n = 0;
   const random = () => [0.1, 0.2, 0.3][n++ % 3];
-  return { host, files, editor, process, saveAndReindex, random, setCache: (c: Cache | null) => void (cache = c) };
+  return { host, files, editor, process, saveAndReindex, random, indexListeners, setCache: (c: Cache | null) => void (cache = c) };
 }
 
 describe("noteBlockId", () => {
@@ -191,6 +223,63 @@ describe("noteBlockId", () => {
   test("refuses a note that is not there, and one that is not indexed yet", async () => {
     await expect(noteBlockId(setup().host, "Notes/none.md", 2, "fig")).rejects.toThrow(/no note/);
     await expect(noteBlockId(setup({ indexed: false }).host, "Notes/a.md", 2, "fig")).rejects.toThrow(/not indexed yet/);
+  });
+});
+
+describe("BlockIdQueue: one note's ids are written one after another", () => {
+  const queue = (s: ReturnType<typeof setup>) => new BlockIdQueue(() => s.host, () => "fig", s.random);
+
+  test("without the queue, a second id right after a write to a closed note is refused (the cache is behind the file)", async () => {
+    const s = setup({ lagging: true });
+    await noteBlockId(s.host, "Notes/a.md", 2, "fig", s.random);
+    await expect(noteBlockId(s.host, "Notes/a.md", 4, "fig", s.random)).rejects.toThrow(/has changed; try again/);
+  });
+
+  test("a closed note: two calls in a row both write, the second once the cache has indexed the first", async () => {
+    const s = setup({ lagging: true });
+    const q = queue(s);
+    const first = await q.blockId("Notes/a.md", 2);
+    const second = await q.blockId("Notes/a.md", 4);
+    expect(first.id).not.toBe(second.id);
+    const lines = s.files.get("Notes/a.md")!.split("\n");
+    expect(lines[2]).toBe(`The cells divide. ^${first.id}`);
+    expect(lines.slice(4, 8)).toEqual(["| a |", "| - |", "", `^${second.id}`]);
+    // The second write's listener goes once the cache has indexed it.
+    await vi.waitFor(() => expect(s.indexListeners.size).toBe(0));
+  });
+
+  test("a closed note: two calls in one task (not awaited between) both write", async () => {
+    const s = setup({ lagging: true });
+    const q = queue(s);
+    const [first, second] = await Promise.all([q.blockId("Notes/a.md", 2), q.blockId("Notes/a", 4)]);
+    expect(s.files.get("Notes/a.md")).toContain(`The cells divide. ^${first.id}`);
+    expect(s.files.get("Notes/a.md")).toContain(`\n^${second.id}`);
+  });
+
+  test("an open note: two drops in one task both write through the editor; the editor is saved and indexed after each write", async () => {
+    const s = setup({ open: true, lagging: true });
+    const q = queue(s);
+    const [first, second] = await Promise.all([q.blockId("Notes/a.md", 2), q.blockId("Notes/a.md", 4)]);
+    expect(s.editor!.transaction).toHaveBeenCalledTimes(2);
+    expect(s.editor!.text.split("\n")[2]).toBe(`The cells divide. ^${first.id}`);
+    expect(s.editor!.text).toContain(`\n^${second.id}`);
+    expect(s.saveAndReindex).toHaveBeenCalledWith("Notes/a.md", REINDEX_TIMEOUT_MS);
+  });
+
+  test("a refusal does not hold up the next call, and a call that writes nothing does not wait for the cache", async () => {
+    const s = setup({ lagging: true });
+    const q = queue(s);
+    await expect(q.blockId("Notes/a.md", 0)).rejects.toThrow(/heading/);
+    expect(await q.blockId("Notes/a.md", 7)).toEqual({ id: "old-1", subpath: "#^old-1" });
+    expect(s.indexListeners.size).toBe(0);
+    expect((await q.blockId("Notes/a.md", 2)).id).toMatch(/^fig-/);
+  });
+
+  test("a paragraph typed at the end of an open note and given an id at once: saved, indexed, then written", async () => {
+    const edited = `${TEXT}\n\nSecond fresh paragraph.`;
+    const s = setup({ open: true, editorText: edited, lagging: true });
+    const { id } = await queue(s).blockId("Notes/a.md", 9);
+    expect(s.editor!.text.split("\n")[9]).toBe(`Second fresh paragraph. ^${id}`);
   });
 });
 

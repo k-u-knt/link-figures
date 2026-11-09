@@ -118,7 +118,7 @@ function setup(opts: { files?: Record<string, string>; folders?: string[] } = {}
       noteHost,
       api: { blockId },
       /** The Markdown view a drag started in, as the plugin's document listeners record it. */
-      editorDrag: { source: null as unknown },
+      editorDrag: { source: null as unknown, embed: null as { line: number | null; offset: number | null } | null },
     },
     store,
     commandContext(): CommandContext {
@@ -985,6 +985,19 @@ describe("dragged out of a note's editor", () => {
     expect(node.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
   });
 
+  test("block-id: a new id the cache has not indexed yet still gives the panel the image's proportions, not the default size", async () => {
+    // Just after the write the cache does not know #^fig-0001, so the note's link does not resolve yet; the image does.
+    const s = setup();
+    s.notes[NOTE] = TEXT;
+    s.files[NOTE] = TEXT;
+    dragImage(s);
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show, node.imageIndex]).toEqual(["Notes/analysis", "#^fig-0001", "image", 1]);
+    expect(node.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    expect(notices).toEqual([]);
+  });
+
   test("heading: an image links the nearest heading, counted within its section; nothing is written", async () => {
     const s = setup();
     s.settings.dropFromNote = "heading";
@@ -1015,6 +1028,69 @@ describe("dragged out of a note's editor", () => {
     dragImage(s);
     await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
     expect(fileNodes(s)[0].file).toBe("Notes/plot.png");
+    expect(s.blockId).not.toHaveBeenCalled();
+  });
+
+  /** Live Preview's image widget: Obsidian drags the image's file; the tracker recorded the editor and the embed's place. */
+  const dragEmbed = (s: Setup, path: string, embed: { line: number | null; offset: number | null }, mode = "source") => {
+    const view = { file: { path: NOTE }, getMode: () => mode, editor: { getValue: () => s.notes[NOTE] } };
+    s.leaves.push({ view });
+    s.view.plugin.editorDrag.source = view;
+    s.view.plugin.editorDrag.embed = embed;
+    s.view.app.dragManager = { draggable: { type: "file", file: { path } } };
+    s.handlers.drop(dropEvent({ x: 60, y: 80 }));
+  };
+
+  test("block-id: an image file dragged out of an editor's embed shows that image from the note's block, at its proportions", async () => {
+    const s = setup();
+    const text = "# R\n\n![[plot.png]]\n\nText ![[chart.svg]] ![[plot.png]]";
+    s.notes[NOTE] = text;
+    s.files[NOTE] = text;
+    dragEmbed(s, "Notes/plot.png", { line: 4, offset: text.lastIndexOf("![[plot.png]]") });
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    const [node] = fileNodes(s);
+    expect([node.file, node.subpath, node.show, node.imageIndex]).toEqual(["Notes/analysis", "#^fig-0001", "image", 1]);
+    expect(s.blockId).toHaveBeenCalledWith(NOTE, 4);
+    expect(node.height).toBeCloseTo(NODE_WIDTH_PX / 2, 1);
+    // The embed on the drag's line: no Notice about the image being embedded twice.
+    expect(notices).toEqual([]);
+  });
+
+  test("an image file dragged out of an editor's embed whose place is unknown: the first embed of it, with the Notice", async () => {
+    const s = setup();
+    s.settings.dropFromNote = "heading";
+    const text = "# R\n\n![[plot.png]]\n\n![[plot.png]]";
+    s.notes[NOTE] = text;
+    s.files[NOTE] = text;
+    dragEmbed(s, "Notes/plot.png", { line: null, offset: null });
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath, fileNodes(s)[0].imageIndex]).toEqual(["Notes/analysis", "#R", 0]);
+    expect(notices).toContainEqual(expect.stringMatching(/plot\.png is embedded 2 times in analysis; the panel shows the first \(line 3\)/));
+  });
+
+  test("direct: an image file dragged out of an editor's embed links the file; so does one from a Reading view", async () => {
+    for (const variant of ["direct", "preview"] as const) {
+      const s = setup();
+      if (variant === "direct") s.settings.dropFromNote = "direct";
+      s.notes[NOTE] = "![[plot.png]]";
+      s.files[NOTE] = "![[plot.png]]";
+      dragEmbed(s, "Notes/plot.png", { line: 0, offset: 0 }, variant === "preview" ? "preview" : "source");
+      await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+      expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath]).toEqual(["Notes/plot.png", ""]);
+      expect(s.blockId).not.toHaveBeenCalled();
+    }
+  });
+
+  test("a vault file dragged (from the explorer) while no embed drag is recorded links the file", async () => {
+    const s = setup();
+    s.notes[NOTE] = "![[plot.png]]";
+    s.files[NOTE] = "![[plot.png]]";
+    s.view.plugin.editorDrag.source = null;
+    s.view.plugin.editorDrag.embed = null;
+    s.view.app.dragManager = { draggable: { type: "file", file: { path: "Notes/plot.png" } } };
+    s.handlers.drop(dropEvent({ x: 60, y: 80 }));
+    await vi.waitFor(() => expect(fileNodes(s)).toHaveLength(1));
+    expect([fileNodes(s)[0].file, fileNodes(s)[0].subpath]).toEqual(["Notes/plot.png", ""]);
     expect(s.blockId).not.toHaveBeenCalled();
   });
 

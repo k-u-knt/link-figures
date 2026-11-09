@@ -56,6 +56,11 @@ export interface NoteHost {
    * note), at most `timeoutMs`. Resolves true when it did, false on the time-out.
    */
   saveAndReindex(path: string, timeoutMs: number): Promise<boolean>;
+  /**
+   * Starts listening for the metadata cache's next "changed" event for the note: `indexed` resolves true on it, false
+   * after `timeoutMs` or on `cancel` (which also stops the listening). Called before a write, so the event cannot come first.
+   */
+  nextIndex(path: string, timeoutMs: number): { indexed: Promise<boolean>; cancel(): void };
   /** Reads the note, passes its text to `edit` and writes what it returns, with no other write between (`vault.process`). */
   process(path: string, edit: (text: string) => string): Promise<void>;
 }
@@ -83,8 +88,26 @@ const result = (id: string): BlockIdResult => ({ id, subpath: `#^${id}` });
  * throws "the note has changed; try again". Nothing is written when the block has an id already (in the cache or in the
  * text). Also throws for a line that is not a whole number from 0, a note that is not there or not indexed yet, a line
  * in no block, a heading (linked by its heading instead) and a block that cannot hold an id (front matter, a rule, HTML).
+ * Calls on one note are not queued here: `BlockIdQueue` does that, and is what `api.blockId` uses.
  */
 export async function noteBlockId(host: NoteHost, notePath: string, line: number, prefix: string, random: () => number = Math.random): Promise<BlockIdResult> {
+  return (await findOrWriteBlockId(host, notePath, line, prefix, random, false)).result;
+}
+
+/** What `findOrWriteBlockId` did: the id, and (with `follow`) what settles once the cache has indexed its write. */
+interface Outcome {
+  result: BlockIdResult;
+  indexed: Promise<unknown>;
+}
+
+const settled: Promise<unknown> = Promise.resolve();
+
+/**
+ * `noteBlockId`; with `follow`, a write is also followed by the cache: an editor write is saved and the cache waited
+ * for (`saveAndReindex`), a file write waits for the cache's next "changed" (`nextIndex`, listened for before the write).
+ * `indexed` settles then, or at once when nothing was written.
+ */
+async function findOrWriteBlockId(host: NoteHost, notePath: string, line: number, prefix: string, random: () => number, follow: boolean): Promise<Outcome> {
   if (!Number.isInteger(line) || line < 0) throw new Error(`blockId: "line" must be a whole number from 0, not ${String(line)}`);
   const path = host.resolve(notePath);
   if (path === null) throw new Error(`blockId: there is no note "${notePath}"`);
@@ -111,29 +134,70 @@ export async function noteBlockId(host: NoteHost, notePath: string, line: number
     }
     const text = editor.getValue();
     const { block, cache, cached } = locate(text);
-    if (cached) return result(cached);
+    if (cached) return { result: result(cached), indexed: settled };
     const lines = text.split("\n");
     const written = blockIdInText(lines, block);
-    if (written) return result(written);
+    if (written) return { result: result(written), indexed: settled };
     const id = newBlockId(prefix, taken(cache, text), random);
     const at = blockIdInsertion(lines, block, id);
     editor.transaction({ changes: [{ from: { line: at.line, ch: at.ch }, text: at.text }] });
-    return result(id);
+    return { result: result(id), indexed: follow ? host.saveAndReindex(path, REINDEX_TIMEOUT_MS) : settled };
   }
 
   const { cached } = locate(await host.read(path));
-  if (cached) return result(cached);
+  if (cached) return { result: result(cached), indexed: settled };
   let id = "";
-  await host.process(path, (text) => {
-    // The file as it is now: checked again, since it may have changed while it was read.
-    const { block, cache } = locate(text);
-    const written = blockIdInText(text.split("\n"), block);
-    if (written) {
-      id = written;
-      return text;
-    }
-    id = newBlockId(prefix, taken(cache, text), random);
-    return insertBlockId(text, block, id);
-  });
-  return result(id);
+  let wrote = false;
+  const watch = follow ? host.nextIndex(path, REINDEX_TIMEOUT_MS) : null;
+  try {
+    await host.process(path, (text) => {
+      // The file as it is now: checked again, since it may have changed while it was read.
+      const { block, cache } = locate(text);
+      const written = blockIdInText(text.split("\n"), block);
+      if (written) {
+        id = written;
+        return text;
+      }
+      id = newBlockId(prefix, taken(cache, text), random);
+      wrote = true;
+      return insertBlockId(text, block, id);
+    });
+  } catch (error) {
+    watch?.cancel();
+    throw error;
+  }
+  if (!wrote) watch?.cancel();
+  return { result: result(id), indexed: wrote && watch ? watch.indexed : settled };
+}
+
+/**
+ * `noteBlockId`, one call at a time per note (spec `2026-11-10-drop-from-note-design.md` §3): a call waits for the
+ * calls on the same note before it, and a call that wrote an id holds the next one until the metadata cache has
+ * indexed the write (at most `REINDEX_TIMEOUT_MS`). Without that, a second id written right after the first (two drops
+ * in one task, or a script) would find the cache behind the note and be refused ("has changed; try again"). A call
+ * that fails does not hold up the next. `api.blockId`, and so every drop, goes through one queue.
+ */
+export class BlockIdQueue {
+  private readonly tails = new Map<string, Promise<unknown>>();
+
+  constructor(
+    private readonly host: () => NoteHost,
+    private readonly prefix: () => string,
+    private readonly random: () => number = Math.random,
+  ) {}
+
+  blockId(notePath: string, line: number): Promise<BlockIdResult> {
+    const host = this.host();
+    const key = host.resolve(notePath) ?? notePath;
+    const call = (this.tails.get(key) ?? settled).then(() => findOrWriteBlockId(host, notePath, line, this.prefix(), this.random, true));
+    const tail = call.then(
+      (outcome) => outcome.indexed.catch(() => undefined),
+      () => undefined,
+    );
+    this.tails.set(key, tail);
+    void tail.then(() => {
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    });
+    return call.then((outcome) => outcome.result);
+  }
 }

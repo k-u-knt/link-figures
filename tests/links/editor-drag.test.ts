@@ -47,6 +47,59 @@ describe("EditorDragTracker: what a drag's target can be", () => {
   });
 });
 
+describe("EditorDragTracker: an embed dragged out of an editor (Live Preview's image widget)", () => {
+  /** An element inside an embed (`.internal-embed`, here `embedEl`) inside an editor. */
+  function inEmbed(embedEl: unknown) {
+    return { closest: (selector: string) => (selector === ".cm-editor" ? {} : selector === ".internal-embed" ? embedEl : null) };
+  }
+  /** A Markdown view holding `target`, whose editor's CodeMirror view places `embedEl` at `offset`. */
+  function viewWith(target: unknown, editor: unknown) {
+    return { view: { containerEl: { contains: (el: unknown) => el === target }, editor } };
+  }
+  const lineOf = (offset: number) => ({ line: Math.floor(offset / 10), ch: offset % 10 });
+
+  test("records the embed's place in the note, through the editor's CodeMirror view (posAtDOM) and offsetToPos", () => {
+    const embedEl = { name: "embed" };
+    const img = inEmbed(embedEl);
+    const posAtDOM = vi.fn((el: unknown) => (el === embedEl ? 42 : -1));
+    const leaf = viewWith(img, { cm: { posAtDOM }, offsetToPos: lineOf });
+    const tracker = new EditorDragTracker(() => [leaf]);
+    tracker.dragStart(img);
+    expect(tracker.source).toBe(leaf.view);
+    expect(tracker.embed).toEqual({ line: 4, offset: 42 });
+    tracker.clear();
+    expect(tracker.embed).toBeNull();
+  });
+
+  test("a drag of selected text records no embed; a new drag clears an old embed", () => {
+    const embedEl = {};
+    const img = inEmbed(embedEl);
+    const text = element(true);
+    const editor = { cm: { posAtDOM: () => 42 }, offsetToPos: lineOf };
+    const tracker = new EditorDragTracker(() => [viewWith(img, editor), viewWith(text, editor)]);
+    tracker.dragStart(img);
+    expect(tracker.embed).not.toBeNull();
+    tracker.dragStart(text);
+    expect(tracker.embed).toBeNull();
+    expect(tracker.source).not.toBeNull();
+  });
+
+  test.each<[string, unknown]>([
+    ["no CodeMirror view", {}],
+    ["posAtDOM that throws", { cm: { posAtDOM: () => { throw new Error("not in the view"); } }, offsetToPos: lineOf }],
+    ["posAtDOM that gives no number", { cm: { posAtDOM: () => undefined }, offsetToPos: lineOf }],
+    ["no offsetToPos", { cm: { posAtDOM: () => 42 } }],
+    ["offsetToPos that throws", { cm: { posAtDOM: () => 42 }, offsetToPos: () => { throw new Error("past the end"); } }],
+  ])("with %s, the view is still recorded, without the embed's place", (_what, editor) => {
+    const img = inEmbed({});
+    const leaf = viewWith(img, editor);
+    const tracker = new EditorDragTracker(() => [leaf]);
+    tracker.dragStart(img);
+    expect(tracker.source).toBe(leaf.view);
+    expect(tracker.embed).toEqual({ line: null, offset: null });
+  });
+});
+
 describe("listenForEditorDrags", () => {
   /** A document that keeps its listeners, so a test can fire them and see them removed. */
   function fakeDoc() {

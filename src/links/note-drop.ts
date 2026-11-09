@@ -185,19 +185,28 @@ function cacheHolds(cache: NoteCache, text: string): boolean {
 
 /**
  * The note's blocks as they are in the text the user sees: the editor's when the note is open, else the file's. The
- * cache when its places hold in that text, else `parseNote` of the text (the cache is behind an editor not yet saved).
- * Nothing is saved here: when an id is to be written, `blockId` saves the editor and waits for the cache itself, and
- * the lines are the same, since they are the editor's. Null when the note cannot be read.
+ * cache when it was made from that text, else `parseNote` of the text. An open editor whose text differs from the
+ * file's (`read`, what the cache is made from) is ahead of the cache, however well the cache's places still fit (text
+ * typed after the last block, an embed edited out of a line made longer); a cache whose places do not hold is behind
+ * too. Nothing is saved here: when an id is to be written, `blockId` saves the editor and waits for the cache itself,
+ * and the lines are the same, since they are the editor's. Null when the note cannot be read.
  */
 async function noteState(host: NoteDropHost, path: string): Promise<NoteState | null> {
   let text: string;
+  let current: boolean;
   try {
     const editor = host.editor(path);
-    text = editor ? editor.getValue() : await host.read(path);
+    if (editor) {
+      text = editor.getValue();
+      current = text === (await host.read(path));
+    } else {
+      text = await host.read(path);
+      current = true;
+    }
   } catch {
     return null;
   }
-  const cache = host.cache(path);
+  const cache = current ? host.cache(path) : null;
   return { cache: cache !== null && cacheHolds(cache, text) ? cache : parseNote(text), lines: text.split("\n") };
 }
 
@@ -380,9 +389,11 @@ export async function linkForText(host: NoteDropHost, mode: DropFromNote, path: 
 
 /**
  * The link for an image dragged out of the note at `path` (mode `"block-id"` or `"heading"`): the embed `isDragged`
- * picks (the first, with a Notice, when there are several), linked as `placeBlock` links its block, and `imageIndex`,
- * the embed's place among the images (`isImage`) of the linked range, which is how the panel finds it again. Null when
- * the note does not embed it or cannot be read. Rejects when `blockId` does.
+ * picks, linked as `placeBlock` links its block, and `imageIndex`,
+ * the embed's place among the images (`isImage`) of the linked range, which is how the panel finds it again. The embed
+ * is the one on line `at.line` when the drag's place is known (of several there, the last that starts at or before
+ * `at.offset`, else the first); otherwise, or when that line has none, the note's first, with a Notice when there are
+ * several. Null when the note does not embed it or cannot be read. Rejects when `blockId` does.
  */
 export async function linkForImage(
   host: NoteDropHost,
@@ -390,6 +401,7 @@ export async function linkForImage(
   path: string,
   isDragged: (link: string) => boolean,
   isImage: (link: string) => boolean,
+  at?: { line: number; offset?: number | null },
 ): Promise<(NoteLink & { imageIndex: number }) | null> {
   const state = await noteState(host, path);
   if (!state) return null;
@@ -397,10 +409,13 @@ export async function linkForImage(
   const embeds = [...(state.cache.embeds ?? [])].sort((a, b) => order(a) - order(b));
   const hits = embeds.filter((e) => isDragged(e.link));
   if (hits.length === 0) return null;
-  const target = hits[0];
+  const onLine = at ? hits.filter((e) => e.position.start.line === at.line) : [];
+  const offset = at?.offset;
+  const byOffset = typeof offset === "number" ? onLine.filter((e) => (e.position.start.offset ?? Infinity) <= offset).pop() : undefined;
+  const target = byOffset ?? onLine[0] ?? hits[0];
   const line = target.position.start.line;
   const notices: string[] = [];
-  if (hits.length > 1) notices.push(`${target.link} is embedded ${hits.length} times in ${noteName(path)}; the panel shows the first (line ${line + 1}).`);
+  if (onLine.length === 0 && hits.length > 1) notices.push(`${target.link} is embedded ${hits.length} times in ${noteName(path)}; the panel shows the first (line ${line + 1}).`);
   // An embed in no block of the cache (it should not happen) is placed as a block of its own line would be, by heading.
   const block = blockAt(state.cache, line) ?? { type: "unknown", start: line, end: line };
   const placed = await placeBlock(host, mode, path, state, block, "that image", notices);

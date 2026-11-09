@@ -25,6 +25,11 @@ export interface DropData {
   fromNote?: DropFromNote;
   /** The open note whose editor has `text` selected (the most recently active first), or null; asked only when `fromNote` is not `"direct"`. */
   selection?: (text: string) => SelectionMatch | null;
+  /**
+   * When the drag started on an embed in a note's editor (`EditorDragTracker.embed`): that note, and the embed's line
+   * and offset in it when the editor could say. Live Preview drags an embedded image as its `file`, not as a link.
+   */
+  embedDrag?: { sourcePath: string; line: number | null; offset?: number | null };
 }
 
 export type IntakeAction =
@@ -44,8 +49,11 @@ export type IntakeAction =
    * holds it, or the heading section over the blocks it spans (`note-drop.ts`).
    */
   | { kind: "link-block"; notePath: string; from: number; to: number }
-  /** An image link dragged out of the note `sourcePath` (an embed in it): a panel of the note's block or section that shows that image. */
-  | { kind: "link-note-image"; linktext: string; sourcePath: string }
+  /**
+   * An image link dragged out of the note `sourcePath` (an embed in it): a panel of the note's block or section that
+   * shows that image. `line` (and `offset`), when known, is where the dragged embed is in the note.
+   */
+  | { kind: "link-note-image"; linktext: string; sourcePath: string; line?: number; offset?: number }
   /**
    * One line of dropped text with no wikilink in it: a vault file if it resolves as a path, else nothing. Without
    * Obsidian's drag object (`app.dragManager` is unofficial) a file dragged from the vault arrives as such text.
@@ -114,18 +122,36 @@ function onlyLinks(text: string): boolean {
 /** Whether a drop out of a note is to be linked to the note (its block or section), by the setting. */
 const linksToNote = (fromNote: DropFromNote | undefined) => fromNote === "block-id" || fromNote === "heading";
 
-function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: DropFromNote | undefined): IntakeAction[] {
+/** Whether `path` is a note's, and not a figure's (a figure is not a note). */
+const isNotePath = (path: string) => /\.md$/i.test(path) && !path.endsWith(FILE_SUFFIX);
+
+function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: DropFromNote | undefined, embedDrag: DropData["embedDrag"]): IntakeAction[] {
   switch (draggable.type) {
     case "file":
-    case "files":
-      return (draggable.paths ?? []).map((path) => ({ kind: "link-file", path }));
+    case "files": {
+      const paths = draggable.paths ?? [];
+      // One image file dragged off an embed in a note's editor (Live Preview's image widget): the place in the note, by the setting.
+      if (draggable.type === "file" && paths.length === 1 && embedDrag && isNotePath(embedDrag.sourcePath) && linksToNote(fromNote) && isPanelExtension(extensionOf(paths[0]))) {
+        const { sourcePath, line, offset } = embedDrag;
+        return [
+          {
+            kind: "link-note-image",
+            linktext: paths[0],
+            sourcePath,
+            ...(line !== null ? { line } : {}),
+            ...(line !== null && typeof offset === "number" ? { offset } : {}),
+          },
+        ];
+      }
+      return paths.map((path) => ({ kind: "link-file", path }));
+    }
     case "link": {
       // A link that names no file (`#Heading`, inside the note it was dragged from) has nothing to link to here.
       const linktext = draggable.linktext?.trim() ?? "";
       if (splitLinktext(linktext).file.trim() === "") return [];
       const { sourcePath } = draggable;
       // An image dragged out of a note (an embed in it) links the place in the note, by the setting; a figure is not a note.
-      const fromANote = sourcePath !== undefined && /\.md$/i.test(sourcePath) && !sourcePath.endsWith(FILE_SUFFIX);
+      const fromANote = sourcePath !== undefined && isNotePath(sourcePath);
       if (fromANote && linksToNote(fromNote) && isPanelExtension(extensionOf(splitLinktext(linktext).file))) {
         return [{ kind: "link-note-image", linktext, sourcePath }];
       }
@@ -142,7 +168,7 @@ function fromDraggable(draggable: NonNullable<DropData["draggable"]>, fromNote: 
  * their extension is one a panel can show; the caller names the ones left out.
  */
 export function classifyDrop(d: DropData): IntakeAction[] {
-  if (d.draggable) return fromDraggable(d.draggable, d.fromNote);
+  if (d.draggable) return fromDraggable(d.draggable, d.fromNote, d.embedDrag);
   if (d.osFiles && d.osFiles.length > 0) {
     const out: IntakeAction[] = [];
     d.osFiles.forEach((file, index) => {

@@ -11,7 +11,7 @@ import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
 import { panelCommands } from "./commands/panels";
 import { blockIdPrefix } from "./links/block-id";
-import { noteBlockId, writableEditor, type NoteHost } from "./links/note-block-id";
+import { BlockIdQueue, writableEditor, type NoteHost } from "./links/note-block-id";
 import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
@@ -49,6 +49,11 @@ export default class LinkFiguresPlugin extends Plugin {
   forcedMarkdown = new Set<string>();
   access = new ObsidianVaultAccess(this.app);
   decoders: Decoders = createDecoders(this.registries.adjustments);
+  /** Block ids are written one at a time per note, each after the cache has indexed the last: see `BlockIdQueue`. */
+  private readonly blockIds = new BlockIdQueue(
+    () => this.noteHost(),
+    () => blockIdPrefix(this.settings.blockIdPrefix),
+  );
   /** The API for other plugins and scripts (the Obsidian CLI's `eval`): see `LinkFiguresApi`. */
   api: LinkFiguresApi = createApi({
     app: this.app,
@@ -59,7 +64,7 @@ export default class LinkFiguresPlugin extends Plugin {
     },
     normalizePath,
     openFigure: (path) => this.openFigureView(path),
-    noteBlockId: (path, line) => noteBlockId(this.noteHost(), path, line, blockIdPrefix(this.settings.blockIdPrefix)),
+    noteBlockId: (path, line) => this.blockIds.blockId(path, line),
     exportFigure: (path, request) => this.exportFigureAt(path, request),
   });
   /** The Markdown view a drag started in (its editor), for a drop of text on a figure to match against: see `EditorDragTracker`. */
@@ -201,6 +206,20 @@ export default class LinkFiguresPlugin extends Plugin {
       const views = markdownViews(path);
       return views.find((view) => view.getMode() !== "preview") ?? views[0] ?? null;
     };
+    const nextIndex = (path: string, timeoutMs: number) => {
+      let settle: (indexed: boolean) => void = () => undefined;
+      const indexed = new Promise<boolean>((resolve) => (settle = resolve));
+      const ref = metadataCache.on("changed", (file) => {
+        if (file.path === path) done(true);
+      });
+      const timer = window.setTimeout(() => done(false), timeoutMs);
+      const done = (value: boolean) => {
+        window.clearTimeout(timer);
+        metadataCache.offref(ref);
+        settle(value);
+      };
+      return { indexed, cancel: () => done(false) };
+    };
     return {
       resolve: (path) => (note(path) ?? note(`${path}.md`))?.path ?? null,
       cache: (path) => {
@@ -210,25 +229,19 @@ export default class LinkFiguresPlugin extends Plugin {
       read: (path) => vault.cachedRead(this.vaultFile(path)),
       // Not through a Reading view's editor: the file is written with process instead (`writableEditor`).
       editor: (path) => writableEditor(markdownViews(path)),
-      saveAndReindex: (path, timeoutMs) =>
-        new Promise<boolean>((resolve) => {
-          // Listening before the save, so the event cannot come first.
-          const ref = metadataCache.on("changed", (file) => {
-            if (file.path === path) done(true);
-          });
-          const timer = window.setTimeout(() => done(false), timeoutMs);
-          const done = (indexed: boolean) => {
-            window.clearTimeout(timer);
-            metadataCache.offref(ref);
-            resolve(indexed);
-          };
-          const view = markdownView(path);
-          if (!view) done(false);
-          else view.save().catch((error: unknown) => {
+      saveAndReindex: (path, timeoutMs) => {
+        // Listening before the save, so the event cannot come first.
+        const { indexed, cancel } = nextIndex(path, timeoutMs);
+        const view = markdownView(path);
+        if (!view) cancel();
+        else
+          view.save().catch((error: unknown) => {
             console.error(`Link Figures: could not save ${path}`, error);
-            done(false);
+            cancel();
           });
-        }),
+        return indexed;
+      },
+      nextIndex,
       process: async (path, edit) => void (await vault.process(this.vaultFile(path), edit)),
     };
   }

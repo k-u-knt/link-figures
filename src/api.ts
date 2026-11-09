@@ -50,7 +50,9 @@ export interface LinkFiguresApi {
    * linking a panel to it (`subpath`, `#^id`): the id it has, or a new one (`<prefix>-<4 base36>`, the prefix from the
    * settings) written into the note, through its editor when it is open (so it can be undone there), else into the file.
    * Never writes when the block has an id. Rejects for a line in no block, a heading line (link it by its heading), and a
-   * note that is not there. Not a figure command: it acts on a note, and finishes later.
+   * note that is not there. Not a figure command: it acts on a note, and finishes later. Calls on one note run one after
+   * another, and one that wrote waits (up to 2 s) for the metadata cache to index its write before the next runs, so a
+   * script may call it several times in a row. It writes whatever the `dropFromNote` setting is.
    */
   blockId(notePath: string, line: number): Promise<BlockIdResult>;
   /**

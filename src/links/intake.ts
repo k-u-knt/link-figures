@@ -24,8 +24,11 @@ type Size = { width: number; height: number };
 /** Where new nodes go: a page, and a position on it in that page's pixels. */
 export type IntakeTarget = PlacePoint;
 
-/** What a node is to link to, and how it is to show it (and, for an image shown from a note, which of the note's images). */
-type Planned = Pick<FileNode, "file" | "subpath" | "show"> & { imageIndex?: number };
+/**
+ * What a node is to link to, and how it is to show it (and, for an image shown from a note, which of the note's images,
+ * and that image's own vault path, which it is measured by).
+ */
+type Planned = Pick<FileNode, "file" | "subpath" | "show"> & { imageIndex?: number; imageFile?: string };
 /** A planned node and the natural size of the image it will show, or null when it shows none, the image has no size, or it could not be decoded (the node is then made at its default size). */
 type Measured = Planned & { size: Size | null };
 
@@ -87,6 +90,17 @@ function sourceSelection(source: unknown): OpenNoteSelection | null {
   if (typeof path !== "string" || path.endsWith(FILE_SUFFIX) || view?.getMode?.() === "preview") return null;
   if (typeof editor?.getSelection !== "function" || typeof editor.listSelections !== "function") return null;
   return { path, selection: editor.getSelection(), ranges: editor.listSelections() };
+}
+
+/**
+ * The note and place of an embed the drag started on, in the editor it started in (`EditorDragTracker.embed`), or
+ * undefined: no such embed, a view in Reading mode, or a figure opened as Markdown (not a note).
+ */
+function embedDrag(tracker: { source: unknown; embed?: { line: number | null; offset: number | null } | null }): DropData["embedDrag"] {
+  const view = tracker.source as MarkdownViewLike | null;
+  const path = view?.file?.path;
+  if (!tracker.embed || typeof path !== "string" || path.endsWith(FILE_SUFFIX) || view?.getMode?.() === "preview") return undefined;
+  return { sourcePath: path, line: tracker.embed.line, offset: tracker.embed.offset };
 }
 
 /** A note's path as a panel links it: without `.md`, as Obsidian writes a link to a note. */
@@ -189,6 +203,7 @@ export class Intake {
       // Asked only for text, and only when the setting links drops to their note: the selection, as it is now, of the
       // editor the drag started in. Text dragged in from elsewhere has no such editor and is read as before.
       selection: (text) => matchSelection(sourceSelection(view.plugin.editorDrag.source), text),
+      embedDrag: embedDrag(view.plugin.editorDrag),
     });
     // Files that are all of a kind not wanted still go to `execute`, which says so.
     if (actions.length === 0 && files.length === 0) return;
@@ -319,11 +334,12 @@ export class Intake {
               const target = resolve(embed);
               return target !== null && isPanelExtension(target.extension);
             },
+            action.line !== undefined ? { line: action.line, offset: action.offset } : undefined,
           );
           // The note does not embed it (or cannot be read): the image itself, as before.
           if (!link) return asLink();
           if (link.notices.length > 0) new Notice(`Link Figures: ${link.notices.join(" ")}`);
-          return { file: noteLinkFile(action.sourcePath), subpath: link.subpath, show: "image", imageIndex: link.imageIndex };
+          return { file: noteLinkFile(action.sourcePath), subpath: link.subpath, show: "image", imageIndex: link.imageIndex, imageFile: image.path };
         } catch (error) {
           console.error(`Link Figures: could not link ${action.linktext} in ${action.sourcePath}`, error);
           new Notice(`Link Figures: could not link ${action.linktext} in ${basename(noteLinkFile(action.sourcePath))}. ${errorText(error)}`);
@@ -393,7 +409,9 @@ export class Intake {
   }
 
   /**
-   * Resolves the node's link as the view will and, for an image, loads it to learn its size. Never null: what cannot be
+   * Resolves the node's link as the view will and, for an image, loads it to learn its size. An image shown from a note
+   * is measured from the image itself (`imageFile`): a block id written just now is not in the cache yet, so the note's
+   * link may not resolve until it is. Never null: what cannot be
    * decoded (a decoder that fails or refuses, a resolution that throws, an image that will not load) is still added, at
    * its default size, so that the panel shows the badge the resolver gives it, and one Notice says so with the decoder's
    * reason when there is one. Leaving it out would orphan a file that `plan` has already saved.
@@ -408,7 +426,8 @@ export class Intake {
 
     let resolved: Resolved;
     try {
-      resolved = await resolveFileNode(fileNodeDefaults(page, planned, []), figurePath, access, decoders);
+      const shown = planned.imageFile !== undefined ? { file: planned.imageFile, subpath: "", show: "image" as const } : planned;
+      resolved = await resolveFileNode(fileNodeDefaults(page, shown, []), figurePath, access, decoders);
     } catch (error) {
       console.error(`Link Figures: could not resolve ${label}`, error);
       return failed();

@@ -317,6 +317,15 @@ describe("linkForText", () => {
     expect((await linkForText(host, "heading", PATH, 6, 6))?.subpath).toBe("#Results");
   });
 
+  test("an editor ahead of the file whose cache still fits (a paragraph typed at the end): read with parseNote, so the new paragraph is linked", async () => {
+    // Every cached section still holds in the editor's text; only the new lines are unknown to the cache.
+    const edited = `${TEXT}\n\nSecond fresh paragraph.`;
+    const host = setup({ editorText: edited });
+    expect(await linkForText(host, "block-id", PATH, 18, 18)).toEqual({ subpath: "#^fig-new1", notices: [] });
+    expect(host.blockId).toHaveBeenCalledWith(PATH, 18);
+    expect(host.saveAndReindex).not.toHaveBeenCalled();
+  });
+
   test("a note with no cache and no text links nothing", async () => {
     const host = setup({ cache: null });
     host.read = async () => {
@@ -370,6 +379,36 @@ describe("linkForImage", () => {
   test("an id the embed's block has wins in 'heading' mode too", async () => {
     const host = setup({ text: "# H\n\nSee ![[x.png]] ![[c.png]] ^pic-1" });
     expect(await linkForImage(host, "heading", PATH, named("c.png"), isImage)).toEqual({ subpath: "#^pic-1", imageIndex: 1, notices: [] });
+  });
+
+  test("an embed edited away in the editor (its line made longer, the cache's places still fit): not found, nothing written", async () => {
+    // Line 16 "![[a.png]]" becomes longer text with no embed; the stale cache still names a.png there.
+    const edited = TEXT.replace(/!\[\[a\.png\]\]$/, "No image here any more, just words.");
+    const host = setup({ editorText: edited });
+    const cached = host.cache(PATH)!;
+    expect(cached.embeds!.filter((e) => e.link === "a.png")).toHaveLength(2);
+    // Only the first a.png is left: line 11's, in the Growth block.
+    expect(await linkForImage(host, "heading", PATH, named("a.png"), isImage)).toEqual({ subpath: "#Growth", imageIndex: 0, notices: [] });
+    const gone = setup({ text: "Para.\n\n![[c.png]]", editorText: "Para.\n\nNo image here any more." });
+    expect(await linkForImage(gone, "block-id", PATH, named("c.png"), isImage)).toBeNull();
+    expect(gone.blockId).not.toHaveBeenCalled();
+  });
+
+  test("the embed on the line the drag started from is the one linked, without a Notice, though the image is embedded more than once", async () => {
+    const host = setup();
+    // a.png is on line 11 (Growth) and line 16 (Discussion): the drag was of the one on line 16.
+    expect(await linkForImage(host, "heading", PATH, named("a.png"), isImage, { line: 16 })).toEqual({ subpath: "#Discussion", imageIndex: 0, notices: [] });
+    // Two on one line: the one that starts at (or last before) the drag's offset.
+    const text = "# H\n\n![[c.png]] ![[c.png]]";
+    const second = text.lastIndexOf("![[c.png]]");
+    expect(await linkForImage(setup({ text }), "heading", PATH, named("c.png"), isImage, { line: 2, offset: second })).toEqual({ subpath: "#H", imageIndex: 1, notices: [] });
+    expect(await linkForImage(setup({ text }), "heading", PATH, named("c.png"), isImage, { line: 2, offset: null })).toEqual({ subpath: "#H", imageIndex: 0, notices: [] });
+  });
+
+  test("a line that holds no such embed falls back to the first, with the Notice", async () => {
+    const link = await linkForImage(setup(), "heading", PATH, named("a.png"), isImage, { line: 4 });
+    expect([link?.subpath, link?.imageIndex]).toEqual(["#Growth", 0]);
+    expect(link?.notices).toEqual([expect.stringMatching(/a\.png is embedded 2 times .* the first \(line 12\)/)]);
   });
 
   test("an image the note does not embed links nothing", async () => {

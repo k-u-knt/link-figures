@@ -247,6 +247,28 @@ describe("classifyDrop: text and images dragged out of a note's editor", () => {
     expect(classifyDrop({ draggable: { ...image, linktext: "analysis#Results" }, fromNote: "block-id" })[0].kind).toBe("link-text");
   });
 
+  test("an image file dragged out of a note's editor (Live Preview's image widget) is a link-note-image, by the embed's line", () => {
+    const draggable = { type: "file" as const, paths: ["img/plot.png"] };
+    const embedDrag = { sourcePath: "Notes/a.md", line: 7 };
+    for (const fromNote of ["block-id", "heading"] as const) {
+      expect(classifyDrop({ draggable, fromNote, embedDrag })).toEqual([{ kind: "link-note-image", linktext: "img/plot.png", sourcePath: "Notes/a.md", line: 7 }]);
+    }
+    // The embed's line unknown: the note's first such embed is used later.
+    expect(classifyDrop({ draggable, fromNote: "block-id", embedDrag: { sourcePath: "Notes/a.md", line: null } })).toEqual([
+      { kind: "link-note-image", linktext: "img/plot.png", sourcePath: "Notes/a.md" },
+    ]);
+  });
+
+  test("a file drag stays a link-file in 'direct' mode, with no embed drag, for a file that is not an image, from a figure, or for several files", () => {
+    const embedDrag = { sourcePath: "Notes/a.md", line: 7 };
+    const file = (path: string) => ({ type: "file" as const, paths: [path] });
+    expect(classifyDrop({ draggable: file("p.png"), fromNote: "direct", embedDrag })).toEqual([{ kind: "link-file", path: "p.png" }]);
+    expect(classifyDrop({ draggable: file("p.png"), fromNote: "block-id" })).toEqual([{ kind: "link-file", path: "p.png" }]);
+    expect(classifyDrop({ draggable: file("Notes/b.md"), fromNote: "block-id", embedDrag })).toEqual([{ kind: "link-file", path: "Notes/b.md" }]);
+    expect(classifyDrop({ draggable: file("p.png"), fromNote: "block-id", embedDrag: { sourcePath: "F/fig.lnkfig.md", line: 1 } })[0].kind).toBe("link-file");
+    expect(classifyDrop({ draggable: { type: "files", paths: ["p.png", "q.png"] }, fromNote: "block-id", embedDrag }).map((a) => a.kind)).toEqual(["link-file", "link-file"]);
+  });
+
   test("an Obsidian drag still wins over a matched selection", () => {
     const selection = vi.fn(() => match);
     const out = classifyDrop({ draggable: { type: "file", paths: ["p.png"] }, text: "words", fromNote: "block-id", selection });

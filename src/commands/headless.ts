@@ -103,6 +103,10 @@ class DraftStore implements CommandStore {
     return this.snapshot;
   }
 
+  get unreadable(): Set<NodeId> {
+    return this.store.unreadable;
+  }
+
   commit(_label: string, recipe: (draft: Document) => void): void {
     const before = this.doc;
     this.snapshot = null;

@@ -89,7 +89,10 @@ export interface CommandState {
  * What commands edit the document through: the figure's store, or within a batch a stand-in that applies each commit
  * to the batch's one draft (see `commands/headless`).
  */
-export type CommandStore = Pick<DocumentStore, "doc" | "commit" | "undo" | "redo" | "canUndo" | "canRedo">;
+export type CommandStore = Pick<DocumentStore, "doc" | "commit" | "undo" | "redo" | "canUndo" | "canRedo"> & {
+  /** The store's unreadable nodes (see `DocumentStore.unreadable`): what `unreadableIn` falls back to. */
+  readonly unreadable?: Set<NodeId>;
+};
 
 export interface CommandContext {
   app: App;
@@ -121,9 +124,18 @@ export interface CommandContext {
   markUnreadable?(ids: NodeId[]): void;
 }
 
-/** The nodes that `ctx`'s commands must not hand to their type's hooks (see `CommandContext.unreadable`). */
-export function unreadableIn(ctx: Pick<CommandContext, "unreadable">): ReadonlySet<NodeId> | undefined {
-  return ctx.unreadable;
+/**
+ * The nodes that `ctx`'s commands must not hand to their type's hooks: `CommandContext.unreadable`, else the store's own
+ * set (`DocumentStore.unreadable`), so a context made without it still keeps the promise.
+ */
+export function unreadableIn(ctx: Pick<CommandContext, "unreadable" | "store">): ReadonlySet<NodeId> | undefined {
+  return ctx.unreadable ?? ctx.store.unreadable;
+}
+
+/** Adds `ids` (copies of unreadable nodes) to `ctx`'s unreadable nodes: by `markUnreadable`, else to the store's set. */
+export function markUnreadableIn(ctx: Pick<CommandContext, "markUnreadable" | "store">, ids: NodeId[]): void {
+  if (ctx.markUnreadable) ctx.markUnreadable(ids);
+  else for (const id of ids) ctx.store.unreadable?.add(id);
 }
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";

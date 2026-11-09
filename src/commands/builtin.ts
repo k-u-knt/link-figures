@@ -8,7 +8,7 @@ import { PAGE_PRESETS, getPreset } from "../model/presets";
 import { SNAP_OPTION, snapOn } from "../model/snap";
 import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type LinkFiguresPlugin from "../main";
-import { CommandError, unreadableIn, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
+import { CommandError, markUnreadableIn, unreadableIn, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
 import type { ImageState } from "../registry/node-type";
 import type { Plane } from "../links/decoders/tiff-convert";
@@ -323,7 +323,7 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
   // hook fails on it too when the figure is next loaded.
   const unreadable = unreadableIn(ctx);
   const unreadableCopies = unreadable ? copies.filter((_, i) => unreadable.has(originals[i].id)).map((c) => c.id) : [];
-  if (unreadableCopies.length > 0) ctx.markUnreadable?.(unreadableCopies);
+  if (unreadableCopies.length > 0) markUnreadableIn(ctx, unreadableCopies);
   ctx.store.commit("duplicate", (draft) => {
     draft.nodes.push(...copies);
   });

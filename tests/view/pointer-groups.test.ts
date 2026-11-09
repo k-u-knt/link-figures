@@ -530,3 +530,46 @@ describe("double-click on text", () => {
     expect(told()).toEqual([["t", "lf-activate"]]);
   });
 });
+
+describe("a group of placeholders (check 11)", () => {
+  /** g = {p1, p2}: two items of a type no plugin registers, p1 (10, 20)–(110, 60) and p2 (150, 20)–(250, 60). */
+  const placeholders = (d: Document) => {
+    const foreign = (id: string, x: number, z: number) =>
+      d.nodes.push({ id, type: "x.chart", page: d.pages[0].id, x, y: 20, width: 100, height: 40, z, rotation: 0, opacity: 1, locked: false, parent: "g", series: [1] } as unknown as Node);
+    foreign("p1", 10, 0);
+    foreign("p2", 150, 1);
+    group(d, "g");
+  };
+
+  test("a drag of the selected group moves both members", () => {
+    const { view, click, drag, nodeOf } = setup(placeholders);
+    click(...ON_A);
+    expect(view.selection.ids).toEqual(["g"]);
+    drag(ON_A, [90, 70]);
+    expect(nodeOf("p1")).toMatchObject({ x: 50, y: 60 });
+    expect(nodeOf("p2")).toMatchObject({ x: 190, y: 60 });
+    expect(nodeOf("g")).toMatchObject({ x: 50, y: 60 });
+  });
+
+  test("a drag that starts on a member of the group, not yet selected, moves it too", () => {
+    const { drag, nodeOf } = setup(placeholders);
+    drag(ON_A, [90, 70]);
+    expect(nodeOf("p1")).toMatchObject({ x: 50, y: 60 });
+    expect(nodeOf("p2")).toMatchObject({ x: 190, y: 60 });
+  });
+
+  test("unreadable members: a drag of the selected group moves both by their boxes, and their type's hooks are not called", () => {
+    const { view, click, drag, nodeOf } = setup(placeholders);
+    const translate = vi.fn((n: Node) => n);
+    view.plugin.registries.nodeTypes.register({ type: "x.chart", name: "Chart", icon: "x", mount: () => ({ update() {}, unmount() {} }), bounds: (n: Node) => n, inspector: () => [], toSvg: () => "", translate, hitTest: () => false } as never);
+    // As the figure view holds them: its `unreadableNodes` is its store's own set.
+    for (const id of ["p1", "p2"]) view.store.unreadable.add(id);
+    (view as unknown as { unreadableNodes: Set<NodeId> }).unreadableNodes = view.store.unreadable;
+    click(...ON_A);
+    expect(view.selection.ids).toEqual(["g"]);
+    drag(ON_A, [90, 70]);
+    expect(nodeOf("p1")).toMatchObject({ x: 50, y: 60 });
+    expect(nodeOf("p2")).toMatchObject({ x: 190, y: 60 });
+    expect(translate).not.toHaveBeenCalled();
+  });
+});

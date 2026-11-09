@@ -14,6 +14,7 @@ import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE, normalisePageLimit } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
 import { svgExporter } from "./export/exporters/svg";
+import { localFontSource } from "./fonts/local-source";
 import { createDecoders } from "./links/decoders";
 import { ObsidianVaultAccess } from "./links/obsidian-access";
 import type { Decoders } from "./links/types";
@@ -72,6 +73,14 @@ export default class LinkFiguresPlugin extends Plugin {
     for (const cap of builtinCapKinds) this.registries.caps.register(cap);
     for (const source of builtinSnapSources) this.registries.snaps.register(source);
     for (const lut of builtinLuts) this.registries.luts.register(lut);
+    // The installed fonts can only be listed while the window is visible: prime now, and again whenever it becomes
+    // visible until the list is cached (export and the inspector also retry when they need it).
+    const localFonts = localFontSource();
+    this.registries.fontSources.register(localFonts);
+    void localFonts.prime();
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") void localFonts.prime();
+    });
     this.registries.adjustments.register(
       displayAdjustment(this.registries.luts, (id) => console.warn(`Link Figures: no LUT "${id}" is registered, so the channel is drawn in grey`)),
     );

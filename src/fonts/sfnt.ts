@@ -89,28 +89,34 @@ export function writeSfnt(version: Uint8Array, tables: SfntTable[]): Uint8Array 
   return out;
 }
 
+/** The number of faces in a TrueType Collection; 0 for anything that is not a collection. */
+export function collectionSize(bytes: Uint8Array): number {
+  return sfntFlavour(bytes) === "collection" ? view(bytes).getUint32(8) : 0;
+}
+
+/** Face `index` of a TrueType Collection as a standalone sfnt, copying only that face's tables. */
+export function collectionFace(bytes: Uint8Array, index: number): Uint8Array {
+  if (sfntFlavour(bytes) !== "collection") throw new Error("not a collection");
+  if (index < 0 || index >= collectionSize(bytes)) throw new Error(`the collection has no face ${index}`);
+  const offset = view(bytes).getUint32(12 + 4 * index);
+  return writeSfnt(bytes.subarray(offset, offset + 4), sfntTables(bytes, offset));
+}
+
 /** Each face of a TrueType Collection as a standalone sfnt; an empty list for anything that is not a collection. */
 export function collectionFaces(bytes: Uint8Array): Uint8Array[] {
-  if (sfntFlavour(bytes) !== "collection") return [];
-  const v = view(bytes);
-  const count = v.getUint32(8);
-  const faces: Uint8Array[] = [];
-  for (let i = 0; i < count; i++) {
-    const offset = v.getUint32(12 + 4 * i);
-    faces.push(writeSfnt(bytes.subarray(offset, offset + 4), sfntTables(bytes, offset)));
-  }
-  return faces;
+  return Array.from({ length: collectionSize(bytes) }, (_, i) => collectionFace(bytes, i));
 }
 
 /**
- * One table of a standalone font, or of a collection's first face; undefined when the font has none. Only that table
+ * One table of a standalone font, or of a collection's face `index`; undefined when the font has none. Only that table
  * is bounds-checked, so a truncated table the caller does not read (a short `DSIG`, say) does not make it throw.
  */
-const table = (bytes: Uint8Array, tag: string): Uint8Array | undefined => {
+const table = (bytes: Uint8Array, tag: string, index = 0): Uint8Array | undefined => {
   const flavour = sfntFlavour(bytes);
   if (flavour === "unknown") throw new Error("not an sfnt font");
   const v = view(bytes);
-  const offset = flavour === "collection" ? v.getUint32(12) : 0;
+  if (flavour === "collection" && (index < 0 || index >= collectionSize(bytes))) throw new Error(`the collection has no face ${index}`);
+  const offset = flavour === "collection" ? v.getUint32(12 + 4 * index) : 0;
   const count = v.getUint16(offset + 4);
   for (let i = 0; i < count; i++) {
     const record = offset + 12 + 16 * i;
@@ -146,9 +152,18 @@ const namePriority = (platform: number, encoding: number, language: number) => {
   return -1;
 };
 
-/** The face's names, preferring the typographic family/subfamily (IDs 16/17) over the legacy ones (1/2). */
+/** The face's names (a collection's first face), preferring the typographic family/subfamily (IDs 16/17) over 1/2. */
 export function faceNames(bytes: Uint8Array): FaceNames {
-  const data = table(bytes, "name");
+  return readNames(table(bytes, "name"));
+}
+
+/** The names of a collection's face `index`, read in place (nothing is copied). */
+export function collectionFaceNames(bytes: Uint8Array, index: number): FaceNames {
+  if (sfntFlavour(bytes) !== "collection") throw new Error("not a collection");
+  return readNames(table(bytes, "name", index));
+}
+
+function readNames(data: Uint8Array | undefined): FaceNames {
   if (!data) throw new Error("font has no name table");
   const v = view(data);
   const count = v.getUint16(2);

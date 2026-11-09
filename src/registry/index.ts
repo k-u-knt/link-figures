@@ -2,6 +2,7 @@ import { AdjustmentRegistry } from "./adjustment";
 import { CapKindRegistry } from "./cap";
 import { CommandRegistry } from "./command";
 import { ExporterRegistry } from "./exporter";
+import { FontSourceRegistry } from "./font-source";
 import { LutRegistry } from "./lut";
 import { NodeTypeRegistry } from "./node-type";
 import { PaintRegistry } from "./paint";
@@ -22,6 +23,7 @@ export interface Registries {
   shapeOperations: ShapeOperationRegistry;
   snaps: SnapSourceRegistry;
   luts: LutRegistry;
+  fontSources: FontSourceRegistry;
 }
 
 export function createRegistries(): Registries {
@@ -37,5 +39,6 @@ export function createRegistries(): Registries {
     shapeOperations: new ShapeOperationRegistry(),
     snaps: new SnapSourceRegistry(),
     luts: new LutRegistry(),
+    fontSources: new FontSourceRegistry(),
   };
 }

@@ -1,7 +1,10 @@
 import { jsPDF } from "jspdf";
 import {
   cmapCovers,
+  collectionFace,
+  collectionFaceNames,
   collectionFaces,
+  collectionSize,
   faceNames,
   hasVariations,
   missingChars,
@@ -54,6 +57,21 @@ describe("collectionFaces", () => {
 
   test("a non-collection gives no faces", () => {
     expect(collectionFaces(regular())).toEqual([]);
+  });
+
+  test("collectionSize, collectionFaceNames and collectionFace read one face without extracting the others", () => {
+    const inputs = [
+      buildFont({ family: "Test Sans", style: "Regular", chars: "abc" }),
+      buildFont({ family: "Test Sans", style: "Bold", chars: "abcd" }),
+    ];
+    const ttc = buildCollection(inputs);
+    expect(collectionSize(ttc)).toBe(2);
+    expect(collectionSize(regular())).toBe(0);
+    expect(collectionFaceNames(ttc, 1)).toEqual(faceNames(inputs[1]));
+    expect(() => collectionFaceNames(regular(), 0)).toThrow(/not a collection/);
+    expect(faceNames(collectionFace(ttc, 1))).toEqual(faceNames(inputs[1]));
+    expect(() => collectionFace(ttc, 2)).toThrow(/no face 2/);
+    expect(() => collectionFace(regular(), 0)).toThrow(/not a collection/);
   });
 });
 

@@ -10,7 +10,7 @@
  * nothing it does not draw (§8.7).
  */
 import type { jsPDF as JsPdf } from "jspdf";
-import { cmapCovers } from "../fonts/sfnt";
+import { cmapCovers, faceNames } from "../fonts/sfnt";
 import { findFace, type FindFaceReason, type FontSourceRegistry, type FontStyle, type LoadedFace } from "../registry/font-source";
 
 /** A face to register on one jsPDF document. */
@@ -24,6 +24,8 @@ export interface RegisteredFace {
   family: string;
   style: FontStyle;
   base64: string;
+  /** The face's own PostScript name (Georgia-Bold), written as its BaseFont when it is a usable one. */
+  postscriptName?: string;
 }
 
 export interface Resolved {
@@ -488,14 +490,29 @@ function tagOf(text: string): string {
   return tag;
 }
 
-const encoded = new WeakMap<Uint8Array, string>();
+/** The standard 14 fonts' PostScript names: a Type0 font must not be called one of them. */
+const STANDARD_14 = /^(helvetica|courier)(-(bold|oblique|boldoblique))?$|^times-(roman|bold|italic|bolditalic)$|^symbol$|^zapfdingbats$/i;
+
+/** A face's PostScript name, if it is one a BaseFont can be: printable ASCII with no delimiters, at most 63 characters. */
+function postscriptNameOf(bytes: Uint8Array): string | undefined {
+  let name: string;
+  try {
+    name = faceNames(bytes).postscriptName;
+  } catch {
+    return undefined;
+  }
+  return /^[!-~]{1,63}$/.test(name) && !/[[\](){}<>/%]/.test(name) && !STANDARD_14.test(name) ? name : undefined;
+}
+
+const encoded = new WeakMap<Uint8Array, { base64: string; postscriptName?: string }>();
 function registeredFace(family: string, style: FontStyle, face: LoadedFace): RegisteredFace {
   let data = encoded.get(face.bytes);
   if (data === undefined) {
-    data = base64(face.bytes);
+    data = { base64: base64(face.bytes), postscriptName: postscriptNameOf(face.bytes) };
     encoded.set(face.bytes, data);
   }
-  return { vfsName: `${tagOf(`${family}\u0000${style}`)}+${family.replace(/[^A-Za-z0-9]/g, "")}-${style}.ttf`, family, style, base64: data };
+  const vfsName = `${tagOf(`${family}\u0000${style}`)}+${family.replace(/[^A-Za-z0-9]/g, "")}-${style}.ttf`;
+  return { vfsName, family, style, base64: data.base64, ...(data.postscriptName ? { postscriptName: data.postscriptName } : {}) };
 }
 
 const prefixed = (label: string, warning: string) => (label === "" ? warning : `${label}: ${warning}`);
@@ -588,12 +605,45 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
   return { svg: changed ? new XMLSerializer().serializeToString(root) : svg, faces: [...faces.values()], warnings };
 }
 
-/** Puts the faces in a jsPDF document's virtual file system and registers each under its family and style (Identity-H). */
+/** The parts of a jsPDF font record and of its event bus that naming a face's BaseFont needs. */
+interface JsPdfFont {
+  fontName: string;
+}
+interface JsPdfEvents {
+  subscribe(topic: string, callback: (payload: { font: JsPdfFont }) => void): string;
+  unsubscribe(token: string): boolean;
+}
+
+/**
+ * Puts the faces in a jsPDF document's virtual file system and registers each under its family and style (Identity-H).
+ *
+ * jsPDF writes a font's lookup name (`fontName`, the family svg2pdf.js finds it by) as its BaseFont and FontName, so
+ * every style of a family would be called the family. A face with a PostScript name is called that in the file instead:
+ * its `fontName` is swapped for the PostScript name only while the fonts are written (after the pages, before the
+ * resource dictionaries), and put back after, so drawing and `getFontList()` keep the family.
+ */
 export function registerFaces(pdf: JsPdf, faces: RegisteredFace[]): void {
+  if (faces.length === 0) return;
+  const events = (pdf.internal as unknown as { events: JsPdfEvents }).events;
+  const renamed: { font: JsPdfFont; family: string; postscriptName: string }[] = [];
   for (const face of faces) {
     pdf.addFileToVFS(face.vfsName, face.base64);
-    pdf.addFont(face.vfsName, face.family, face.style, "Identity-H");
+    let added: JsPdfFont | undefined;
+    const token = events.subscribe("addFont", ({ font }) => (added = font));
+    try {
+      pdf.addFont(face.vfsName, face.family, face.style, "Identity-H");
+    } finally {
+      events.unsubscribe(token);
+    }
+    if (added && face.postscriptName) renamed.push({ font: added, family: face.family, postscriptName: face.postscriptName });
   }
+  if (renamed.length === 0) return;
+  events.subscribe("postPutPages", () => {
+    for (const r of renamed) r.font.fontName = r.postscriptName;
+  });
+  events.subscribe("putResources", () => {
+    for (const r of renamed) r.font.fontName = r.family;
+  });
 }
 
 /** The faces of several SVGs drawn in one document, each family and style once. */

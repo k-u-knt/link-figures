@@ -207,7 +207,7 @@ describe("prepareFonts", () => {
     const result = await prepareFonts(svg, resolverOver(fakeSource({ calibri: calibri })));
     expect(result.warnings).toEqual([]);
     expect(result.svg).toBe(svg);
-    expect(result.faces).toEqual([{ vfsName: expect.stringMatching(/^[A-Z]{6}\+Calibri-normal\.ttf$/), family: "Calibri", style: "normal", base64: toBase64(calibri.normal!) }]);
+    expect(result.faces).toEqual([{ vfsName: expect.stringMatching(/^[A-Z]{6}\+Calibri-normal\.ttf$/), family: "Calibri", style: "normal", base64: toBase64(calibri.normal!), postscriptName: "Calibri-Regular" }]);
   });
 
   test("an SVG panel's <style> rule is the family its text resolves through", async () => {
@@ -338,9 +338,9 @@ describe("PDF export with installed fonts", () => {
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Arial: family("Arial"), Calibri: family("Calibri"), Georgia: family("Georgia") })));
     expect(out.warnings).toEqual([]);
     expect(out.text.match(/\/FontFile2/g)).toHaveLength(1);
-    expect(out.text).toContain("/BaseFont /Arial");
+    expect(out.text).toContain("/BaseFont /Arial-Regular");
     expect(out.text).not.toMatch(/Calibri|Georgia/);
-    expect(fontsDrawn(out.text, out.content)).toEqual(["Arial"]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Arial-Regular"]);
   });
 
   test("with nothing resolvable, the PDF bytes are those of the figure drawn as before", async () => {
@@ -362,15 +362,15 @@ describe("PDF export with installed fonts", () => {
     expect(withoutId(out.bytes) === expected).toBe(true);
   });
 
-  test("a Calibri label is embedded: a FontFile2 under the family's own name, and the text drawn in it", async () => {
+  test("a Calibri label is embedded: a FontFile2 under the face's PostScript name, and the text drawn in it", async () => {
     const f = figure();
     const node = f.label("Hello", { family: "Calibri" });
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Calibri: family("Calibri") })));
     expect(out.warnings).toEqual([]);
     expect(out.text).toContain("/FontFile2");
-    // No subset tag: svg2pdf.js finds the font by the exact family string, which jsPDF also writes as the BaseFont.
-    expect(out.text).toContain("/BaseFont /Calibri");
-    expect(fontsDrawn(out.text, out.content)).toEqual(["Calibri"]);
+    // No subset tag: svg2pdf.js finds the font by the exact family string; the file calls it by its PostScript name.
+    expect(out.text).toContain("/BaseFont /Calibri-Regular");
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Calibri-Regular"]);
     expect(nodeLabel(f.doc, node)).toBe('Text "Hello" (Page 1)');
   });
 
@@ -379,7 +379,7 @@ describe("PDF export with installed fonts", () => {
     const node = f.label("Hello", { family: "Calibri", weight: "bold" });
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Calibri: family("Calibri") })));
     expect(out.warnings).toEqual([`${nodeLabel(f.doc, node)}: font "Calibri" has no bold face — regular used`]);
-    expect(fontsDrawn(out.text, out.content)).toEqual(["Calibri"]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Calibri-Regular"]);
   });
 
   test("Review Focus 3: a label with µ in a font without µ is drawn whole in Helvetica, with the exact warning", async () => {
@@ -419,6 +419,26 @@ describe("PDF export with installed fonts", () => {
     expect(out.text).not.toMatch(/Calibri/);
   });
 
+  test("m2d finding 1: each embedded face's BaseFont is its own PostScript name, and svg2pdf.js still finds it by family", async () => {
+    const f = figure();
+    f.label("Hello", { family: "Calibri" });
+    f.label("World", { family: "Calibri", weight: "bold" });
+    f.label("Again", { family: "Calibri", italic: true });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Calibri: family("Calibri", ["normal", "bold"]) })));
+    // The italic is stood in for by the regular face, which is what it is named.
+    expect(out.warnings).toEqual([expect.stringContaining('font "Calibri" has no italic face')]);
+    expect(fontsDrawn(out.text, out.content).sort()).toEqual(["Calibri-Bold", "Calibri-Regular", "Calibri-Regular"]);
+    expect(out.text).toContain("/FontName /Calibri-Bold");
+    expect(out.text).not.toMatch(/\/BaseFont \/Calibri[\s/>]/);
+  });
+
+  test("a PostScript name that is a standard font's own (Helvetica-Bold) is not used as a BaseFont", async () => {
+    const f = figure();
+    f.label("World", { family: "Helvetica", weight: "bold" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Helvetica: family("Helvetica", ["bold"]) })));
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica-Embedded"]);
+  });
+
   test("a linked SVG's <style> font is embedded, and a warning about it names the panel", async () => {
     const f = figure();
     const plot =
@@ -431,7 +451,7 @@ describe("PDF export with installed fonts", () => {
     const { fileNodeSvg } = await import("../../src/nodes/file-node-svg");
     r.nodeTypes.register({ type: "file", toSvg: (n: FileNode, ctx: never) => fileNodeSvg(n, { kind: "svg", text: plot, width: 100, height: 100 }, ctx) } as never);
     const out = await exportPdf(f.doc, f.page, r, new Map([["f", { kind: "svg", text: plot, width: 100, height: 100 }]]));
-    expect(out.text).toContain("/BaseFont /DejaVu#20Sans");
+    expect(out.text).toContain("/BaseFont /DejaVuSans-Regular");
     expect(out.warnings).toEqual([`${nodeLabel(f.doc, panel)}: font "Inconsolata" not installed — Times used in PDF`]);
   });
 
@@ -505,9 +525,9 @@ describe("PDF export with installed fonts", () => {
   });
 
   test.each([
-    ["a group's family under a bold text", '<g font-family="Calibri"><text x="10" y="20" font-weight="bold">Title</text></g>', ["Calibri"]],
-    ["a bold text's family under a regular tspan", '<text x="10" y="20" font-family="Calibri" font-weight="bold"><tspan font-weight="normal">Hello</tspan></text>', ["Calibri"]],
-    ["an inherited Arial with no bold face", '<g font-family="Arial"><text x="10" y="80">Hi</text><text x="10" y="90" font-weight="bold">Yo</text></g>', ["Arial", "Helvetica-Bold"]],
+    ["a group's family under a bold text", '<g font-family="Calibri"><text x="10" y="20" font-weight="bold">Title</text></g>', ["Calibri-Bold"]],
+    ["a bold text's family under a regular tspan", '<text x="10" y="20" font-family="Calibri" font-weight="bold"><tspan font-weight="normal">Hello</tspan></text>', ["Calibri-Regular"]],
+    ["an inherited Arial with no bold face", '<g font-family="Arial"><text x="10" y="80">Hi</text><text x="10" y="90" font-weight="bold">Yo</text></g>', ["Arial-Regular", "Helvetica-Bold"]],
   ])("a family inherited in another style is drawn in the run's own face, not Times: %s", async (_, body, drawn) => {
     // Each case on its own, so no other text registers the style the inheriting run needs.
     const plot = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`;
@@ -523,6 +543,6 @@ describe("PDF export with installed fonts", () => {
       '<style>.t { font: 9px Calibri }</style><text class="t" x="10" y="60">World</text></svg>';
     const out = await exportPanel(plot, fakeSource({ "DejaVu Sans": family("DejaVu Sans", ["bold"]), Calibri: family("Calibri") }));
     expect(out.warnings).toEqual([]);
-    expect(fontsDrawn(out.text, out.content).sort()).toEqual(["Calibri", "DejaVu#20Sans"]);
+    expect(fontsDrawn(out.text, out.content).sort()).toEqual(["Calibri-Regular", "DejaVuSans-Bold"]);
   });
 });

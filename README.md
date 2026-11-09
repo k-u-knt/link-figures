@@ -137,6 +137,34 @@ type Stop = { offset: number; color: string; opacity?: number };                
 
 The paint defaults are `{ type: "solid", color: "#000000" }`, a linear gradient from `#000000` to `#ffffff` at angle 0, a radial one with `cx` and `cy` 0.5 and `r` 0.5, and a black hatch at scale 1 and angle 0 with no background.
 
+## Groups, alignment and cropping
+
+**Groups.** Select two or more items and click "Group" (`group.create`) to treat them as one: a click on any member selects the group, and moving, resizing, deleting, duplicating, locking and restacking act on the whole. Groups nest. Double-click a group to enter it and select one member (double-click again to go a level deeper); Escape steps out one level and selects the group you left. A group draws nothing and exports as its members do. Resizing a group shows an outline and scales the members' boxes when you let go; text sizes and line widths keep their own values. A connector attaches to a member, never to the group's box.
+
+**Align, distribute and snap.** The toolbar has Align left, centre, right, top, middle and bottom, and Distribute horizontally and vertically (three or more items). A group counts as one item. A drag snaps to the edges and centres of other items and to the page's edges, centre lines and margins, with a guide line while it holds; hold Alt during a drag to skip snapping, or turn it off with the "Snap" toggle in the toolbar (`snap.toggle`; it is a setting of the open figure, not saved with it).
+
+**Crop.** Double-click an image panel (or click "Crop") to crop it on the page: drag a handle to move that edge of the crop, drag inside the box to move the image under it, Enter or a click outside to finish, Escape to cancel. The whole crop session is one undo step. A rotated panel is not cropped on the page (set its rotation to 0); the inspector's "Crop left/top/right/bottom (%)" fields and `panel.crop` work on it anyway.
+
+| Id | Arguments (defaults in brackets) | Result |
+|---|---|---|
+| `group.create` | `ids` (the selection), `id` | `{ id }` |
+| `group.ungroup` | `ids` (the selection) | `{ ids }`: the freed members |
+| `group.add` | `group`, `ids` (required) | `{}` |
+| `group.remove` | `ids` (required) | `{}` |
+| `align` | `ids` (the selection), `edge` (`"left"`, `"hcenter"`, `"right"`, `"top"`, `"vcenter"` or `"bottom"`; required), `to` (`"selection"` for two or more items, else `"margins"`; or `"page"`) | `{ ids }` |
+| `distribute` | `ids` (the selection), `axis` (`"horizontal"` or `"vertical"`; required), `by` (`"gap"` or `"center"`) | `{ ids }` |
+| `panel.crop` | `id`, `crop` (`{ x, y, w, h }` as fractions of the image, or `null` for none; required), `keep` (`"image"`: the image stays put and the box becomes the visible part; or `"box"`: the box stays and the image refits) | `{}` |
+| `panel.crop-reset` | `id` (the selected panel) | `{}` |
+
+`keep: "image"` needs the image's size, so it works on an open figure once the image has loaded; use `keep: "box"` on a figure that is not open. `node.update` does not set `parent`; use `group.add` and `group.remove`.
+
+```js
+// Group two nodes, then line them up and crop a panel.
+await api.run(path, "group.create", { ids: ["box-a", "box-b"], id: "legend" })
+await api.run(path, "align", { ids: ["legend", "box-c"], edge: "top" })
+await api.run(path, "panel.crop", { id: "p-aaaa", crop: { x: 0.1, y: 0.1, w: 0.6, h: 0.5 }, keep: "image" })
+```
+
 ## Settings
 
 | Setting | Default | Meaning |

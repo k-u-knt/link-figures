@@ -219,6 +219,7 @@ export function displayCommands(): Command[] {
       name: "Auto display range",
       icon: "contrast",
       group: "style",
+      menu: ["item"],
       params: AUTO_PARAMS,
       applies: (ctx) => selectedDisplayPanel(ctx) !== undefined,
       run: (ctx, args?: AutoArgs) => {
@@ -235,6 +236,7 @@ export function displayCommands(): Command[] {
       name: "Reset display",
       icon: "image-off",
       group: "style",
+      menu: ["item"],
       params: { id: { type: "string" } },
       applies: (ctx) => {
         const node = selectedDisplayPanel(ctx);

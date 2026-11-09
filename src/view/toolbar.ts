@@ -1,6 +1,7 @@
 import { setIcon } from "obsidian";
-import type { Command, CommandContext, CommandState } from "../registry/command";
+import type { Command } from "../registry/command";
 import type { LinkFiguresView } from "./figure-view";
+import { commandApplies as applies, commandState as stateOf } from "./menu-model";
 
 /**
  * The toolbar from the command registry: one icon button per command that is not `hidden`, a separator between groups. Buttons are disabled
@@ -62,25 +63,5 @@ export class Toolbar {
       });
       this.buttons.set(command.id, button);
     }
-  }
-}
-
-/** A command that cannot tell whether it applies does not. */
-function applies(command: Command, ctx: CommandContext): boolean {
-  try {
-    return command.applies(ctx);
-  } catch (error) {
-    console.error(`Link Figures: could not tell whether "${command.name}" applies`, error);
-    return false;
-  }
-}
-
-/** How a command's button shows the view's state now; as the command is when it has no `state`, or cannot tell. */
-function stateOf(command: Command, ctx: CommandContext): CommandState {
-  try {
-    return command.state?.(ctx) ?? {};
-  } catch (error) {
-    console.error(`Link Figures: could not tell how "${command.name}" is set`, error);
-    return {};
   }
 }

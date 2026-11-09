@@ -103,6 +103,12 @@ export interface CommandContext {
 
 export type CommandGroup = "edit" | "insert" | "arrange" | "align" | "distribute" | "style" | "page" | "view" | "export";
 
+/**
+ * Where a right-click opens the context menu: over an item (`item`), over a page's paper (`page`), or over the canvas
+ * outside the pages (`canvas`).
+ */
+export type MenuPlace = "item" | "page" | "canvas";
+
 /** Display order of groups in the toolbar, context menu and palette. */
 export const GROUP_ORDER: CommandGroup[] = ["edit", "insert", "arrange", "align", "distribute", "style", "page", "view", "export"];
 
@@ -150,6 +156,11 @@ export interface Command<A = unknown, R = unknown> {
   state?(ctx: CommandContext): CommandState;
   /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */
   cursor?: string;
+  /**
+   * The context menus the command is listed in (see `MenuPlace`); none when not given. A hidden command is never listed,
+   * and one that does not apply is listed disabled.
+   */
+  menu?: MenuPlace[];
 }
 
 export class CommandRegistry {

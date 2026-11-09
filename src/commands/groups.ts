@@ -167,6 +167,7 @@ export function groupCommands(): Command[] {
       name: "Group",
       icon: "group",
       group: "arrange",
+      menu: ["item"],
       params: { ids: { type: "array" }, id: { type: "string" } },
       applies: (ctx) => {
         const { within, units } = createUnits(ctx.store.doc, ctx.selection);
@@ -179,6 +180,7 @@ export function groupCommands(): Command[] {
       name: "Ungroup",
       icon: "ungroup",
       group: "arrange",
+      menu: ["item"],
       params: IDS,
       applies: (ctx) => ctx.selection.some((id) => isGroup(ctx.store.doc, id, ctx.registries)),
       run: ungroup,

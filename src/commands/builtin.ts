@@ -3,7 +3,7 @@ import { MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, type PlacePoint } from "../model/geometry";
-import { expandUnits, isGroup, isLocked } from "../model/groups";
+import { commonParent, expandUnits, isGroup, isLocked, unitsOf } from "../model/groups";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import { SNAP_OPTION, snapOn } from "../model/snap";
 import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../model/types";
@@ -171,6 +171,7 @@ function stackCommand(id: string, name: string, icon: string, direction: "forwar
     name,
     icon,
     group: "arrange",
+    menu: ["item"],
     params: NODES_PARAMS,
     applies: (ctx) => ctx.selection.length > 0,
     run(ctx, args) {
@@ -189,6 +190,52 @@ function stackCommand(id: string, name: string, icon: string, direction: "forwar
           if (z !== undefined) node.z = z;
         }
       });
+    },
+  };
+}
+
+/** The units of the nodes named (`args.ids`, else the selection), as the arrange commands take them; ids of no node are left out. */
+function lockUnits(ctx: CommandContext, command: string, args: NodesArgs | undefined): NodeId[] {
+  const doc = ctx.store.doc;
+  const present = new Set(doc.nodes.map((n) => n.id));
+  const ids = targetIds(ctx, command, args).filter((id) => present.has(id));
+  return unitsOf(doc, ids, commonParent(doc, ids));
+}
+
+/**
+ * The units Lock (`lock` true) or Unlock acts on: for Lock those that are not effectively locked (a member of a locked
+ * group is locked by its group already), for Unlock those locked by their own flag (unlocking a member of a locked group
+ * would not free it).
+ */
+function lockTargets(doc: Document, units: readonly NodeId[], lock: boolean): NodeId[] {
+  return units.filter((id) => (lock ? !isLocked(doc, id) : doc.nodes.find((n) => n.id === id)?.locked === true));
+}
+
+/**
+ * Lock and Unlock: each sets `locked` on the units named (`args.ids`, else the selection) through `node.update`, one
+ * call per unit, whose commits make one undo step. A locked group locks everything in it. Lock applies while a unit is
+ * unlocked, Unlock while one is locked; with a mixed selection both do.
+ */
+function lockCommand(id: string, name: string, icon: string, lock: boolean): Command<NodesArgs> {
+  return {
+    id,
+    name,
+    icon,
+    group: "edit",
+    menu: ["item"],
+    params: NODES_PARAMS,
+    applies: (ctx) => {
+      const doc = ctx.store.doc;
+      const present = new Set(doc.nodes.map((n) => n.id));
+      const ids = ctx.selection.filter((n) => present.has(n));
+      return lockTargets(doc, unitsOf(doc, ids, commonParent(doc, ids)), lock).length > 0;
+    },
+    run(ctx, args) {
+      const targets = lockTargets(ctx.store.doc, lockUnits(ctx, id, args), lock);
+      const update = ctx.registries.commands.get("node.update");
+      if (!update) throw new CommandError(`${id} needs the node.update command`);
+      for (const target of targets) update.run(ctx, { id: target, patch: { locked: lock } });
+      return { ids: targets };
     },
   };
 }
@@ -419,6 +466,7 @@ function builtinCommands(): Command[] {
     name: "Text",
     icon: "type",
     group: "insert",
+    menu: ["page"],
     cursor: "text",
     needsView: true,
     applies: (ctx) => !!ctx.page,
@@ -433,11 +481,12 @@ function builtinCommands(): Command[] {
       name: "Delete",
       icon: "trash",
       group: "edit",
+      menu: ["item"],
       params: NODES_PARAMS,
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !isLocked(ctx.store.doc, n.id)),
       run: deleteNodes,
     },
-    { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", params: NODES_PARAMS, applies: (ctx) => ctx.selection.length > 0, run: duplicate },
+    { id: "duplicate", name: "Duplicate", icon: "copy", group: "edit", menu: ["item"], params: NODES_PARAMS, applies: (ctx) => ctx.selection.length > 0, run: duplicate },
     text,
     stackCommand("bring-forward", "Bring forward", "arrow-up", "forward"),
     stackCommand("send-backward", "Send backward", "arrow-down", "backward"),
@@ -446,29 +495,32 @@ function builtinCommands(): Command[] {
       name: "Reset aspect ratio",
       icon: "ratio",
       group: "arrange",
+      menu: ["item"],
       needsView: true,
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && isUnlockedImage(ctx.store.doc, n)),
       run: resetAspect,
     },
-    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", params: PAGE_PARAMS, applies: () => true, run: addPage },
+    { id: "add-page", name: "Add page", icon: "file-plus", group: "page", menu: ["page", "canvas"], params: PAGE_PARAMS, applies: () => true, run: addPage },
     {
       id: "delete-page",
       name: "Delete page",
       icon: "file-minus",
       group: "page",
+      menu: ["page"],
       params: PAGE_PARAMS,
       applies: (ctx) => ctx.store.doc.pages.length > 1,
       run: deletePage,
     },
-    { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).fitPage() },
+    { id: "fit-page", name: "Fit page", icon: "maximize", group: "view", menu: ["page", "canvas"], needsView: true, applies: () => true, run: (ctx) => editor(ctx).fitPage() },
     snapToggle,
-    { id: "zoom-100", name: "Zoom to 100%", icon: "search", group: "view", needsView: true, applies: () => true, run: (ctx) => editor(ctx).zoomTo(1) },
-    { id: "export", name: "Export", icon: "download", group: "export", needsView: true, applies: () => true, run: (ctx) => editor(ctx).requestExport() },
+    { id: "zoom-100", name: "Zoom to 100%", icon: "search", group: "view", menu: ["canvas"], needsView: true, applies: () => true, run: (ctx) => editor(ctx).zoomTo(1) },
+    { id: "export", name: "Export", icon: "download", group: "export", menu: ["page", "canvas"], needsView: true, applies: () => true, run: (ctx) => editor(ctx).requestExport() },
     {
       id: "open-source",
       name: "Open source",
       icon: "link",
       group: "edit",
+      menu: ["item"],
       needsView: true,
       applies: (ctx) => linkedFileNode(ctx) !== undefined,
       run(ctx) {
@@ -476,6 +528,8 @@ function builtinCommands(): Command[] {
         if (node) editor(ctx).openLink(joinLinktext(node.file, node.subpath));
       },
     },
+    lockCommand("lock", "Lock", "lock", true),
+    lockCommand("unlock", "Unlock", "unlock", false),
   ];
 }
 

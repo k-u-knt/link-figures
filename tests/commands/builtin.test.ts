@@ -100,6 +100,8 @@ test("the built-in commands, in toolbar order, with the icons and groups of the 
     "edit/delete/trash",
     "edit/duplicate/copy",
     "edit/open-source/link",
+    "edit/lock/lock",
+    "edit/unlock/unlock",
     "insert/insert-text/type",
     "arrange/bring-forward/arrow-up",
     "arrange/send-backward/arrow-down",

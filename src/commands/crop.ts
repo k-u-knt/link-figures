@@ -116,6 +116,7 @@ export function cropCommands(): Command[] {
       // Not Crop's icon: the two sit side by side in the toolbar.
       icon: "scan",
       group: "edit",
+      menu: ["item"],
       params: { id: { type: "string" } },
       applies: (ctx) => selectedCroppedPanel(ctx) !== undefined,
       run: (ctx, args?: { id?: string }) => {
@@ -132,6 +133,7 @@ export function cropCommands(): Command[] {
       name: "Crop",
       icon: "crop",
       group: "edit",
+      menu: ["item"],
       needsView: true,
       // Not before the image has loaded (a badge or a placeholder has nothing to crop).
       applies: (ctx) => {

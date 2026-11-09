@@ -508,6 +508,8 @@ export class Inspector {
   render(): void {
     const section = this.describe();
     if (!section) {
+      // A drag that was under way (a histogram handle) loses its control with the section: its stamp and merge end here.
+      this.endGesture();
       this.pending = false;
       this.signature = "";
       this.el.empty();

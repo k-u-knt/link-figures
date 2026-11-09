@@ -1,3 +1,4 @@
+import { DecodeLimitError } from "../../src/links/decoders/budget";
 import { InvalidationIndex } from "../../src/links/invalidation";
 import type { Plane } from "../../src/links/decoders/tiff-convert";
 import type { Decoders, FileRef, Resolved } from "../../src/links/types";
@@ -426,6 +427,24 @@ describe("samplesNow", () => {
     expect(plane).toBe([...t.planes.values()][0]);
     expect(t.view.samplesLanded).toHaveBeenCalledTimes(1);
     expect(t.reads).toEqual(["e.png"]);
+  });
+
+  test("a decode refused for its size warns that the image is too large to adjust, and is not an error", async () => {
+    const t = setup();
+    const next = t.relink({ [t.a.id]: "e.png" });
+    t.nodeHost.renderAll(next);
+    await t.nodeHost.resolveStale();
+    t.decoders.decodeSamples = vi.fn(async () => {
+      throw new DecodeLimitError("TIFF page 1 is 8000×8000 px (64 MP); the limit is 50 MP", 8000, 8000);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.nodeHost.samplesNow(t.a.id);
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("too large to adjust"));
+    expect(err).not.toHaveBeenCalled();
+    warn.mockRestore();
+    err.mockRestore();
   });
 
   test("the key follows the file's mtime: a changed file is decoded again", async () => {

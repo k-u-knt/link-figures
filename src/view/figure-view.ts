@@ -682,6 +682,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.ensureDom();
     // A tool armed for the document that was just replaced is not to land on this one.
     this.disarmTool();
+    // An inspector gesture (a histogram drag) of the replaced document does not stamp this one's commits.
+    this.gestureStartedAt = null;
     this.unsubscribe?.();
     if (!keepResolutions) this.nodeHost.reset();
     this.parsed = parsed;

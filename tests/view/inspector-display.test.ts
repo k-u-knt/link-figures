@@ -68,7 +68,7 @@ function setup(opts: { file?: string; samples?: () => Plane | null; second?: boo
   store.subscribe((ev) => labels.push(ev.label));
   const node = (id = "p-1") => store.doc.nodes.find((n) => n.id === id) as FileNode;
   const channels = (id = "p-1") => node(id).adjustments.find((a) => a.type === "display")?.params.channels as Record<string, unknown>[] | undefined;
-  return { store, el, inspector, notices, labels, registries, node, channels, setSamples: (f: () => Plane | null) => (samples = f) };
+  return { view, selection, store, el, inspector, notices, labels, registries, node, channels, setSamples: (f: () => Plane | null) => (samples = f) };
 }
 
 const keysOf = (el: FakeEl) => el.findAll((e) => "data-key" in e.attrs).map((e) => e.attrs["data-key"]);
@@ -226,6 +226,25 @@ describe("the histogram", () => {
     clock.now += 100;
     t.el.typeInto("display.0.max", "3100");
     // The two typed edits merge with each other (100 ms apart), not with the drag.
+    t.store.undo();
+    expect(t.channels()?.[0].max).toBe(2500);
+  });
+
+  test("the section going away (nothing to inspect) mid-drag clears the gesture stamp; a later same-label commit far apart is its own step", () => {
+    const clock = { now: Date.now() };
+    const t = setup({ clock });
+    const canvas = canvasOf(t.el);
+    canvas.fire("pointerdown", at(WIDTH));
+    canvas.fire("pointermove", at(110));
+    expect(t.view.gestureStartedAt).not.toBeNull();
+    // `describe` gives no section when the file could not be read.
+    t.view.readOnly = true;
+    t.inspector.render();
+    expect(t.view.gestureStartedAt).toBeNull();
+    clock.now += 5000;
+    t.view.readOnly = false;
+    t.inspector.render();
+    t.el.typeInto("display.0.max", "3000");
     t.store.undo();
     expect(t.channels()?.[0].max).toBe(2500);
   });

@@ -1,5 +1,6 @@
 import { Keymap } from "obsidian";
 import type { Plane } from "../links/decoders/tiff-convert";
+import { DecodeLimitError } from "../links/decoders/budget";
 import { isVectorFile } from "../links/intake-classify";
 import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
@@ -238,7 +239,8 @@ export class NodeHost {
         landed = true;
       } catch (error) {
         this.samplesFailed.add(key);
-        console.error(`Link Figures: could not decode the samples of ${file.path}`, error);
+        if (error instanceof DecodeLimitError) console.warn(`Link Figures: ${file.path} is too large to adjust (${error.message})`);
+        else console.error(`Link Figures: could not decode the samples of ${file.path}`, error);
       }
       this.samplesPending.delete(key);
       if (landed) this.notifySamplesLanded();

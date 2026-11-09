@@ -10,7 +10,7 @@ import { dragRect, nodeSizePx, roundPx } from "../view/pointer-math";
 import { writePageField } from "../view/page-fields";
 import { editor, targetIds, targetPage, whenCommitted } from "./builtin";
 import { descendantsOf, expandUnits, isGroup, isLocked, scaleUnits } from "../model/groups";
-import { current } from "immer";
+import { current, isDraft } from "immer";
 
 /**
  * The commands that draw: create shapes and connectors, change any node's or page's attributes, move a connector's end,
@@ -433,6 +433,23 @@ export function translateInto(registries: Registries, target: Node, origin: Node
   for (const key of Object.keys(next)) if (next[key] !== before[key]) draft[key] = next[key];
 }
 
+/**
+ * Moves the units `ids` of `draft` (each with everything in it, a locked member too) by (`dx`, `dy`) page px, in place,
+ * each node as its type moves (see `translateInto`): the one translate path of `node.move`, `align` and `distribute`.
+ * Which units may move (not effectively locked) is the caller's to decide; connectors attached to a moved item follow
+ * it through the connector normaliser.
+ */
+export function translateUnits(draft: Document, ids: readonly NodeId[], dx: number, dy: number, registries: Registries): void {
+  if (dx === 0 && dy === 0) return;
+  const doc: Document = isDraft(draft) ? current(draft) : structuredClone(draft);
+  const moving = new Set(expandUnits(doc, ids));
+  const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+  for (const node of draft.nodes) {
+    const origin = byId.get(node.id);
+    if (origin && moving.has(node.id)) translateInto(registries, node, origin, dx, dy);
+  }
+}
+
 type MoveArgs = { ids?: unknown[]; dx: number; dy: number; pages: boolean };
 
 /**
@@ -446,17 +463,10 @@ function moveNodes(ctx: CommandContext, args: MoveArgs): { ids: NodeId[] } {
   const command = "node.move";
   if (!Number.isFinite(args.dx) || !Number.isFinite(args.dy)) throw new CommandError(`${command}: "dx" and "dy" must be finite numbers`);
   const before = ctx.store.doc;
-  const ids = new Set(expandUnits(before, targetIds(ctx, command, args).filter((id) => !isLocked(before, id))));
+  const units = targetIds(ctx, command, args).filter((id) => !isLocked(before, id));
+  const ids = new Set(expandUnits(before, units));
   if (ids.size === 0) return { ids: [] };
-  if (args.dx !== 0 || args.dy !== 0) {
-    const byId = new Map(before.nodes.map((n) => [n.id, n] as const));
-    ctx.store.commit(command, (draft) => {
-      for (const node of draft.nodes) {
-        const origin = byId.get(node.id);
-        if (origin && ids.has(node.id)) translateInto(ctx.registries, node, origin, args.dx, args.dy);
-      }
-    });
-  }
+  if (args.dx !== 0 || args.dy !== 0) ctx.store.commit(command, (draft) => translateUnits(draft, units, args.dx, args.dy, ctx.registries));
   // A second commit with the same label, which the store merges into the first: the boxes it reads are the ones the
   // move gave, normalised (a connector's is the area its moved ends draw).
   if (args.pages) placeOnPages(ctx, command, ids);

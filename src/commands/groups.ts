@@ -1,27 +1,9 @@
 import { newId, groupNodeDefaults } from "../model/defaults";
-import { childrenOf, expandUnits, isGroup, isLocked, parentOf, unitsOf } from "../model/groups";
+import { childrenOf, commonParent, expandUnits, isGroup, isLocked, parentOf, unitsOf } from "../model/groups";
 import type { Document, Node, NodeId } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
 import { targetIds, whenCommitted } from "./builtin";
-
-/** `id`'s ancestors, nearest first (not `id` itself); stops at one already seen, so a cyclic parent chain ends. */
-function ancestorsOf(doc: Document, id: NodeId): NodeId[] {
-  const out: NodeId[] = [];
-  let at = parentOf(doc, id);
-  while (at !== null && !out.includes(at) && at !== id) {
-    out.push(at);
-    at = parentOf(doc, at);
-  }
-  return out;
-}
-
-/** The deepest group that every one of `ids` is inside (at any depth), or null when they share none. */
-function commonParent(doc: Document, ids: readonly NodeId[]): NodeId | null {
-  if (ids.length === 0) return null;
-  const [first, ...rest] = ids.map((id) => ancestorsOf(doc, id));
-  return first.find((a) => rest.every((list) => list.includes(a))) ?? null;
-}
 
 /** The units that `group.create` would join: each of `ids` taken to its outermost unit within their common parent. */
 function createUnits(doc: Document, ids: readonly NodeId[]): { within: NodeId | null; units: NodeId[] } {

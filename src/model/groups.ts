@@ -91,6 +91,24 @@ export function unitsOf(doc: Document, ids: readonly NodeId[], within: NodeId | 
   return [...new Set(ids.map((id) => outermostUnit(doc, id, within)))];
 }
 
+/** `id`'s ancestors, nearest first (not `id` itself); stops at one already seen, so a cyclic parent chain ends. */
+function ancestorsOf(doc: Document, id: NodeId): NodeId[] {
+  const out: NodeId[] = [];
+  let at = parentOf(doc, id);
+  while (at !== null && !out.includes(at) && at !== id) {
+    out.push(at);
+    at = parentOf(doc, at);
+  }
+  return out;
+}
+
+/** The deepest group that every one of `ids` is inside (at any depth), or null when they share none. */
+export function commonParent(doc: Document, ids: readonly NodeId[]): NodeId | null {
+  if (ids.length === 0) return null;
+  const [first, ...rest] = ids.map((id) => ancestorsOf(doc, id));
+  return first.find((a) => rest.every((list) => list.includes(a))) ?? null;
+}
+
 /**
  * Scales the units `ids` (each with all its descendants) of `draft` by (`sx`, `sy`) about `origin` (page px), in place:
  * what resizing a group does to its members. Each node is scaled by its type's `scale` hook, else by the default: the

@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { createApi, type LinkFiguresApi } from "./api";
+import { arrangeCommands } from "./commands/arrange";
 import { registerBuiltinCommands } from "./commands/builtin";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
@@ -68,6 +69,7 @@ export default class LinkFiguresPlugin extends Plugin {
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
     for (const command of drawingCommands()) this.registries.commands.register(command);
     for (const command of groupCommands()) this.registries.commands.register(command);
+    for (const command of arrangeCommands()) this.registries.commands.register(command);
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
     this.registerEvent(

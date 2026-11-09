@@ -24,7 +24,7 @@ test("two panels of one file are told apart", () => {
 });
 
 test("a group named in the figure is called by that name, not 'Group'", () => {
-  const group = { ...groupNodeDefaults(page, [], []), id: "g-1", name: "Split group" } as Node;
+  const group = { ...groupNodeDefaults(page, {}, []), id: "g-1", name: "Split group" } as Node;
   expect(nodeLabel(doc, group)).toBe(`"Split group" (${page.name})`);
 });
 

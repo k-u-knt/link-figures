@@ -218,7 +218,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     }
     this.setDocument(loaded.doc, loaded.parsed, reload, loaded.unreadable);
     this.rawText = data;
-    this.serializedAtLoad = serializeFigureFile(loaded.doc, loaded.parsed);
+    // The store's document, normalised: a file that only the normalisers would change is not rewritten by opening it
+    // (and closing it, which saves), as a headless call does not rewrite it.
+    this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
     this.loaded = true;
     this.scheduleFit();
   }

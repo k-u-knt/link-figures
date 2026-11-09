@@ -288,7 +288,16 @@ export default class LinkFiguresPlugin extends Plugin {
       if (!(view instanceof LinkFiguresView) || !view.hasDocument() || !view.file) throw new Error(`export: "${path}" could not be opened as a figure`);
       // The view started resolving its links when it loaded; any it has not started yet are started here.
       void view.nodeHost.resolveStale();
-      return { target: viewExportTarget(view, view.file), drawn: () => view.nodeHost.drawn(), close: () => leaf.detach() };
+      // Closing saves what the view would write (nothing, for a figure it only read): done first, and waited on, so the
+      // next call on the figure, which the API queues after this export, does not race that write.
+      const close = async () => {
+        try {
+          await view.save();
+        } finally {
+          leaf.detach();
+        }
+      };
+      return { target: viewExportTarget(view, view.file), drawn: () => view.nodeHost.drawn(), close };
     } catch (error) {
       leaf.detach();
       throw error;

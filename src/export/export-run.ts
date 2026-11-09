@@ -294,8 +294,11 @@ export interface BackgroundFigure {
   target: FigureExportTarget;
   /** Resolves once its links are resolved and its nodes drawn (see `NodeHost.drawn`), so content cards can be snapshotted. */
   drawn(): Promise<void>;
-  /** Closes the tab. */
-  close(): void;
+  /**
+   * Closes the tab; resolves once it is closed, with whatever it saves on closing written, so a call queued on the
+   * figure after the export cannot read the file before that write lands, or be overwritten by it.
+   */
+  close(): void | Promise<void>;
 }
 
 /** What `exportInBackground` needs of the plugin, so that it can be tested without Obsidian. */
@@ -324,6 +327,6 @@ export async function exportInBackground(host: BackgroundExportHost, path: strin
     const { files, warnings } = await exportFigure({ ...figure.target, drawn: () => figure.drawn() }, request);
     return { files, warnings };
   } finally {
-    figure.close();
+    await figure.close();
   }
 }

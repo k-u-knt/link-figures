@@ -157,6 +157,31 @@ describe("opening", () => {
   });
 });
 
+describe("an untouched figure is saved back as it was read", () => {
+  test("even when the store's normalisers would change it (a group whose box is stale): opening and closing never rewrites it", async () => {
+    const { groupNodeType } = await import("../../src/nodes/group-node");
+    const doc = figure();
+    const [a, b] = doc.nodes;
+    a.parent = "g";
+    b.parent = "g";
+    // A box no member gives: the group normaliser puts it right in the store.
+    doc.nodes.push({ id: "g", type: "group", page: doc.pages[0].id, x: 0, y: 0, width: 1, height: 1, z: 9, rotation: 0, opacity: 1, locked: false } as never);
+    const t = setup(doc);
+    const plugin = (t.view as unknown as { plugin: { registries: { nodeTypes: { get: (type: string) => unknown } } } }).plugin;
+    plugin.registries.nodeTypes.get = (type: string) => (type === "group" ? groupNodeType : undefined);
+    const text = textOf(doc);
+    t.disk.text = text;
+    t.view.data = text;
+    t.view.setViewData(text, true);
+    expect(t.view.store.doc.nodes.find((n) => n.id === "g")!.width).not.toBe(1);
+    // What Obsidian's save (and the save on closing a tab) writes: the text as it was read, so nothing is written.
+    expect(t.view.getViewData()).toBe(text);
+    // An edit is saved, normalised.
+    t.view.store.commit("move", (d) => void (d.nodes[2].x = 5));
+    expect(t.view.getViewData()).not.toBe(text);
+  });
+});
+
 describe("a source renamed: Obsidian rewrites the Links section and hands the text to setViewData", () => {
   test("the open figure is kept: same store, history, selection and drawing; only the renamed panel is told", () => {
     const t = setup();

@@ -279,6 +279,24 @@ describe("exportInBackground", () => {
     expect(b.events.at(-1)).toBe("close");
   });
 
+  test("it resolves only once the tab is closed (its save on closing done), so a call queued after it cannot race that save", async () => {
+    const b = background();
+    let closed: () => void = () => {};
+    const open = b.host.open as unknown as { (): Promise<Record<string, unknown>>; mockImplementation(fn: () => Promise<unknown>): void };
+    const opened = await open();
+    open.mockImplementation(async () => ({ ...opened, close: () => new Promise<void>((resolve) => (closed = () => (b.events.push("closed"), resolve()))) }));
+    b.events.length = 0;
+    let settled = false;
+    const out = exportInBackground(b.host, b.t.figurePath, { format: "spy" }).then(() => void (settled = true));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    b.finishDrawing();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    closed();
+    await out;
+    expect(b.events.at(-1)).toBe("closed");
+  });
+
   test("a bad request, or a path that is no figure, is refused without opening a tab", async () => {
     const b = background();
     const refused = async (request: object, path = b.t.figurePath) => exportInBackground(b.host, path, request as never);

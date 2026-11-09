@@ -10,7 +10,8 @@
  *
  * Two options stand for a value that may be null (absent): a `toggle` with an `onValue` is on while the value is not
  * null, and writes a copy of `onValue` when turned on and null when turned off (a shape's border); a `color` that is
- * `nullable` has a checkbox beside it that does the same with the colour last shown (a pattern's background).
+ * `nullable` has a checkbox beside it that does the same with the colour last shown (a pattern's background), or,
+ * with none shown yet, its `onValue` colour (a page's paper is white).
  */
 export type Field = {
   kind: "number" | "text" | "color" | "select" | "toggle" | "paint" | "stops" | "heading" | "histogram";

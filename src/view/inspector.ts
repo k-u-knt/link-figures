@@ -42,6 +42,9 @@ const typedInto = new WeakSet<Control>();
 /** The checkbox beside a `nullable` colour input: whether there is a colour at all. */
 const nullToggles = new WeakMap<Control, HTMLInputElement>();
 
+/** The nullable colour inputs that have shown a colour: the one they hold is worth bringing back. */
+const shownColor = new WeakSet<Control>();
+
 function setControlValue(control: Control, field: Field, value: unknown): void {
   if (field.kind === "toggle") (control as HTMLInputElement).checked = field.onValue !== undefined ? value !== null && value !== undefined : value === true;
   else if (field.kind === "number") control.value = typeof value === "number" && Number.isFinite(value) ? formatNumber(value) : "";
@@ -51,7 +54,13 @@ function setControlValue(control: Control, field: Field, value: unknown): void {
     if (toggle) toggle.checked = present;
     (control as HTMLInputElement).disabled = !present;
     // With no colour, the input keeps the one it last showed: turning the colour back on brings that one back.
-    if (present) control.value = colorInputValue(value);
+    if (present) {
+      control.value = colorInputValue(value);
+      shownColor.add(control);
+    } else if (!shownColor.has(control) && typeof field.onValue === "string") {
+      // Never showed a colour (opened with none): switching on brings the field's own, not black.
+      control.value = colorInputValue(field.onValue);
+    }
   } else if (field.kind === "color") control.value = colorInputValue(value);
   else control.value = typeof value === "string" ? value : "";
 }

@@ -217,6 +217,15 @@ describe("page section", () => {
     expect(seen).toEqual(["inspect:paper", "inspect:paper", "inspect:paper"]);
   });
 
+  test("a page opened with a transparent paper turns on to white, not black", () => {
+    const { el, store } = setup((doc) => { doc.pages[0].paper = "transparent"; });
+    const toggle = el.find((e) => e.hasClass("lf-null-toggle"))!;
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.fire("change");
+    expect(store.doc.pages[0].paper).toBe("#ffffff");
+  });
+
   test("a paper the file gives as none or empty is shown as transparent", () => {
     const { el, store } = setup();
     for (const none of ["none", "", "Transparent"]) {

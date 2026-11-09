@@ -6,7 +6,7 @@ import { jsPDF } from "jspdf";
 import "svg2pdf.js/dist/svg2pdf.es.js";
 import type { AssetMap, PdfAsset } from "../../src/export/asset-types";
 import { pdfExporter } from "../../src/export/exporters/pdf";
-import { faceResolver, prepareFonts, usedFamilies, type FaceResolver } from "../../src/export/pdf-fonts";
+import { expandFont, faceResolver, prepareFonts, usedFamilies, type FaceResolver } from "../../src/export/pdf-fonts";
 import { buildPageSvg } from "../../src/export/svg-builder";
 import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import { nodeLabel } from "../../src/model/labels";
@@ -106,6 +106,17 @@ function figure() {
   };
 }
 
+/** A figure that is one linked SVG panel showing `plot`, exported. */
+async function exportPanel(plot: string, ...sources: FontSource[]) {
+  const f = figure();
+  const panel: FileNode = { ...fileNodeDefaults(f.page, { file: "plot.svg", subpath: "", show: "image", frame: null }, []), id: "f", x: 20, y: 20, width: 100, height: 100 };
+  f.doc.nodes.push(panel);
+  const r = registries(...sources);
+  const { fileNodeSvg } = await import("../../src/nodes/file-node-svg");
+  r.nodeTypes.register({ type: "file", toSvg: (n: FileNode, ctx: never) => fileNodeSvg(n, { kind: "svg", text: plot, width: 100, height: 100 }, ctx) } as never);
+  return exportPdf(f.doc, f.page, r, new Map([["f", { kind: "svg", text: plot, width: 100, height: 100 }]]));
+}
+
 async function exportPdf(doc: Document, page: Page, r: Registries, assets: AssetMap = new Map()) {
   const built = buildPageSvg(doc, page, r, assets);
   const result = await pdfExporter.run(
@@ -161,6 +172,23 @@ describe("usedFamilies", () => {
       ["DejaVu Sans", "sans-serif"],
       ["Fira Code", "monospace"],
     ]);
+  });
+
+  test("reads the family of a font shorthand, as matplotlib writes it", () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><text style="font: 10px 'DejaVu Sans', 'Arial', sans-serif; text-anchor: middle">A</text><style>.t{font:bold 9pt/1.2 Georgia}</style></svg>`;
+    expect(usedFamilies(svg)).toEqual([["DejaVu Sans", "Arial", "sans-serif"], ["Georgia"]]);
+  });
+
+  test("expandFont: style and weight before the size, an optional line height, then the family", () => {
+    expect(expandFont("italic small-caps 600 12px/1.5 'A B', serif")).toEqual([
+      ["font-style", "italic"],
+      ["font-weight", "600"],
+      ["font-size", "12px"],
+      ["line-height", "1.5"],
+      ["font-family", "'A B', serif"],
+    ]);
+    expect(expandFont("10px Calibri")).toEqual([["font-style", "normal"], ["font-weight", "normal"], ["font-size", "10px"], ["font-family", "Calibri"]]);
+    expect(expandFont("caption")).toBeNull();
   });
 
   test("an SVG with no fonts has none", () => {
@@ -227,10 +255,61 @@ describe("prepareFonts", () => {
     expect(result.warnings).toEqual(['L: font "Calibri" not installed — Times used in PDF', 'L: font "Comic Neue" not installed — Helvetica used in PDF']);
   });
 
-  test("Arial, Helvetica and Times New Roman not installed: no warning, and the SVG is unchanged", async () => {
+  test("Arial, Helvetica and Times New Roman not installed: no warning, and each is named by the standard font's own key", async () => {
     const svg = svgOf('<text font-family="Arial">A</text><text font-family="Helvetica" font-weight="bold">B</text><text font-family="Times New Roman" font-style="italic">C</text>');
     const result = await prepareFonts(svg, resolverOver(fakeSource({})), () => "L");
-    expect(result).toEqual({ svg, faces: [], warnings: [] });
+    expect(result.faces).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    const families = Array.from(new DOMParser().parseFromString(result.svg, "image/svg+xml").querySelectorAll("text")).map((t) => t.getAttribute("style"));
+    expect(families).toEqual(["font-family: helvetica", "font-family: helvetica", "font-family: times"]);
+  });
+
+  test("an unresolvable non-standard family leaves the SVG as it was", async () => {
+    const svg = svgOf('<text font-family="Calibri">A</text><text font-family="Georgia" font-weight="bold">B</text>');
+    expect((await prepareFonts(svg, resolverOver(fakeSource({})))).svg).toBe(svg);
+  });
+
+  test("a family inherited from an element in another style is written on the run, which resolves in its own style", async () => {
+    const source = fakeSource({ Calibri: family("Calibri", ["normal", "bold"]) });
+    const fromGroup = await prepareFonts(svgOf('<g font-family="Calibri"><text font-weight="bold">Title</text></g>'), resolverOver(source));
+    expect(fromGroup.faces.map((f) => [f.family, f.style])).toEqual([["Calibri", "bold"]]);
+    expect(fromGroup.svg).toMatch(/<text font-weight="bold" style="font-family: Calibri"/);
+    const fromText = await prepareFonts(svgOf('<text font-family="Calibri" font-weight="bold"><tspan font-weight="normal">Hello</tspan></text>'), resolverOver(source));
+    expect(fromText.faces.map((f) => [f.family, f.style])).toEqual([["Calibri", "normal"]]);
+    expect(fromText.svg).toMatch(/<tspan font-weight="normal" style="font-family: Calibri"/);
+    // In the same style there is nothing to write.
+    const same = svgOf('<g font-family="Calibri"><text>Hello</text></g>');
+    expect((await prepareFonts(same, resolverOver(source))).svg).toBe(same);
+  });
+
+  test("an inherited Arial with no bold face: the bold run is named helvetica, the regular run keeps Arial", async () => {
+    const result = await prepareFonts(svgOf('<g font-family="Arial"><text>Hi</text><text font-weight="bold">Yo</text></g>'), resolverOver(fakeSource({ Arial: family("Arial") })), () => "L");
+    expect(result.warnings).toEqual([]);
+    expect(result.faces.map((f) => [f.family, f.style])).toEqual([["Arial", "normal"]]);
+    expect(result.svg).toContain('<text font-weight="bold" style="font-family: helvetica">Yo</text>');
+    expect(result.svg).toContain("<text>Hi</text>");
+  });
+
+  test("an inline font shorthand is read, and written out as longhands with a keyword weight", async () => {
+    const source = fakeSource({ "DejaVu Sans": family("DejaVu Sans", ["normal", "bold"]) });
+    const result = await prepareFonts(svgOf(`<text style="font: 700 10px 'DejaVu Sans'; text-anchor: middle">Hello</text>`), resolverOver(source));
+    expect(result.faces.map((f) => [f.family, f.style])).toEqual([["DejaVu Sans", "bold"]]);
+    expect(result.svg).toContain(`style="font-style: normal; font-weight: bold; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: middle"`);
+  });
+
+  test("a <style> rule's font shorthand is read too", async () => {
+    const source = fakeSource({ Calibri: family("Calibri", ["bolditalic"]) });
+    const result = await prepareFonts(svgOf('<text class="t">Hello</text>', "<style>.t { font: italic 600 12px / 1.5 Calibri, sans-serif }</style>"), resolverOver(source));
+    expect(result.faces.map((f) => [f.family, f.style])).toEqual([["Calibri", "bolditalic"]]);
+    expect(result.svg).toContain(".t { font-style: italic; font-weight: bold; font-size: 12px; line-height: 1.5; font-family: Calibri, sans-serif }");
+  });
+
+  test("the label is asked for only when a warning needs it", async () => {
+    const labelOf = vi.fn(() => "L");
+    await prepareFonts(svgOf('<text font-family="Calibri">Hello</text>'), resolverOver(fakeSource({ Calibri: family("Calibri") })), labelOf);
+    expect(labelOf).not.toHaveBeenCalled();
+    await prepareFonts(svgOf('<text font-family="Georgia">Hello</text>'), resolverOver(fakeSource({})), labelOf);
+    expect(labelOf).toHaveBeenCalledTimes(1);
   });
 
   test("a hidden window: one warning for the whole export, however many families needed the list", async () => {
@@ -267,7 +346,8 @@ describe("PDF export with installed fonts", () => {
     vi.setSystemTime(new Date(2026, 10, 10, 12, 0, 0));
     const f = figure();
     f.label("Hello", { family: "Calibri" });
-    f.label("World", { family: "Arial", weight: "bold" });
+    // Only non-standard families: Arial, Helvetica and Times New Roman are renamed in the PDF copy (see below).
+    f.label("World", { family: "Georgia", weight: "bold" });
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({})));
 
     // What the exporter drew before fonts: the page's SVG, straight into a jsPDF document of the page's size.
@@ -383,11 +463,38 @@ describe("PDF export with installed fonts", () => {
     expect(out.bytes.length).toBeLessThan(200 * 1024);
   });
 
-  test("Arial, Helvetica and Times New Roman not installed: drawn in the standard fonts with no warning", async () => {
+  test.each([
+    ["Arial", "Helvetica"],
+    ["Helvetica", "Helvetica"],
+    ["Times New Roman", "Times-Roman"],
+  ])("%s not installed: drawn in %s, with no warning", async (family, standard) => {
     const f = figure();
-    for (const family of ["Arial", "Helvetica", "Times New Roman"]) f.label("Hello", { family });
+    f.label("Hello", { family });
     const out = await exportPdf(f.doc, f.page, registries(fakeSource({})));
     expect(out.warnings).toEqual([]);
     expect(out.text).not.toContain("/FontFile2");
+    expect(fontsDrawn(out.text, out.content)).toEqual([standard]);
+  });
+
+  test.each([
+    ["a group's family under a bold text", '<g font-family="Calibri"><text x="10" y="20" font-weight="bold">Title</text></g>', ["Calibri"]],
+    ["a bold text's family under a regular tspan", '<text x="10" y="20" font-family="Calibri" font-weight="bold"><tspan font-weight="normal">Hello</tspan></text>', ["Calibri"]],
+    ["an inherited Arial with no bold face", '<g font-family="Arial"><text x="10" y="80">Hi</text><text x="10" y="90" font-weight="bold">Yo</text></g>', ["Arial", "Helvetica-Bold"]],
+  ])("a family inherited in another style is drawn in the run's own face, not Times: %s", async (_, body, drawn) => {
+    // Each case on its own, so no other text registers the style the inheriting run needs.
+    const plot = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`;
+    const out = await exportPanel(plot, fakeSource({ Calibri: family("Calibri", ["normal", "bold"]), Arial: family("Arial") }));
+    expect(out.warnings).toEqual([]);
+    expect(fontsDrawn(out.text, out.content).sort()).toEqual(drawn);
+  });
+
+  test("matplotlib's font shorthand (svg.fonttype none) is embedded", async () => {
+    const plot =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+      `<text x="10" y="20" style="font: 600 10px 'DejaVu Sans', 'Bitstream Vera Sans', 'Verdana', 'Arial', 'Helvetica', sans-serif; text-anchor: middle">Hello</text>` +
+      '<style>.t { font: 9px Calibri }</style><text class="t" x="10" y="60">World</text></svg>';
+    const out = await exportPanel(plot, fakeSource({ "DejaVu Sans": family("DejaVu Sans", ["bold"]), Calibri: family("Calibri") }));
+    expect(out.warnings).toEqual([]);
+    expect(fontsDrawn(out.text, out.content).sort()).toEqual(["Calibri", "DejaVu#20Sans"]);
   });
 });

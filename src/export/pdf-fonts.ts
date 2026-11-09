@@ -53,8 +53,12 @@ type Standard = "Helvetica" | "Times" | "Courier";
 const JSPDF_STANDARD: Record<string, Standard> = { helvetica: "Helvetica", times: "Times", courier: "Courier" };
 /** The lower-cased names jsPDF must not be asked to look up: CSS generics and svg2pdf.js's aliases that are not real families. */
 const GENERIC = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong", "fixed", "terminal"]);
-/** Metric-compatible with the standard fonts: when not installed they are set in those with no warning (§8.4). */
-const STANDARD_TWINS = new Set(["arial", "helvetica", "times new roman"]);
+/**
+ * Metric-compatible with the standard fonts: when not embedded they are set in those, with no warning (§8.4). The
+ * PDF copy names the standard font's own key, since svg2pdf.js would set "Helvetica" and "Times New Roman" in Times.
+ */
+const STANDARD_TWINS: Record<string, Standard> = { arial: "Helvetica", helvetica: "Helvetica", "times new roman": "Times" };
+const isTwin = (name: string) => Object.hasOwn(STANDARD_TWINS, name.toLowerCase());
 
 const REASONS: Record<Exclude<FindFaceReason, "unavailable">, string> = {
   missing: "not installed",
@@ -101,18 +105,47 @@ interface Declaration {
   important: boolean;
 }
 
+/** A declaration list, with a `font` shorthand expanded into the longhands it sets (as the CSSOM svg2pdf.js reads does). */
 function declarations(text: string): Declaration[] {
-  return text
-    .split(";")
-    .map((part) => {
-      const colon = part.indexOf(":");
-      if (colon < 0) return null;
-      let value = part.slice(colon + 1).trim();
-      const important = /!\s*important$/i.test(value);
-      if (important) value = value.replace(/!\s*important$/i, "").trim();
-      return { property: part.slice(0, colon).trim().toLowerCase(), value, important };
-    })
-    .filter((d): d is Declaration => d !== null && d.property !== "");
+  return text.split(";").flatMap((part): Declaration[] => {
+    const colon = part.indexOf(":");
+    if (colon < 0) return [];
+    const property = part.slice(0, colon).trim().toLowerCase();
+    let value = part.slice(colon + 1).trim();
+    const important = /!\s*important$/i.test(value);
+    if (important) value = value.replace(/!\s*important$/i, "").trim();
+    if (property === "") return [];
+    if (property !== "font") return [{ property, value, important }];
+    return (expandFont(value) ?? []).map(([p, v]) => ({ property: p, value: v, important }));
+  });
+}
+
+const FONT_SIZE = /^(?:\d*\.?\d+(?:px|pt|pc|em|rem|ex|ch|%|mm|cm|in|q|vw|vh|vmin|vmax)|0|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)$/i;
+
+/**
+ * The longhands a `font` shorthand sets: `[style || variant || weight || stretch] size[/line-height] family`. Style
+ * and weight are reset to normal when the shorthand does not give them. Null for a value that is not one (a system
+ * font such as `caption`).
+ */
+export function expandFont(value: string): [string, string][] | null {
+  // "10px / 1.2" becomes the one token "10px/1.2".
+  const tokens = value.trim().replace(/\s*\/\s*/, "/").split(/\s+/);
+  const sizeAt = tokens.findIndex((t) => FONT_SIZE.test(t.split("/")[0]));
+  if (sizeAt < 0) return null;
+  let style = "normal";
+  let weight = "normal";
+  for (const token of tokens.slice(0, sizeAt).map((t) => t.toLowerCase())) {
+    if (token === "italic" || token === "oblique") style = token;
+    else if (token === "bold" || token === "bolder" || token === "lighter" || /^\d+(\.\d+)?$/.test(token)) weight = token;
+  }
+  const [size, lineHeight] = tokens[sizeAt].split("/");
+  const rest = tokens.slice(sizeAt + 1);
+  const family = rest.join(" ").trim();
+  if (family === "") return null;
+  const longhands: [string, string][] = [["font-style", style], ["font-weight", weight], ["font-size", size]];
+  if (lineHeight) longhands.push(["line-height", lineHeight]);
+  longhands.push(["font-family", family]);
+  return longhands;
 }
 
 interface Rule {
@@ -149,6 +182,18 @@ function parseRules(css: string, start: number): Rule[] {
 }
 
 const FONT_FAMILY_RE = /font-family\s*:\s*([^;}]+)/gi;
+/** A `font` shorthand declaration in CSS text (not `font-family` and the like). */
+const FONT_SHORTHAND_RE = /(^|[;{\s])font\s*:\s*([^;}]+)/gi;
+
+/** The font-family values of CSS declarations, the `font` shorthand's included. */
+function familyValues(css: string): string[] {
+  const values = [...css.matchAll(FONT_FAMILY_RE)].map((m) => m[1]);
+  for (const m of css.matchAll(FONT_SHORTHAND_RE)) {
+    const family = expandFont(m[2].replace(/!\s*important\s*$/i, ""))?.find(([p]) => p === "font-family");
+    if (family) values.push(family[1]);
+  }
+  return values;
+}
 
 /**
  * The font-family lists of an SVG, in document order of attributes and inline styles, then `<style>` rules: each list's
@@ -165,11 +210,11 @@ export function usedFamilies(svg: string): string[][] {
   for (const m of body.matchAll(/\s(font-family|style)\s*=\s*("([^"]*)"|'([^']*)')/g)) {
     const value = decode(m[3] ?? m[4] ?? "");
     if (m[1] === "font-family") add(value);
-    else for (const d of value.matchAll(FONT_FAMILY_RE)) add(d[1]);
+    else for (const family of familyValues(value)) add(family);
   }
   for (const m of svg.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
     const css = stripComments(m[1].replace(/<!\[CDATA\[|\]\]>/g, ""));
-    for (const d of css.matchAll(FONT_FAMILY_RE)) add(d[1]);
+    for (const family of familyValues(css)) add(family);
   }
   return lists;
 }
@@ -188,9 +233,21 @@ function weightKeyword(value: string): string {
 }
 
 const WEIGHT_DECL_RE = /(font-weight\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
-const rewriteWeightDecls = (css: string) => css.replace(WEIGHT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${weightKeyword(value)}${tail}`);
+/**
+ * CSS text with each `font` shorthand written out as its longhands, which every reader understands, and each weight
+ * as a keyword svg2pdf.js can key.
+ */
+function rewriteFontDecls(css: string): string {
+  const expanded = css.replace(FONT_SHORTHAND_RE, (all, lead: string, value: string) => {
+    const important = /!\s*important\s*$/i.test(value) ? " !important" : "";
+    const longhands = expandFont(value.replace(/!\s*important\s*$/i, ""));
+    const trailing = /\s*$/.exec(value)?.[0] ?? "";
+    return longhands ? `${lead}${longhands.map(([p, v]) => `${p}: ${v}${important}`).join("; ")}${trailing}` : all;
+  });
+  return expanded.replace(WEIGHT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${weightKeyword(value)}${tail}`);
+}
 
-/** Rewrites the weights in attributes, inline styles and `<style>` text; true when anything changed. */
+/** Rewrites the weights (and `font` shorthands) in attributes, inline styles and `<style>` text; true when anything changed. */
 function rewriteWeights(root: Element): boolean {
   let changed = false;
   const set = (el: Element, name: string, value: string) => {
@@ -202,9 +259,9 @@ function rewriteWeights(root: Element): boolean {
     const weight = el.getAttribute("font-weight");
     if (weight !== null) set(el, "font-weight", weightKeyword(weight));
     const style = el.getAttribute("style");
-    if (style !== null && /font-weight/i.test(style)) set(el, "style", rewriteWeightDecls(style));
-    if (el.localName === "style" && el.textContent && /font-weight/i.test(el.textContent)) {
-      const css = rewriteWeightDecls(el.textContent);
+    if (style !== null && /font/i.test(style)) set(el, "style", rewriteFontDecls(style));
+    if (el.localName === "style" && el.textContent && /font/i.test(el.textContent)) {
+      const css = rewriteFontDecls(el.textContent);
       if (css !== el.textContent) {
         el.textContent = css;
         changed = true;
@@ -255,6 +312,15 @@ function computed(el: Element, property: string, rules: Rule[]): string | undefi
   return undefined;
 }
 
+/** The nearest element, `el` or an ancestor, that sets `font-family` itself. */
+function declaringElement(el: Element, rules: Rule[]): Element | null {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    const value = ownValue(node, "font-family", rules);
+    if (value !== undefined && value.trim().toLowerCase() !== "inherit") return node;
+  }
+  return null;
+}
+
 /** The style key svg2pdf.js builds for an element, or null for one it cannot match (an oblique bold, say). */
 function styleKey(el: Element, rules: Rule[]): FontStyle | null {
   const weight = (computed(el, "font-weight", rules) ?? "normal").trim().toLowerCase();
@@ -271,7 +337,7 @@ function styleKey(el: Element, rules: Rule[]): FontStyle | null {
 /** How svg2pdf.js will set one family list in one style, once the faces found are registered. */
 type Outcome =
   | { kind: "embedded"; family: string; face: LoadedFace; first: Failure | null }
-  | { kind: "standard"; font: Standard; first: Failure | null };
+  | { kind: "standard"; font: Standard; first: Failure | null; twin?: boolean };
 
 /** Why the list's first family is not what the text is set in. */
 interface Failure {
@@ -288,8 +354,9 @@ async function resolveList(names: string[], style: FontStyle, resolve: FaceResol
     if (!GENERIC.has(lower)) {
       const { face, reason } = await resolve(name, style);
       // A twin of a standard font is set in that font rather than in a stand-in for a missing style.
-      if (face && (face.exact || !STANDARD_TWINS.has(lower))) return { kind: "embedded", family: name, face, first };
+      if (face && (face.exact || !isTwin(lower))) return { kind: "embedded", family: name, face, first };
       if (index === 0 && !face) first = { name, reason: reason ?? "missing" };
+      if (isTwin(lower)) return { kind: "standard", font: STANDARD_TWINS[lower], first, twin: true };
     }
     if (SVG2PDF_ALIASES[lower]) return { kind: "standard", font: SVG2PDF_ALIASES[lower], first };
   }
@@ -398,7 +465,7 @@ const prefixed = (label: string, warning: string) => (label === "" ? warning : `
  */
 export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: LabelOf = () => ""): Promise<{ svg: string; faces: RegisteredFace[]; warnings: string[] }> {
   const unchanged = { svg, faces: [], warnings: [] };
-  if (!/font-(family|weight)/i.test(svg) || typeof DOMParser === "undefined") return unchanged;
+  if (!/font-(family|weight)|font\s*:/i.test(svg) || typeof DOMParser === "undefined") return unchanged;
   const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
   const root = parsed?.documentElement;
   if (!root || typeof root.querySelectorAll !== "function" || parsed.getElementsByTagName("parsererror").length > 0) return unchanged;
@@ -413,16 +480,17 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
   };
 
   for (const text of Array.from(root.querySelectorAll("text"))) {
-    const runs: { el: Element; chars: string; style: FontStyle; outcome: Outcome }[] = [];
+    const runs: { el: Element; chars: string; style: FontStyle; family: string; outcome: Outcome }[] = [];
     for (const el of [text, ...Array.from(text.querySelectorAll("tspan"))]) {
       const chars = ownText(el);
       if (chars === "") continue;
       const style = styleKey(el, rules);
       const family = computed(el, "font-family", rules);
       if (style === null || family === undefined) continue;
-      runs.push({ el, chars, style, outcome: await resolveList(parseFamilies(family), style, resolve) });
+      runs.push({ el, chars, style, family, outcome: await resolveList(parseFamilies(family), style, resolve) });
     }
-    const label = runs.length > 0 ? labelOf(text) : "";
+    let named: string | undefined;
+    const label = () => (named ??= labelOf(text));
 
     // A face that lacks a character would cut the string there (jsPDF), so the whole text is set in a standard font.
     const lacking = runs
@@ -434,19 +502,33 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
       changed = true;
       const byFamily = new Map<string, string[]>();
       for (const l of lacking) byFamily.set(l!.family, [...new Set([...(byFamily.get(l!.family) ?? []), ...l!.missing])]);
-      for (const [family, missing] of byFamily) warn(`font "${family}" lacks "${missing.join(", ")}" — ${label} set in ${fallback} in PDF`);
+      for (const [family, missing] of byFamily) warn(`font "${family}" lacks "${missing.join(", ")}" — ${label()} set in ${fallback} in PDF`);
       continue;
     }
 
-    for (const { style, outcome } of runs) {
+    for (const { el, style, family: list, outcome } of runs) {
       const used = outcome.kind === "embedded" ? outcome.family : outcome.font;
       const { first } = outcome;
       // The hidden window is said once for the whole export, even for Arial; a twin that is simply missing is not (§8.4).
       if (first?.reason === "unavailable") warn(HIDDEN_WARNING);
-      else if (first && !STANDARD_TWINS.has(first.name.toLowerCase())) warn(prefixed(label, `font "${first.name}" ${REASONS[first.reason]} — ${used} used in PDF`));
-      if (outcome.kind !== "embedded") continue;
+      else if (first && !isTwin(first.name)) warn(prefixed(label(), `font "${first.name}" ${REASONS[first.reason]} — ${used} used in PDF`));
+      if (outcome.kind !== "embedded") {
+        // A twin not embedded is named by the standard font's own key, on the run itself, so svg2pdf.js finds it.
+        if (outcome.twin) {
+          setInlineFamily(el, outcome.font.toLowerCase());
+          changed = true;
+        }
+        continue;
+      }
+      // svg2pdf.js resolves a family on the element that declares it, in that element's style; a run that inherits
+      // it in another style would be set in Times. The run gets the family itself, to resolve in its own style.
+      const declarer = declaringElement(el, rules);
+      if (declarer && declarer !== el && styleKey(declarer, rules) !== style) {
+        setInlineFamily(el, list);
+        changed = true;
+      }
       const { family, face } = outcome;
-      if (!face.exact) warn(prefixed(label, `font "${family}" has no ${STYLE_WORDS[style]} face — ${STYLE_WORDS[face.style]} used`));
+      if (!face.exact) warn(prefixed(label(), `font "${family}" has no ${STYLE_WORDS[style]} face — ${STYLE_WORDS[face.style]} used`));
       const key = `${family}\u0000${style}`;
       if (!faces.has(key)) faces.set(key, registeredFace(family, style, face));
     }

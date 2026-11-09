@@ -35,7 +35,8 @@ class FakeMenu {
   get titles(): string[] { return this.entries.map((e) => (e === "|" ? "|" : e.disabled ? `(${e.title})` : e.title)); }
   item(title: string): FakeMenuItem { return this.entries.find((e): e is FakeMenuItem => e !== "|" && e.title === title)!; }
 }
-vi.mock("obsidian", () => ({ Menu: FakeMenu }));
+const platform = vi.hoisted(() => ({ isMacOS: false }));
+vi.mock("obsidian", () => ({ Menu: FakeMenu, Platform: platform }));
 
 const { showContextMenu } = await import("../../src/view/context-menu");
 const { PointerController } = await import("../../src/view/pointer");
@@ -100,6 +101,7 @@ function setup() {
   registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
   for (const c of [...drawingCommands(), ...groupCommands()]) registries.commands.register(c);
   const ran: string[] = [];
+  let disarmed = 0;
   /** Each menu the view was asked to open: where, at which client point, for which page, and what was selected then. */
   const opened: { where: MenuPlace; at: { x: number; y: number } | null; page: PageId | null; selection: NodeId[] }[] = [];
   const view = {
@@ -113,6 +115,11 @@ function setup() {
     isPanGesture: () => false,
     stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
     clientPointOf: (world: { x: number; y: number }) => view.viewport.toScreen(world),
+    armedTool: null as object | null,
+    disarmTool: () => {
+      view.armedTool = null;
+      disarmed++;
+    },
     nodeHost: { elementFor: () => ({ dispatchEvent: vi.fn() }) },
     index: { untrack: vi.fn() },
     pageLayer: { overlayHost: () => overlay },
@@ -147,7 +154,7 @@ function setup() {
   };
   const key = (name: string, extra: object = {}) =>
     stage.fire("keydown", { key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false, target: {}, preventDefault: () => void prevented++, ...extra });
-  return { view, controller, opened, ran, pointer, rightClick, key, prevented: () => prevented, nodeOf: (id: string) => view.store.doc.nodes.find((n) => n.id === id)! };
+  return { view, controller, opened, ran, disarmed: () => disarmed, pointer, rightClick, key, prevented: () => prevented, nodeOf: (id: string) => view.store.doc.nodes.find((n) => n.id === id)! };
 }
 
 const ON_A: [number, number] = [50, 30];
@@ -256,7 +263,7 @@ describe("a right-click on the stage", () => {
   });
 
   test("on a Mac, a Control-click is a right-click: its left-button press neither selects nor drags", () => {
-    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    platform.isMacOS = true;
     try {
       const { view, opened, pointer, nodeOf } = setup();
       pointer("pointerdown", ...ON_X, { ctrlKey: true });
@@ -268,8 +275,17 @@ describe("a right-click on the stage", () => {
       expect(opened[0]).toMatchObject({ where: "item", selection: ["x"] });
       expect(view.selection.ids).toEqual(["x"]);
     } finally {
-      vi.unstubAllGlobals();
+      platform.isMacOS = false;
     }
+  });
+
+  test("disarms an armed tool before opening the menu, and the menu opens", () => {
+    const { view, opened, disarmed, rightClick } = setup();
+    view.armedTool = { id: "text" };
+    rightClick(...ON_X);
+    expect(disarmed()).toBe(1);
+    expect(view.armedTool).toBeNull();
+    expect(opened).toHaveLength(1);
   });
 
   test("in text being edited is left to the browser: no menu, and its own menu is not suppressed", () => {
@@ -331,6 +347,35 @@ describe("the keyboard", () => {
     key("ContextMenu");
     pointer("contextmenu", 0, 0, { button: 0 });
     expect(opened).toHaveLength(1);
+  });
+
+  test("the echo is swallowed once: a real right-click right after it opens its own menu", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { view, opened, key, pointer, rightClick } = setup();
+      view.selection.set(["x"]);
+      key("ContextMenu");
+      pointer("contextmenu", 0, 0, { button: 0 });
+      expect(opened).toHaveLength(1);
+      rightClick(...ON_A);
+      expect(opened).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a contextmenu event 400 ms after the Menu key is not its echo", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { view, opened, key, pointer } = setup();
+      view.selection.set(["x"]);
+      key("ContextMenu");
+      vi.advanceTimersByTime(400);
+      pointer("contextmenu", ...ON_A, { button: 2 });
+      expect(opened).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("not while typing into text", () => {

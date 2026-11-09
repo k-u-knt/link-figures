@@ -31,7 +31,7 @@ import { PageLayer } from "./page-layer";
 import { isEditable, PointerController } from "./pointer";
 import { SelectionState } from "./selection";
 import { Toolbar } from "./toolbar";
-import { nearestPage, pageInFocus, pageWorldRect, Viewport } from "./viewport";
+import { focusPageOf, nearestPage, pageInFocus, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
 const blankDocument = (): Document => createDocument(DEFAULT_SETTINGS.defaultPreset);
@@ -314,13 +314,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   fitPage(): void {
-    this.fitPageTo(this.pinned() ?? this.currentPage());
+    this.fitPageTo(focusPageOf(this.pinnedPage, this.store.doc.pages, this.currentPage()));
   }
 
   /** Sets the zoom (1 is 100%) and puts the current page (or the page a right-click focused) in the middle of the stage. */
   zoomTo(z: number): void {
     const stage = this.stageSize();
-    const rect = this.pageRect(this.pinned() ?? this.currentPage());
+    const rect = this.pageRect(focusPageOf(this.pinnedPage, this.store.doc.pages, this.currentPage()));
     if (!rect || stage.width === 0 || stage.height === 0) return;
     this.viewport.centreOn({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, stage, z);
     this.applyViewport();
@@ -366,14 +366,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** The page of the selected nodes when something is selected, else `currentPage()`: what page-level commands and the Page inspector act on. */
   focusPage(): Page {
-    const nearest = this.pinned() ?? this.currentPage();
+    const nearest = focusPageOf(this.pinnedPage, this.store.doc.pages, this.currentPage());
     return pageInFocus(this.store.doc, this.selection.ids, nearest) ?? nearest;
-  }
-
-  /** The page a right-click focused (see `pinnedPage`), if it is still a page of the figure. */
-  private pinned(): Page | undefined {
-    const id = this.pinnedPage;
-    return id === null ? undefined : this.store.doc.pages.find((p) => p.id === id);
   }
 
   /**
@@ -383,8 +377,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   openContextMenu(where: MenuPlace, at: Pt | null, page: PageId | null): void {
     if (this.readOnly) return;
-    if (where === "page" && page !== null) {
-      this.pinnedPage = page;
+    // Each opening decides it afresh: a page menu pins its page, any other menu none, so it cannot outlive its menu.
+    const pinned = where === "page" ? page : null;
+    if (pinned !== this.pinnedPage) {
+      this.pinnedPage = pinned;
       this.renderChrome();
     }
     const box = this.stageEl.getBoundingClientRect();
@@ -411,7 +407,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   runCommand(command: Command): void {
     const ctx = this.commandContext();
     if (this.readOnly || !command.applies(ctx)) return;
+    // An undo step of its own, as a call's is (see `runCall`): it neither merges into the edit before it nor takes in the next.
+    this.store.endMerge();
     this.attempt(command, () => command.run(ctx));
+    this.store.endMerge();
   }
 
   /**

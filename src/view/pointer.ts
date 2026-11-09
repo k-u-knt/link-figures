@@ -1,3 +1,4 @@
+import { Platform } from "obsidian";
 import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { visualBounds } from "../model/arrange";
 import { SNAP_REACH_PX } from "../model/attach";
@@ -28,11 +29,11 @@ const SVG_NS = "http://www.w3.org/2000/svg";
  * How long (ms) after the keyboard opened the context menu a `contextmenu` event is taken to be the one the same key
  * sends (the Menu key, Shift+F10), and not to open a second menu.
  */
-const KEY_MENU_ECHO_MS = 1000;
+const KEY_MENU_ECHO_MS = 300;
 
 /** On a Mac a Control-click is a right-click: it opens the context menu and must not also press. */
 function isControlClick(ev: PointerEvent): boolean {
-  return ev.ctrlKey && ev.button === 0 && typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
+  return ev.ctrlKey && ev.button === 0 && Platform.isMacOS;
 }
 
 /** Text being typed into must keep its keys. */
@@ -900,8 +901,14 @@ export class PointerController {
     if (this.view.readOnly || isEditable(ev.target)) return;
     ev.preventDefault();
     // The Menu key or Shift+F10 has opened the menu already, and this is the event the same key sends after.
-    if (Date.now() - this.keyMenuAt < KEY_MENU_ECHO_MS) return;
+    // It is one-shot: a real right-click after the echo is not taken for one.
+    if (Date.now() - this.keyMenuAt < KEY_MENU_ECHO_MS) {
+      this.keyMenuAt = -Infinity;
+      return;
+    }
     if (this.cropSession.active) return;
+    // The menu is not for the tool: a right-click puts an armed one down.
+    if (this.view.armedTool) this.view.disarmTool();
     // A press that has not become a drag gives way (a Control-click the platform check missed); a drag under way keeps on.
     if (this.gesture.kind === "pressed") this.endGesture();
     else if (this.gesture.kind !== "idle") return;

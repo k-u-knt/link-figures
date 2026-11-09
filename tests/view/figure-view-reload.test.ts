@@ -1,9 +1,9 @@
 import { loadDocument } from "../../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
-import { createDocument, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
+import { createDocument, createPage, fileNodeDefaults, textNodeDefaults } from "../../src/model/defaults";
 import type { ChangeEvent } from "../../src/model/store";
 import type { Document, FileNode } from "../../src/model/types";
-import type { Command } from "../../src/registry/command";
+import type { Command, CommandContext } from "../../src/registry/command";
 import { LinkFiguresView } from "../../src/view/figure-view";
 import { TFile } from "obsidian";
 
@@ -38,6 +38,7 @@ vi.mock("obsidian", () => {
     normalizePath: (p: string) => p,
   };
 });
+vi.mock("../../src/view/context-menu", () => ({ showContextMenu: vi.fn() }));
 vi.mock("../../src/export/export-modal", () => ({ ExportModal: class {} }));
 vi.mock("../../src/links/intake", () => ({ Intake: class {} }));
 vi.mock("../../src/view/inspector", () => ({ Inspector: class {} }));
@@ -674,5 +675,32 @@ describe("a source renamed while a panel that links to it is deleted", () => {
     t.renames("plots/only-here-2.svg", "plots/only-here.svg");
     t.store.undo();
     expect(restored(t, t.gone.id)).toBe("only-here.svg");
+  });
+});
+
+describe("the right-click menu and the commands it runs", () => {
+  test("a page menu focuses its page only until the next menu: a canvas menu after it acts on the nearest page again", () => {
+    const t = setup();
+    (t.view as unknown as { stageEl: object }).stageEl = { ...(t.view as unknown as { stageEl: object }).stageEl, getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }) };
+    t.view.store.commit("add", (d) => void d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id))));
+    const [first, second] = t.view.store.doc.pages;
+    t.view.openContextMenu("page", { x: 1, y: 1 }, second.id);
+    expect(t.view.focusPage().id).toBe(second.id);
+    t.view.openContextMenu("canvas", { x: 1, y: 1 }, null);
+    expect(t.view.focusPage().id).toBe(first.id);
+  });
+
+  test("a command run from the toolbar or the menu is an undo step of its own, though it follows an edit of the same label at once", () => {
+    const t = setup();
+    const lock = { id: "lock", name: "Lock", applies: () => true, run: (ctx: CommandContext) => ctx.store.commit("node.update", (d: Document) => void (d.nodes[0].locked = true)) } as unknown as Command;
+    (t.view.plugin.registries as unknown as { commands: object }).commands = { get: (id: string) => (id === "lock" ? lock : undefined) };
+    t.view.store.commit("node.update", (d) => void (d.nodes[0].x = 40));
+    t.view.runCommandById("lock");
+    expect(t.view.store.doc.nodes[0]).toMatchObject({ x: 40, locked: true });
+    t.view.store.undo();
+    expect(t.view.store.doc.nodes[0]).toMatchObject({ x: 40 });
+    expect(t.view.store.doc.nodes[0].locked).toBeFalsy();
+    t.view.store.undo();
+    expect(t.view.store.doc.nodes[0].x).not.toBe(40);
   });
 });

@@ -1,4 +1,4 @@
-import { Viewport, nearestPage, pageInFocus, pagePointAt, pageWorldRect } from "../../src/view/viewport";
+import { Viewport, focusPageOf, nearestPage, pageInFocus, pagePointAt, pageWorldRect } from "../../src/view/viewport";
 import { createDocument, createPage } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -116,5 +116,22 @@ describe("pageInFocus", () => {
     d.nodes.push({ id: "p-orphan", page: "pg-gone" } as any);
     expect(pageInFocus(d, ["p-gone", "p-orphan", "p-on-2"], d.pages[0])).toBe(d.pages[1]);
     expect(pageInFocus(d, ["p-gone", "p-orphan"], d.pages[0])).toBe(d.pages[0]);
+  });
+});
+
+describe("focusPageOf", () => {
+  const doc = () => {
+    const d = createDocument("a4-portrait");
+    d.pages.push(createPage("a4-portrait", d.pages.map((p) => p.id)));
+    return d;
+  };
+  test("a pinned page that is still a page wins over the current one", () => {
+    const d = doc();
+    expect(focusPageOf(d.pages[1].id, d.pages, d.pages[0])).toBe(d.pages[1]);
+  });
+  test("no pin, or a pin whose page is gone, is the current page", () => {
+    const d = doc();
+    expect(focusPageOf(null, d.pages, d.pages[0])).toBe(d.pages[0]);
+    expect(focusPageOf("gone", d.pages, d.pages[0])).toBe(d.pages[0]);
   });
 });

@@ -1,5 +1,5 @@
 import { pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint, type Pt, type Rect } from "../model/geometry";
-import type { Document, NodeId, Page } from "../model/types";
+import type { Document, NodeId, Page, PageId } from "../model/types";
 
 export interface Size {
   width: number;
@@ -106,4 +106,12 @@ export function pageInFocus(doc: Document, selection: readonly NodeId[], nearest
     if (page) return page;
   }
   return nearest;
+}
+
+/**
+ * The page a page-level command acts on before the selection is asked: the page a right-click focused (`pinned`) while it
+ * is still one of `pages`, else `nearest`, the page the stage is centred on.
+ */
+export function focusPageOf(pinned: PageId | null, pages: readonly Page[], nearest: Page): Page {
+  return (pinned === null ? undefined : pages.find((p) => p.id === pinned)) ?? nearest;
 }

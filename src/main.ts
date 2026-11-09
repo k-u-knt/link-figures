@@ -166,7 +166,6 @@ export default class LinkFiguresPlugin extends Plugin {
     return best;
   }
 
-  /** The file at vault path `path`; a `CommandError` when there is none. */
   /** Notes as `noteBlockId` reads and writes them: by path, through the cache, an open Markdown editor, and `vault.process`. */
   private noteHost(): NoteHost {
     const { vault, metadataCache, workspace } = this.app;
@@ -174,22 +173,44 @@ export default class LinkFiguresPlugin extends Plugin {
       const file = vault.getAbstractFileByPath(path);
       return file instanceof TFile ? file : null;
     };
+    const markdownView = (path: string): MarkdownView | null => {
+      for (const leaf of workspace.getLeavesOfType("markdown")) {
+        if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) return leaf.view;
+      }
+      return null;
+    };
     return {
       resolve: (path) => (note(path) ?? note(`${path}.md`))?.path ?? null,
       cache: (path) => {
         const file = note(path);
         return file ? metadataCache.getFileCache(file) : null;
       },
-      editor: (path) => {
-        for (const leaf of workspace.getLeavesOfType("markdown")) {
-          if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) return leaf.view.editor;
-        }
-        return null;
-      },
+      read: (path) => vault.cachedRead(this.vaultFile(path)),
+      editor: (path) => markdownView(path)?.editor ?? null,
+      saveAndReindex: (path, timeoutMs) =>
+        new Promise<boolean>((resolve) => {
+          // Listening before the save, so the event cannot come first.
+          const ref = metadataCache.on("changed", (file) => {
+            if (file.path === path) done(true);
+          });
+          const timer = window.setTimeout(() => done(false), timeoutMs);
+          const done = (indexed: boolean) => {
+            window.clearTimeout(timer);
+            metadataCache.offref(ref);
+            resolve(indexed);
+          };
+          const view = markdownView(path);
+          if (!view) done(false);
+          else view.save().catch((error: unknown) => {
+            console.error(`Link Figures: could not save ${path}`, error);
+            done(false);
+          });
+        }),
       process: async (path, edit) => void (await vault.process(this.vaultFile(path), edit)),
     };
   }
 
+  /** The file at vault path `path`; a `CommandError` when there is none. */
   private vaultFile(path: string): TFile {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
     if (!(file instanceof TFile)) throw new CommandError(`there is no file "${path}"`);

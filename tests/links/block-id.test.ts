@@ -2,6 +2,7 @@ import {
   blockAt,
   blockIdInText,
   blockIdPrefix,
+  blockMatchesText,
   existingBlockId,
   idPlacement,
   idsInText,
@@ -89,8 +90,8 @@ describe("idPlacement", () => {
   test.each([
     ["paragraph", "end"],
     ["listItem", "end"],
-    ["blockquote", "end"],
-    ["callout", "end"],
+    ["blockquote", "own-line"],
+    ["callout", "own-line"],
     ["table", "own-line"],
     ["code", "own-line"],
     ["math", "own-line"],
@@ -174,8 +175,30 @@ describe("insertBlockId", () => {
     expect(out.split("\n").slice(5, 9)).toEqual(["- one", "- two ^fig-0001", "  - nested", "- three"]);
   });
 
-  test("a quote gets it at the end of its last line", () => {
-    expect(insertBlockId("> a\n> b\n\nnext", { type: "blockquote", start: 0, end: 1 }, "q-1")).toBe("> a\n> b ^q-1\n\nnext");
+  test("a quote or a callout gets it on a line of its own after it", () => {
+    expect(insertBlockId("> a\n> b\n\nnext", { type: "blockquote", start: 0, end: 1 }, "q-1")).toBe("> a\n> b\n\n^q-1\n\nnext");
+    expect(insertBlockId("> [!note]\n> b\nnext", { type: "callout", start: 0, end: 1 }, "c-1")).toBe("> [!note]\n> b\n\n^c-1\n\nnext");
+  });
+
+  test("a list item that ends in a code fence gets it on its own line inside the item, at the item's content column", () => {
+    const text = ["- item", "  ```js", "  x = 1", "  ```", "- next"].join("\n");
+    expect(insertBlockId(text, { type: "listItem", start: 0, end: 3 }, "fig-1")).toBe(["- item", "  ```js", "  x = 1", "  ```", "", "  ^fig-1", "- next"].join("\n"));
+  });
+
+  test("a numbered item that ends in a table, followed by text, gets a blank line after the id too", () => {
+    const text = ["1. item", "   | a |", "   | - |", "   | 1 |", "After."].join("\n");
+    expect(insertBlockId(text, { type: "listItem", start: 0, end: 3 }, "fig-2")).toBe(["1. item", "   | a |", "   | - |", "   | 1 |", "", "   ^fig-2", "", "After."].join("\n"));
+  });
+
+  test("a nested item that ends in display math, at the end of the note", () => {
+    const text = ["- a", "  - b", "    $$", "    x^2", "    $$"].join("\n");
+    expect(insertBlockId(text, { type: "listItem", start: 1, end: 4 }, "fig-3")).toBe([...text.split("\n"), "", "    ^fig-3"].join("\n"));
+  });
+
+  test("an id on its own line inside an item that ends in a fence is found", () => {
+    const lines = ["- item", "  ```", "  x", "  ```", "", "  ^fig-9", "- next"];
+    expect(blockIdInText(lines, { type: "listItem", start: 0, end: 3 })).toBe("fig-9");
+    expect(blockIdInText(lines, { type: "listItem", start: 0, end: 5 })).toBe("fig-9");
   });
 
   test("Windows line endings are kept", () => {
@@ -192,6 +215,11 @@ describe("insertBlockId", () => {
     expect(out.split("\n").slice(14)).toEqual(["```js", "x = 1", "```", "", "^fig-c001", "", "Next paragraph right after the fence."]);
   });
 
+  test("an id on its own line takes the note's own line ending, even after a last line without one", () => {
+    expect(insertBlockId("```\r\nx\r\n```", { type: "code", start: 0, end: 2 }, "c-1")).toBe("```\r\nx\r\n```\r\n\r\n^c-1");
+    expect(insertBlockId("| a |\r\n| - |\r\n\r\nnext\r\n", { type: "table", start: 0, end: 1 }, "t-1")).toBe("| a |\r\n| - |\r\n\r\n^t-1\r\n\r\nnext\r\n");
+  });
+
   test("a code block at the very end of the note", () => {
     expect(insertBlockId("```\nx\n```", { type: "code", start: 0, end: 2 }, "c-1")).toBe("```\nx\n```\n\n^c-1");
     expect(insertBlockId("```\nx\n```\n", { type: "code", start: 0, end: 2 }, "c-1")).toBe("```\nx\n```\n\n^c-1\n");
@@ -204,5 +232,29 @@ describe("insertBlockId", () => {
 
   test("a block past the end of the text is refused", () => {
     expect(() => insertBlockId("one line", { type: "paragraph", start: 3, end: 4 }, "x-1")).toThrow(/changed/);
+  });
+});
+
+describe("blockMatchesText", () => {
+  const at = (line: number, col: number, offset: number) => ({ line, col, offset });
+  const text = "# T\n\nPara one.\n";
+  const block = { type: "paragraph", start: 2, end: 2, locs: [at(2, 0, 5), at(2, 9, 14)] };
+  test("holds when each place's offset is its line and column in the text", () => {
+    expect(blockMatchesText(text, block)).toBe(true);
+  });
+  test("fails for text with a line more above the block, or text too short", () => {
+    expect(blockMatchesText("# T\n\n\nPara one.\n", block)).toBe(false);
+    expect(blockMatchesText("# T", block)).toBe(false);
+  });
+  test("places without offsets are not checked", () => {
+    expect(blockMatchesText("x", { type: "paragraph", start: 0, end: 0, locs: [{ line: 0 }] })).toBe(true);
+  });
+  test("blockAt gives the section's places, and the list item's", () => {
+    const cache = {
+      sections: [{ type: "list", position: { start: at(0, 0, 0), end: at(1, 5, 11) } }],
+      listItems: [{ position: { start: at(0, 0, 0), end: at(0, 5, 5) } }, { position: { start: at(1, 0, 6), end: at(1, 5, 11) } }],
+    };
+    expect(blockAt(cache, 1)?.locs).toEqual([at(0, 0, 0), at(1, 5, 11), at(1, 0, 6), at(1, 5, 11)]);
+    expect(blockMatchesText("- one\n- two", blockAt(cache, 1)!)).toBe(true);
   });
 });

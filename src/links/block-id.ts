@@ -2,15 +2,23 @@
  * Block ids (`^id`) in a note, pure: which block a line is in (from Obsidian's metadata cache), whether it already has
  * an id, a new id, and where a new one is written. `note-block-id` (`noteBlockId`) is what reads and writes notes.
  *
- * A block id goes where Obsidian looks for one: at the end of the block's last line after a space, or, for a block
- * whose last line cannot carry text (a table, a code or math block), on a line of its own after the block, set off by
- * blank lines. A heading is never given one: it is linked by its heading (`#Heading`).
+ * A block id goes where Obsidian looks for one: at the end of a paragraph's or list item's last line after a space, or,
+ * for a structured block (a table, a code or math block, a quote, a callout), on a line of its own after the block, set
+ * off by blank lines. A list item whose last line cannot carry text (it closes a fence, or is a table row) gets it on a
+ * line of its own inside the item. A heading is never given one: it is linked by its heading (`#Heading`).
  */
+
+/** A place in a note as Obsidian's cache gives it: 0-based line, and (when given) column and offset in the text. */
+export interface Loc {
+  line: number;
+  col?: number;
+  offset?: number;
+}
 
 /** Lines `start.line`..`end.line` (0-based, inclusive), as Obsidian's cache gives a position. */
 export interface LinePos {
-  start: { line: number };
-  end: { line: number };
+  start: Loc;
+  end: Loc;
 }
 
 /** A section of Obsidian's cache (`SectionCache`): its type, its lines, and its block id when it has one. */
@@ -47,13 +55,15 @@ export interface Block {
   start: number;
   end: number;
   id?: string;
+  /** The cache's own places for the block (its section's, and its list item's), to check against the text (`blockMatchesText`). */
+  locs?: Loc[];
 }
 
 /** Where a block's id is written: at the end of its last line, on a line of its own after it, or (null) nowhere. */
 export type IdPlacement = "end" | "own-line" | null;
 
-const END_TYPES = new Set(["paragraph", "listItem", "blockquote", "callout"]);
-const OWN_LINE_TYPES = new Set(["table", "code", "math"]);
+const END_TYPES = new Set(["paragraph", "listItem"]);
+const OWN_LINE_TYPES = new Set(["table", "code", "math", "blockquote", "callout"]);
 
 export function idPlacement(type: string): IdPlacement {
   if (END_TYPES.has(type)) return "end";
@@ -79,10 +89,34 @@ export function blockAt(cache: BlocksCache, line: number): Block | null {
       // An item's range may take in the items nested in it; its own lines end where the next item starts.
       const next = Math.min(...items.map((i) => i.position.start.line).filter((s) => s > start));
       const end = Math.min(item.position.end.line, next - 1);
-      return { type: "listItem", start, end, ...(item.id ? { id: item.id } : {}) };
+      const locs = [section.position.start, section.position.end, item.position.start, item.position.end];
+      return { type: "listItem", start, end, locs, ...(item.id ? { id: item.id } : {}) };
     }
   }
-  return { type: section.type, start: section.position.start.line, end: section.position.end.line, ...(section.id ? { id: section.id } : {}) };
+  const locs = [section.position.start, section.position.end];
+  return { type: section.type, start: section.position.start.line, end: section.position.end.line, locs, ...(section.id ? { id: section.id } : {}) };
+}
+
+/**
+ * Whether the cache's places for `block` still hold in `text`: each one's offset is where its line and column are,
+ * within the text. False means the cache was made from other text (the note changed since it was indexed); a place
+ * without a column or offset is not checked.
+ */
+export function blockMatchesText(text: string, block: Block): boolean {
+  const lines = text.split("\n");
+  // A block neither starts nor ends on a blank line.
+  if (lines[block.start] === undefined || isBlank(lines[block.start]) || lines[block.end] === undefined || isBlank(lines[block.end])) return false;
+  const lineStarts: number[] = [];
+  let at = 0;
+  for (const line of lines) {
+    lineStarts.push(at);
+    at += line.length + 1;
+  }
+  return (block.locs ?? []).every((loc) => {
+    if (loc.col === undefined || loc.offset === undefined) return true;
+    const line = lines[loc.line];
+    return line !== undefined && loc.col <= line.length && lineStarts[loc.line] + loc.col === loc.offset;
+  });
 }
 
 /** The id the cache has for `block`: its own, else a cached block id within its lines; null when it has none. */
@@ -101,6 +135,18 @@ const OWN_LINE_ID = /^[ \t]*\^([A-Za-z0-9-]+)[ \t]*\r?$/;
 
 const isBlank = (line: string | undefined) => line !== undefined && line.trim() === "";
 
+/** A line that cannot carry an id at its end: one that closes a code or math fence, or a table row. */
+const CLOSING_LINE = /^\s*(?:`{3,}|~{3,}|\$\$)\s*$|\$\$\s*$|^\s*\||\|\s*\r?$/;
+/** A list item's first line: the indent, the marker and the spaces after it, which together give its content column. */
+const LIST_MARKER = /^(\s*)([-*+]|\d{1,9}[.)])( {1,4}|\t|$)/;
+
+/** Whether `block`'s id goes on a line of its own: a structured block, or a block ending in a line that cannot carry it. */
+function idOnOwnLine(lines: readonly string[], block: Block): boolean {
+  if (idPlacement(block.type) === "own-line") return true;
+  const last = lines[block.end];
+  return last !== undefined && CLOSING_LINE.test(last);
+}
+
 /**
  * The id written in the note's `lines` for `block`: at the end of its last line, or, for a block whose id goes on a line
  * of its own, on the next line or the one after a blank line. Null when there is none (or the block is past the text).
@@ -108,11 +154,18 @@ const isBlank = (line: string | undefined) => line !== undefined && line.trim() 
 export function blockIdInText(lines: readonly string[], block: Block): string | null {
   const last = lines[block.end];
   if (last === undefined) return null;
-  if (idPlacement(block.type) === "own-line") {
-    const next = isBlank(lines[block.end + 1]) ? lines[block.end + 2] : lines[block.end + 1];
-    return next === undefined ? null : (OWN_LINE_ID.exec(next)?.[1] ?? null);
-  }
-  return END_ID.exec(last)?.[1] ?? null;
+  const atEnd = END_ID.exec(last)?.[1];
+  if (atEnd) return atEnd;
+  if (!idOnOwnLine(lines, block)) return null;
+  const next = isBlank(lines[block.end + 1]) ? lines[block.end + 2] : lines[block.end + 1];
+  return next === undefined ? null : (OWN_LINE_ID.exec(next)?.[1] ?? null);
+}
+
+/** The note's line ending: CRLF when most of its line breaks are, else LF. */
+function dominantEol(lines: readonly string[]): string {
+  let crlf = 0;
+  for (let i = 0; i < lines.length - 1; i++) if (lines[i].endsWith("\r")) crlf++;
+  return crlf * 2 > lines.length - 1 ? "\r\n" : "\n";
 }
 
 /** Every block id written in `text`, in order. */
@@ -152,9 +205,11 @@ export interface TextInsertion {
 }
 
 /**
- * The insertion that gives `block` the id `id`: ` ^id` at the end of its last line, or, for a table, code or math block,
- * `^id` on a line of its own after it with a blank line before (and one after when text follows at once). Throws for a
- * heading (linked by its heading instead), a block that cannot hold an id, and a block past the end of `lines`.
+ * The insertion that gives `block` the id `id`: ` ^id` at the end of a paragraph's or list item's last line, or `^id` on a
+ * line of its own after a structured block with a blank line before (and one after when text follows at once), in the
+ * note's own line ending. A list item that ends in a fence or a table row gets it on a line of its own inside the item,
+ * indented to the item's content. Throws for a heading (linked by its heading instead), a block that cannot hold an id,
+ * and a block past the end of `lines`.
  */
 export function blockIdInsertion(lines: readonly string[], block: Block, id: string): TextInsertion {
   const placement = idPlacement(block.type);
@@ -164,11 +219,19 @@ export function blockIdInsertion(lines: readonly string[], block: Block, id: str
   if (last === undefined) throw new Error("The note has changed since it was indexed; try again");
   const cr = last.endsWith("\r");
   const ch = cr ? last.length - 1 : last.length;
-  if (placement === "end") return { line: block.end, ch, text: ` ^${id}` };
-  const eol = cr ? "\r\n" : "\n";
+  if (!idOnOwnLine(lines, block)) return { line: block.end, ch, text: ` ^${id}` };
+  const eol = dominantEol(lines);
   const next = lines[block.end + 1];
-  const after = next !== undefined && !isBlank(next) ? eol : "";
-  return { line: block.end, ch, text: `${eol}${eol}^${id}${after}` };
+  let indent = "";
+  let after = next !== undefined && !isBlank(next) ? eol : "";
+  if (placement === "end") {
+    // Inside the item, at its content column, so it stays the item's; text that follows at once and is not the next
+    // item would run on into the id's paragraph, so it gets a blank line too.
+    const marker = LIST_MARKER.exec(lines[block.start] ?? "");
+    if (marker) indent = " ".repeat(marker[1].replace(/\t/g, "    ").length + marker[2].length + Math.max(1, marker[3].length));
+    if (next !== undefined && LIST_MARKER.test(next)) after = "";
+  }
+  return { line: block.end, ch, text: `${eol}${eol}${indent}^${id}${after}` };
 }
 
 /** `text` with `block` given the id `id` (see `blockIdInsertion`); nothing else in it changes. */

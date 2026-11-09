@@ -164,8 +164,9 @@ export class LinkFiguresSettingTab extends PluginSettingTab {
           .setPlaceholder(DEFAULT_SETTINGS.blockIdPrefix)
           .setValue(settings.blockIdPrefix)
           .onChange(async (value) => {
-            // What an id cannot hold is left out; an empty field is the default.
+            // What an id cannot hold is left out, and the field shows what is kept; an empty field (the placeholder) is the default.
             settings.blockIdPrefix = blockIdPrefix(value);
+            if (value !== "" && value !== settings.blockIdPrefix) text.setValue(settings.blockIdPrefix);
             await this.owner.saveSettings();
           }),
       );

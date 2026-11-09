@@ -260,7 +260,7 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
         show();
       });
     }
-    control.addEventListener("change", () => {
+    const commit = (): void => {
       typedInto.delete(control);
       if (field.kind === "toggle") {
         const checked = (control as HTMLInputElement).checked;
@@ -273,7 +273,27 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
       } else write(field.key, control.value);
       // What the model kept (clamped, rounded, refused) is what is shown.
       show();
+    };
+    // What Enter committed: the browser still sends `change` for it when the field is left, and that must not write again.
+    let enterCommitted: string | null = null;
+    control.addEventListener("input", () => (enterCommitted = null));
+    control.addEventListener("change", () => {
+      if (enterCommitted !== null && enterCommitted === control.value) {
+        enterCommitted = null;
+        return;
+      }
+      commit();
     });
+    if (field.kind === "number" || field.kind === "text") {
+      // Enter commits like leaving the field does; the default action (a second `change`) is cancelled so it is written once.
+      control.addEventListener("keydown", (e: Event) => {
+        const ev = e as KeyboardEvent;
+        if (ev.key !== "Enter" || ev.isComposing) return;
+        ev.preventDefault();
+        commit();
+        enterCommitted = control.value;
+      });
+    }
   }
 }
 

@@ -229,6 +229,26 @@ describe("updating", () => {
     expect(width.value).toBe("120");
   });
 
+  test("Enter in a number field commits it once; the blur that follows writes nothing more", () => {
+    const { el, store } = setup();
+    const width = el.typeOnly("width", "150");
+    let prevented = false;
+    width.fire("keydown", { key: "Enter", preventDefault: () => void (prevented = true) });
+    expect(store.doc.pages[0].width).toBe(150);
+    expect(prevented).toBe(true);
+    const before = store.doc;
+    // The browser still sends `change` when the field is left: it is the value Enter already wrote.
+    width.fire("change");
+    width.fire("blur");
+    expect(store.doc).toBe(before);
+    expect(width.value).toBe("150");
+    // Typing something else afterwards is a new commit.
+    width.value = "160";
+    width.fire("input");
+    width.fire("change");
+    expect(store.doc.pages[0].width).toBe(160);
+  });
+
   test("a control that is being typed into is left alone, until it is committed or left", () => {
     const { el, store } = setup();
     const width = el.typeOnly("width", "12");

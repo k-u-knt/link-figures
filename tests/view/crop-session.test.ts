@@ -29,6 +29,11 @@ class FakeStage {
   hasPointerCapture = () => false;
   releasePointerCapture = () => {};
   focus = () => {};
+  readonly classes = new Set<string>();
+  classList = {
+    toggle: (name: string, on?: boolean) => void ((on ?? !this.classes.has(name)) ? this.classes.add(name) : this.classes.delete(name)),
+    remove: (name: string) => void this.classes.delete(name),
+  };
 }
 
 class FakeBox {
@@ -127,7 +132,7 @@ function setup(build: (doc: Document) => void) {
     return out;
   };
   const session = () => controller.cropSession;
-  return { doc, view, controller, options, notices, activated, labels, overlay, pointer, drag, dblclick, key, node, box, imageOnPage, byClass, session };
+  return { stage, doc, view, controller, options, notices, activated, labels, overlay, pointer, drag, dblclick, key, node, box, imageOnPage, byClass, session };
 }
 
 /** A 200×100 image panel `p` at (10, 10), 200×100, showing the whole image; and any more nodes `more` builds. */
@@ -238,6 +243,21 @@ describe("crop session", () => {
     view.store.undo();
     expect(view.store.doc.nodes[0].x).toBe(10);
     expect(view.store.canUndo()).toBe(false);
+  });
+
+  test("the pan cursor class is on inside the box away from the handles, and off over a handle or outside", () => {
+    const { controller, pointer, stage } = setup(panel());
+    controller.startCrop("p");
+    pointer("pointermove", 110, 60);
+    expect(stage.classes.has("lf-crop-pan")).toBe(true);
+    pointer("pointermove", 210, 60);
+    expect(stage.classes.has("lf-crop-pan")).toBe(false);
+    pointer("pointermove", 110, 60);
+    pointer("pointermove", 12, 12);
+    expect(stage.classes.has("lf-crop-pan")).toBe(false);
+    pointer("pointermove", 110, 60);
+    pointer("pointermove", 400, 300);
+    expect(stage.classes.has("lf-crop-pan")).toBe(false);
   });
 
   test("Escape during a drag puts the crop back as the drag found it; Escape with no drag then cancels the session", () => {

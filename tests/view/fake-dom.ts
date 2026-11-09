@@ -20,7 +20,7 @@ export class FakeEl {
   value = "";
   checked = false;
   disabled = false;
-  private readonly listeners = new Map<string, (() => void)[]>();
+  private readonly listeners = new Map<string, ((ev?: any) => void)[]>();
 
   constructor(readonly tag: string, readonly ownerDocument: FakeDocument = { activeElement: null }) {}
 
@@ -47,13 +47,13 @@ export class FakeEl {
     this.children = [];
   }
 
-  addEventListener(type: string, fn: () => void): void {
+  addEventListener(type: string, fn: (ev?: any) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
 
   /** What the browser does when the user does something to the control. */
-  fire(type: string): void {
-    for (const fn of this.listeners.get(type) ?? []) fn();
+  fire(type: string, ev?: object): void {
+    for (const fn of this.listeners.get(type) ?? []) fn(ev);
   }
 
   focus(): void {

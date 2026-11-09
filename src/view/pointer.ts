@@ -569,14 +569,16 @@ export class PointerController {
 
   // Crop mode
 
-  /** The stage shows the move cursor (`.lf-crop-pan`) while the pointer is over the box of the panel being cropped. */
+  /** The stage shows the move cursor (`.lf-crop-pan`) while the pointer is over the box of the panel being cropped, away from its handles. */
   private cropHover(ev: PointerEvent): void {
     const crop = this.cropSession;
     let inside = false;
     if (crop.active) {
       const origin = pageOriginsPx(this.store.doc).get(crop.pageId() ?? "");
       const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-      inside = !!origin && crop.contains({ x: world.x - origin.x, y: world.y - origin.y });
+      const at = origin ? { x: world.x - origin.x, y: world.y - origin.y } : null;
+      // Over a handle (the press would grab it, not pan) the cursor is the handle's own.
+      inside = !!at && !crop.handleAt(at, HANDLE_GRAB_PX / this.view.viewport.zoom) && crop.contains(at);
     }
     this.stage?.classList?.toggle("lf-crop-pan", inside);
   }

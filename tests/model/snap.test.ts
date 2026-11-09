@@ -44,6 +44,22 @@ describe("snapMove", () => {
     const r = snapMove({ ...none, x: [line(100, "item", "a"), line(100, "item", "b"), line(103)] }, rect(98, 0, 200), 6);
     expect(r.guides.map((g) => g.source)).toEqual(["a", "b"]);
   });
+  test("every line that meets the snapped bounds shows as a guide, not only the winner's (finding 4)", () => {
+    // b's top (200) is 3 from a's top (203), and b's middle (210) 3 from c's middle (213): one shift lands both.
+    const lines = [line(213, "item", "c"), line(203, "item", "a"), line(250, "item", "z")];
+    const r = snapMove({ ...none, y: lines }, rect(0, 200, 10, 20), 6);
+    expect(r.dy).toBe(3);
+    expect(r.guides.map((g) => [g.source, g.pos])).toEqual([["a", 203], ["c", 213]]);
+  });
+  test("the guides come in one order whatever the order of the lines or which feature won a near tie: kind, then source, then pos", () => {
+    // Top, middle and bottom (200, 210, 220) each come 3 (or 3 and a hair) short of a line.
+    const lines = [line(213.000000001, "item", "c"), line(203, "item", "a"), line(223, "margin", "margins"), line(213.000000001, "page", "page")];
+    const orders = [lines, [...lines].reverse(), [lines[2], lines[0], lines[3], lines[1]]];
+    const seen = orders.map((ls) => snapMove({ ...none, y: ls }, rect(0, 200, 10, 20), 6).guides.map((g) => `${g.kind}:${g.source}:${g.pos}`));
+    expect(seen[0]).toEqual(["page:page:213.000000001", "margin:margins:223", "item:a:203", "item:c:213.000000001"]);
+    expect(seen[1]).toEqual(seen[0]);
+    expect(seen[2]).toEqual(seen[0]);
+  });
   test("x and y snap independently", () => {
     const r = snapMove({ x: [line(100)], y: [line(50)] }, rect(98, 200, 200, 200), 6);
     expect(r.dx).toBe(2);
@@ -136,13 +152,18 @@ describe("builtin sources", () => {
     expect(x.some((l) => ["a", "b", "g"].includes(l.source))).toBe(false);
     expect(x.filter((l) => l.source === "c")).toHaveLength(3);
   });
-  test("items: a connector attached to an excluded item gives no lines", () => {
-    const withLine: Document = {
+  test("items: a connector is not a snap target, attached or free; its box has the stroke and caps round its path (finding 5)", () => {
+    const withLines: Document = {
       ...doc,
-      nodes: [...doc.nodes, connectorNodeDefaults(page, { id: "k", ends: [{ kind: "attached", node: "c", snap: "center" }, { kind: "free", x: 500, y: 500 }] }, [])],
+      nodes: [
+        ...doc.nodes,
+        connectorNodeDefaults(page, { id: "k", ends: [{ kind: "attached", node: "c", snap: "center" }, { kind: "free", x: 500, y: 500 }] }, []),
+        connectorNodeDefaults(page, { id: "f", ends: [{ kind: "free", x: 600, y: 100 }, { kind: "free", x: 700, y: 150 }] }, []),
+      ],
     };
-    expect(source("items").lines(withLine, page, new Set(["c"]), r).x.some((l) => l.source === "k")).toBe(false);
-    expect(source("items").lines(withLine, page, new Set(), r).x.some((l) => l.source === "k")).toBe(true);
+    const { x, y } = source("items").lines(withLines, page, new Set(), r);
+    expect([...x, ...y].some((l) => l.source === "k" || l.source === "f")).toBe(false);
+    expect(x.filter((l) => l.source === "c")).toHaveLength(3);
   });
   test("page: edges and centre lines", () => {
     const { w, h } = { w: pageSizePx(page).width, h: pageSizePx(page).height };

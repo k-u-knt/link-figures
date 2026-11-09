@@ -1,5 +1,5 @@
 import { current, isDraft } from "immer";
-import { resolveConnector } from "../connectors/geometry";
+import { isConnector, resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
 import { attachTarget, nearestAnchor } from "./attach";
 import { pageOriginsPx, type Pt } from "./geometry";
@@ -28,8 +28,6 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
   store.addNormaliser(groupNormaliser(registries));
   return store;
 }
-
-const isConnector = (n: { type: string }): n is ConnectorNode => n.type === "connector";
 
 /**
  * Keeps every connector in step with what its ends are attached to:

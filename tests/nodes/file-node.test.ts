@@ -41,6 +41,17 @@ test("the inspector offers a Page field for pdf and tiff targets only", () => {
   expect(fileNodeType.inspector(node({ file: "v1.2/analysis", show: "content" }), noCtx)).toEqual([FRAME_TOGGLE]);
 });
 
+test("an image panel the view shows only a badge for gets no crop fields; headless (no view) it keeps them", () => {
+  const ctx = (state: string) => ({ ...noCtx, imageStateNow: () => state as never });
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), ctx("none"))).toEqual([FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), ctx("loading"))).toEqual([...CROP, FRAME_TOGGLE]);
+  expect(fileNodeType.inspector(node({ file: "plot.png" }), ctx("image"))).toEqual([...CROP, FRAME_TOGGLE]);
+  const route = fileNodeType.fieldRoute!("crop.left")!;
+  const doc = { version: 1, pages: [page], nodes: [], edges: [] } as never;
+  expect(route.applies!(node({}), doc, ctx("none"))).toBe(false);
+  expect(route.applies!(node({}), doc, ctx("image"))).toBe(true);
+});
+
 test("an image panel's crop insets are read from its crop and written by panel.crop, keeping the image", () => {
   const n = node({ crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
   const read = (key: string) => fileNodeType.fieldRoute!(key)!.read(n) as number;
@@ -139,6 +150,24 @@ describe("the picture on the stage", () => {
     return { n, renderer, frame, img, load };
   }
   const box = (el: FakeEl) => [el.style.left, el.style.top, el.style.width, el.style.height];
+
+  test("says whether it shows an image: loading until it has loaded, then image; none for a badge (a link that does not resolve, or an image that failed)", () => {
+    const state = (r: unknown) => (r as { imageStateNow(): string }).imageStateNow();
+    const { renderer, img, load } = mounted({});
+    expect(state(renderer)).toBe("loading");
+    load();
+    expect(state(renderer)).toBe("image");
+    img.fire("error");
+    expect(state(renderer)).toBe("none");
+
+    const missing = { kind: "missing", reason: "subpath", deps: [] };
+    const host = new FakeEl();
+    const badge = fileNodeType.mount(node({}), host as unknown as HTMLElement, { resolved: () => missing, openLink: () => {}, component: {} } as never);
+    expect(state(badge)).toBe("none");
+    const pending = fileNodeType.mount(node({}), new FakeEl() as unknown as HTMLElement, { resolved: () => undefined, openLink: () => {}, component: {} } as never);
+    expect(state(pending)).toBe("loading");
+  });
+
   const rightHalf = { x: 0.5, y: 0, w: 0.5, h: 1 };
 
   test("with contain, the frame is the crop's region and the whole image sits inside it, offset", () => {

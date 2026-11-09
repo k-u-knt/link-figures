@@ -6,7 +6,8 @@ import type { Document, Node, NodeId } from "./types";
 enablePatches();
 
 export interface ChangeEvent {
-  kind: "commit" | "undo" | "redo" | "replace";
+  /** `history`: only what there is to undo or redo changed (the document did not), see `discardRedo`. */
+  kind: "commit" | "undo" | "redo" | "replace" | "history";
   label: string;
   /** Exactly the nodes that were added, removed or edited; drives per-node re-rendering. */
   changedNodeIds: Set<NodeId>;
@@ -109,9 +110,15 @@ export class DocumentStore {
     this.mergeTarget = null;
   }
 
-  /** Forgets every step there is to redo: for an edit taken back as though it had never been made (a cancelled crop session). */
+  /**
+   * Forgets every step there is to redo: for an edit taken back as though it had never been made (a cancelled crop
+   * session). When there was something to forget, a `history` event (naming no node) tells the subscribers, so that
+   * what shows whether there is anything to redo (the toolbar's Redo) follows.
+   */
   discardRedo(): void {
+    if (this.redoStack.length === 0) return;
     this.redoStack = [];
+    this.emit({ kind: "history", label: "discardRedo", changedNodeIds: new Set(), pagesChanged: false });
   }
 
   canUndo(): boolean {

@@ -1,5 +1,5 @@
 import { MIN_NODE_PX } from "../constants";
-import { cropPlacement, type Pt, type Rect } from "../model/geometry";
+import { cropPlacement, visibleCrop, type Pt, type Rect } from "../model/geometry";
 import { isLocked } from "../model/groups";
 import { snapEdges, type SnapLines } from "../model/snap";
 import type { DocumentStore } from "../model/store";
@@ -138,7 +138,7 @@ export class CropSession {
     const placed = cropPlacement(node, natural, node.crop, node.fit);
     const image = { x: node.x + placed.image.x, y: node.y + placed.image.y, width: placed.image.width, height: placed.image.height };
     const visible = { x: node.x + placed.region.x, y: node.y + placed.region.y, width: placed.region.width, height: placed.region.height };
-    const crop = cropOf(visible, image);
+    const crop = visibleCrop(node, natural);
     const normalised = rectsClose(visible, boxOf(node)) && cropsClose(crop, node.crop ?? { x: 0, y: 0, w: 1, h: 1 });
     const snap = handle === "pan" ? null : this.host.snapLines(node.page, [node.id]);
     // A handle sits on the box, but moves the visible region's edge (they differ on a letterboxed contain panel): the press

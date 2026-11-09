@@ -3,7 +3,7 @@ import { resolveFileNode } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
-import type { NodeRenderer, RenderContext } from "../registry/node-type";
+import type { ImageState, NodeRenderer, RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
@@ -14,6 +14,8 @@ interface MeasuringRenderer extends NodeRenderer {
   naturalSizeNow(): { width: number; height: number } | null;
   /** The URL the image was loaded from, if it has loaded; else null. */
   imageSourceNow?(): string | null;
+  /** Whether it shows an image now (see `ImageState`). */
+  imageStateNow?(): ImageState;
 }
 
 function isMeasuring(renderer: NodeRenderer): renderer is MeasuringRenderer {
@@ -150,6 +152,15 @@ export class NodeHost {
   naturalSizeNow(id: NodeId): { width: number; height: number } | null {
     const renderer = this.entries.get(id)?.renderer;
     return renderer && isMeasuring(renderer) ? renderer.naturalSizeNow() : null;
+  }
+
+  /**
+   * Whether node `id` shows an image now (see `ImageState`): `none` for a panel that shows only its badge; null for a
+   * node that is not drawn, or whose renderer shows no image of any kind.
+   */
+  imageStateNow(id: NodeId): ImageState | null {
+    const renderer = this.entries.get(id)?.renderer;
+    return renderer && isMeasuring(renderer) ? renderer.imageStateNow?.() ?? null : null;
   }
 
   /** The URL the image a node shows was loaded from, if it has loaded; null otherwise. */

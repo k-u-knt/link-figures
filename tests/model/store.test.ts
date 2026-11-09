@@ -128,6 +128,18 @@ describe("history", () => {
 });
 
 describe("events", () => {
+  test("discardRedo that drops steps emits a history event naming no node, so what shows the history follows; with nothing to drop it emits none", () => {
+    const s = new DocumentStore(doc());
+    s.commit("move", d => { d.nodes[0].x = 10; });
+    s.undo();
+    const evs = record(s);
+    s.discardRedo();
+    expect(s.canRedo()).toBe(false);
+    expect(evs.map(e => [e.kind, e.label, ids(e), e.pagesChanged])).toEqual([["history", "discardRedo", [], false]]);
+    s.discardRedo();
+    expect(evs).toHaveLength(1);
+  });
+
   test("commit, undo and redo each emit one event with kind and label", () => {
     const s = new DocumentStore(doc());
     const id = s.doc.nodes[0].id;

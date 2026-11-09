@@ -3,7 +3,8 @@ import type { SnapLine, SnapSource } from "../registry/snap";
 import { visualBounds } from "./arrange";
 import { mmToPx, pageSizePx, type Rect } from "./geometry";
 import { MIN_NODE_PX } from "../constants";
-import type { ConnectorNode, Document, NodeId, Page } from "./types";
+import type { Document, NodeId, Page } from "./types";
+import { isConnector } from "../connectors/geometry";
 import { ancestorsOf, childrenOf, descendantsOf, unitsOf } from "./groups";
 
 /** The view option (see `FigureViewLike.viewOption`) that turns snapping off when `false`; any other value, unset included, is on. */
@@ -37,9 +38,9 @@ const items: SnapSource = {
         for (const child of childrenOf(doc, id)) offer(child);
         return;
       }
-      const node = doc.nodes.find((n) => n.id === id);
-      // A connector attached to a moving item is re-resolved as the item moves.
-      if (node?.type === "connector" && (node as ConnectorNode).ends.some((e) => e.kind === "attached" && skip.has(e.node))) return;
+      // A connector is no target: its box takes in its stroke and caps round its path, so an edge snapped to it would land
+      // beside the item it ends on; and one attached to a moving item moves with it.
+      if (isConnector(doc.nodes.find((n) => n.id === id))) return;
       const b = visualBounds(doc, id, registries);
       for (const pos of [b.x, b.x + b.width / 2, b.x + b.width]) out.x.push({ pos, from: b.y, to: b.y + b.height, kind: "item", source: id });
       for (const pos of [b.y, b.y + b.height / 2, b.y + b.height]) out.y.push({ pos, from: b.x, to: b.x + b.width, kind: "item", source: id });
@@ -90,23 +91,36 @@ export function collectSnapLines(sources: readonly SnapSource[], doc: Document, 
   return out;
 }
 
+/** How near, in page px, a line has to be to a snapped feature to count as met by it (only rounding apart). */
+const MEETS_PX = 1e-6;
+
+/** The order guides are given in, whatever order the lines came in: page, margin, item; then by source; then by position. */
+const KIND_ORDER: Record<SnapLine["kind"], number> = { page: 0, margin: 1, item: 2 };
+function guideOrder(a: SnapLine, b: SnapLine): number {
+  return KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || (a.source < b.source ? -1 : a.source > b.source ? 1 : 0) || a.pos - b.pos;
+}
+
 /**
  * The line to snap one axis to: nearest to any of `features` within `reach`; a tie goes to a page or margin line over an
- * item line, then to the one found first. Gives the shift to add and every line at the winning position (the guides).
+ * item line, then to the one found first. Gives the shift to add and, as the guides, every line that a feature meets
+ * once shifted: when two features land on lines at once (a top on one item's top, the middle on another's middle), both
+ * show, so the guides do not swap from one pointer move to the next as a near tie goes one way or the other. The guides
+ * are in `guideOrder`.
  */
 function snapAxis(lines: readonly SnapLine[], features: readonly number[], reach: number): { d: number; guides: SnapLine[] } {
-  let best: { d: number; dist: number; rank: number; pos: number } | null = null;
+  let best: { d: number; dist: number; rank: number } | null = null;
   for (const feature of features) {
     for (const l of lines) {
       const dist = Math.abs(l.pos - feature);
       if (dist > reach) continue;
       const rank = l.kind === "item" ? 1 : 0;
-      if (!best || dist < best.dist || (dist === best.dist && rank < best.rank)) best = { d: l.pos - feature, dist, rank, pos: l.pos };
+      if (!best || dist < best.dist || (dist === best.dist && rank < best.rank)) best = { d: l.pos - feature, dist, rank };
     }
   }
   if (!best) return { d: 0, guides: [] };
-  const pos = best.pos;
-  return { d: best.d, guides: lines.filter((l) => l.pos === pos) };
+  const landed = features.map((f) => f + best.d);
+  const guides = lines.filter((l) => landed.some((at) => Math.abs(l.pos - at) <= MEETS_PX));
+  return { d: best.d, guides: guides.sort(guideOrder) };
 }
 
 /** Snaps a moving rect's left, centre and right (x) and top, middle and bottom (y), each axis on its own. */

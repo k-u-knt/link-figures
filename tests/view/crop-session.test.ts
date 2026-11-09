@@ -221,7 +221,7 @@ describe("crop session", () => {
   });
 
   test("cancel after edits restores the entry state, with no extra undo step and nothing to redo", () => {
-    const { controller, view, drag, session } = setup(panel());
+    const { controller, view, drag, session, labels } = setup(panel());
     view.store.commit("before", (d) => void (d.nodes[0].x = 12));
     view.store.endMerge();
     const entry = view.store.doc;
@@ -232,6 +232,8 @@ describe("crop session", () => {
     expect(session().active).toBe(false);
     expect(view.store.doc).toEqual(entry);
     expect(view.store.canRedo()).toBe(false);
+    // The last event a subscriber (the toolbar's Redo) hears comes after the redo stack was emptied.
+    expect(labels.at(-1)).toBe("discardRedo");
     // The one step left is the edit made before the session.
     view.store.undo();
     expect(view.store.doc.nodes[0].x).toBe(10);

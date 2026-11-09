@@ -251,6 +251,55 @@ describe("entering and leaving groups", () => {
   });
 });
 
+describe("the selection after a store change is of units at the entered level", () => {
+  /** What `group.ungroup` does to `id`: its members take its parent, it goes, and they are selected. */
+  const ungroup = (view: ReturnType<typeof setup>["view"], id: string) => {
+    const members = view.store.doc.nodes.filter((n) => n.parent === id).map((n) => n.id);
+    view.store.commit("group.ungroup", (d) => {
+      const parent = d.nodes.find((n) => n.id === id)!.parent;
+      for (const n of d.nodes) if (n.parent === id) n.parent = parent;
+      d.nodes = d.nodes.filter((n) => n.id !== id);
+    });
+    view.selection.set(members);
+    return members;
+  };
+
+  test("ungroup h (holding g and c), then undo: the selection is h again, not g and c", () => {
+    const { view, click, overlay } = setup(nested());
+    click(...ON_A);
+    expect(view.selection.ids).toEqual(["h"]);
+    expect(ungroup(view, "h")).toEqual(["c", "g"]);
+    view.store.undo();
+    expect(view.selection.ids).toEqual(["h"]);
+    expect(overlay.children.filter((c) => c.classes.includes("lf-selected"))).toHaveLength(1);
+    view.store.redo();
+    expect(view.selection.ids).toEqual([]);
+  });
+
+  test("ungroup a two-member group, then undo: the selection is the group", () => {
+    const { view, click } = setup((d) => {
+      file(d, { id: "p", x: 10, y: 300, z: 0, parent: "pq" });
+      file(d, { id: "q", x: 150, y: 300, z: 1, parent: "pq" });
+      group(d, "pq");
+    });
+    click(30, 310);
+    expect(view.selection.ids).toEqual(["pq"]);
+    ungroup(view, "pq");
+    expect(view.selection.ids).toEqual(["p", "q"]);
+    view.store.undo();
+    expect(view.selection.ids).toEqual(["pq"]);
+  });
+
+  test("inside an entered group the selection is mapped to its direct children, in order and once each", () => {
+    const { view, dblclick } = setup(nested());
+    dblclick(...ON_A);
+    expect(view.enteredGroup).toBe("h");
+    view.selection.set(["c", "a", "b"]);
+    view.store.commit("touch", (d) => { d.nodes.find((n) => n.id === "x")!.x = 301; });
+    expect(view.selection.ids).toEqual(["c", "g"]);
+  });
+});
+
 describe("marquee", () => {
   test("a marquee around a and b selects h only when all of h is inside, and otherwise nothing from h", () => {
     const { view, drag } = setup(nested());
@@ -413,6 +462,43 @@ describe("locks are inherited", () => {
     expect(view.selection.ids).toEqual(["h"]);
     drag(ON_A, [ON_A[0] + 10, ON_A[1] + 10]);
     expect(nodeOf("a")).toMatchObject({ x: 10, y: 20 });
+  });
+});
+
+describe("a member's own lock (spec §8.1)", () => {
+  const aLocked = (d: Document) => {
+    nested()(d);
+    d.nodes.find((n) => n.id === "a")!.locked = true;
+  };
+
+  test("a drag from a locked member of an unlocked group, at top level, moves the group, the member with it", () => {
+    const { view, drag, nodeOf } = setup(aLocked);
+    drag(ON_A, [ON_A[0] + 10, ON_A[1] + 10]);
+    expect(view.selection.ids).toEqual(["h"]);
+    expect(["a", "b", "c"].map((id) => [nodeOf(id).x, nodeOf(id).y])).toEqual([[20, 30], [160, 30], [20, 110]]);
+  });
+
+  test("locked by node.update after the group was dragged by another member, a drag from it still moves the group", () => {
+    const { view, drag, nodeOf, ran } = setup(nested());
+    const ON_B: [number, number] = [200, 30];
+    drag(ON_B, [ON_B[0] + 10, ON_B[1]]);
+    expect(view.selection.ids).toEqual(["h"]);
+    view.store.commit("lock", (d) => { d.nodes.find((n) => n.id === "a")!.locked = true; });
+    ran.length = 0;
+    drag([ON_A[0] + 10, ON_A[1]], [ON_A[0] + 20, ON_A[1]]);
+    expect(view.selection.ids).toEqual(["h"]);
+    expect(["a", "b", "c"].map((id) => nodeOf(id).x)).toEqual([30, 170, 30]);
+  });
+
+  test("inside the entered group, a drag from the locked member moves nothing: it sweeps a marquee", () => {
+    const { view, dblclick, drag, nodeOf } = setup(aLocked);
+    dblclick(...ON_A);
+    dblclick(...ON_A);
+    expect(view.enteredGroup).toBe("g");
+    drag(ON_A, [ON_A[0] + 10, ON_A[1] + 10]);
+    expect(nodeOf("a")).toMatchObject({ x: 10, y: 20 });
+    expect(nodeOf("b")).toMatchObject({ x: 150, y: 20 });
+    expect(view.store.canUndo()).toBe(false);
   });
 });
 

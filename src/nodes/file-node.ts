@@ -4,12 +4,12 @@ import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
 import { boxAttachable } from "../model/attach";
 import { defaultBorder } from "../model/defaults";
-import { cropInset, cropPlacement, cropWithInset, type CropSide, type Rect } from "../model/geometry";
+import { cropInset, cropPlacement, cropWithInset, visibleCrop, type CropSide, type Rect } from "../model/geometry";
 import { isLocked } from "../model/groups";
 import { nodeLabel } from "../model/labels";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
-import type { FieldRoute, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
+import type { FieldRoute, ImageState, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { strokeFields } from "../registry/paint";
 import { fieldError, paramError, type ParamSpec } from "../registry/params";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
@@ -119,6 +119,12 @@ class FileNodeRenderer implements NodeRenderer {
   naturalSizeNow(): Size | null {
     const n = this.natural;
     return n && n.width > 0 && n.height > 0 ? { ...n } : null;
+  }
+
+  /** Whether an image shows: `image` once loaded, `loading` until then, `none` for a badge, a failed image or note content. */
+  imageStateNow(): ImageState {
+    if (this.bodyKind === "content" || this.bodyKind === "missing") return "none";
+    return this.bodyKind === "image" && this.naturalSizeNow() ? "image" : "loading";
   }
 
   /** The URL the shown image was loaded from, once it has loaded; null otherwise. */
@@ -350,19 +356,34 @@ const cropField = (key: string): Field => {
   return { kind: "number", key, label: `Crop ${side} (%)`, min: 0, max: 100, step: 1 };
 };
 
+/** Whether the view shows `node` without an image (only its badge, say): it has no crop to edit. Headless it is not known, so false. */
+function showsNoImage(node: FileNode, ctx?: InspectorContext): boolean {
+  return ctx?.imageStateNow?.(node.id) === "none";
+}
+
 /**
- * A crop inset field reads the inset from the crop and is written by `panel.crop` with keep "image": the image stays
- * where it is and the box follows the side that changed.
+ * The crop `node` shows now: its own, or, once the view knows the image's size, what is visible of it (`visibleCrop`),
+ * which differs when the fit hides part of the crop (cover with another aspect than the box's).
+ */
+function shownCrop(node: FileNode, ctx?: InspectorContext): FileNode["crop"] {
+  const natural = ctx?.imageSizeNow?.(node.id);
+  return natural ? visibleCrop(node, natural) : node.crop;
+}
+
+/**
+ * A crop inset field reads the inset of the crop that shows and is written by `panel.crop` with keep "image": the image
+ * stays where it is and the box follows the side that changed. A write starts from what is visible, as crop mode's first
+ * edit does, so the box does not take in a strip the fit had hidden.
  */
 function cropRoute(key: string): FieldRoute<FileNode> | undefined {
   const side = CROP_SIDES[key];
   if (!side) return undefined;
   return {
-    read: (node) => cropInset(node.crop, side) * 100,
-    applies: (node, doc) => node.show === "image" && !isLocked(doc, node.id),
-    call: (node, value) => ({
+    read: (node, ctx) => cropInset(shownCrop(node, ctx), side) * 100,
+    applies: (node, doc, ctx) => node.show === "image" && !isLocked(doc, node.id) && !showsNoImage(node, ctx),
+    call: (node, value, ctx) => ({
       id: "panel.crop",
-      args: { id: node.id, crop: cropWithInset(node.crop, side, Number(value) / 100), keep: "image" },
+      args: { id: node.id, crop: cropWithInset(shownCrop(node, ctx), side, Number(value) / 100), keep: "image" },
     }),
   };
 }
@@ -385,12 +406,13 @@ export const fileNodeType: NodeType<FileNode> = {
    * The page of a paged file, the crop insets of an image, then a Frame toggle (off is `frame: null`, on is the default border) and, while there is a
    * frame, its paint, width and dashes.
    */
-  inspector(node: FileNode): Field[] {
+  inspector(node: FileNode, ctx: InspectorContext): Field[] {
     const page: Field[] = PAGED_EXTENSIONS.has(extensionOf(node.file)) ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : [];
     return [
       ...page,
-      // An image panel's crop, as the inset of each side; a panel that shows note content has nothing to crop.
-      ...(node.show === "image" ? Object.keys(CROP_SIDES).map(cropField) : []),
+      // An image panel's crop, as the inset of each side; a panel that shows note content, or that the view shows only
+      // a badge for (its link does not resolve), has nothing to crop.
+      ...(node.show === "image" && !showsNoImage(node, ctx) ? Object.keys(CROP_SIDES).map(cropField) : []),
       { kind: "toggle", key: "frame", label: "Frame", onValue: defaultBorder() },
       ...(node.frame ? strokeFields("frame", "Frame") : []),
     ];

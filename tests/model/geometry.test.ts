@@ -1,4 +1,4 @@
-import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect, cropWithInset } from "../../src/model/geometry";
+import { pageOriginsPx, imagePlacement, cropPlacement, mmToPx, pxToMm, nodeWorldRect, rectIntersects, rectContainsPt, unionRect, cropWithInset, visibleCrop } from "../../src/model/geometry";
 import { createDocument, createPage, fileNodeDefaults } from "../../src/model/defaults";
 import { MM_TO_PX } from "../../src/constants";
 
@@ -81,5 +81,19 @@ describe("cropWithInset", () => {
 
   test("an inset below 0 is 0", () => {
     expect(cropWithInset({ x: 0.2, y: 0, w: 0.5, h: 1 }, "left", -0.5)).toEqual({ x: 0, y: 0, w: 0.7, h: 1 });
+  });
+});
+
+describe("visibleCrop: what a panel shows now, as a crop of its image", () => {
+  const natural = { width: 200, height: 100 };
+  test("cover with the box wider than the image: the strips cut off top and bottom are left out", () => {
+    expect(visibleCrop({ width: 200, height: 50, crop: null, fit: "cover" }, natural)).toEqual({ x: 0, y: 0.25, w: 1, h: 0.5 });
+  });
+  test("contain letterboxed: all of the crop shows, so it is the crop itself", () => {
+    expect(visibleCrop({ width: 200, height: 200, crop: null, fit: "contain" }, natural)).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expect(visibleCrop({ width: 200, height: 200, crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, fit: "contain" }, natural)).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
+  });
+  test("a crop whose aspect is the box's is what shows", () => {
+    expect(visibleCrop({ width: 100, height: 100, crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, fit: "cover" }, natural)).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
   });
 });

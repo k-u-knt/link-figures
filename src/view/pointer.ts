@@ -974,11 +974,13 @@ export class PointerController {
   private onStoreChange(): void {
     // An entered group that is gone (deleted, ungrouped, dissolved) is left.
     if ((this.view.enteredGroup ?? null) !== null && this.entered === null) this.view.enteredGroup = null;
-    // Undo, a reload or a delete can take a selected node away.
-    const present = new Set(this.store.doc.nodes.map((n) => n.id));
+    // Undo, a reload or a delete can take a selected node away; and an undo (of an ungroup, say) can put a selected
+    // node back inside a group that is not entered, where it is selected as that group (its unit at the entered level).
+    const doc = this.store.doc;
+    const present = new Set(doc.nodes.map((n) => n.id));
     const selection = this.view.selection;
-    const kept = selection.ids.filter((id) => present.has(id));
-    if (kept.length !== selection.ids.length) selection.set(kept);
+    const kept = unitsOf(doc, selection.ids.filter((id) => present.has(id)), this.entered);
+    if (kept.length !== selection.ids.length || kept.some((id, i) => id !== selection.ids[i])) selection.set(kept);
     else this.sync();
   }
 

@@ -354,9 +354,17 @@ export class Inspector {
     renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.context());
   }
 
-  /** One context for the node types' fields and for drawing them: the plugin's registries. */
+  /**
+   * One context for the node types' fields and for drawing them: the plugin's registries, and what the view shows of a
+   * node's image now (whether it shows one, and its size), which the crop fields depend on.
+   */
   private context(): InspectorContext {
-    return { registries: this.view.plugin.registries };
+    const view = this.view as Partial<Pick<LinkFiguresView, "imageSizeNow" | "imageStateNow">>;
+    return {
+      registries: this.view.plugin.registries,
+      imageSizeNow: (id) => view.imageSizeNow?.(id) ?? null,
+      imageStateNow: (id) => view.imageStateNow?.(id) ?? null,
+    };
   }
 
   /** A control in this inspector has the focus and holds text that has not been committed. */
@@ -441,7 +449,7 @@ export class Inspector {
         const node = live();
         // A field its type writes through a command of its own (a crop inset) is read the type's way too.
         const route = type?.fieldRoute?.(key);
-        if (route) return node ? route.read(node) : undefined;
+        if (route) return node ? route.read(node, this.context()) : undefined;
         const value = node ? readValue(node, key) : undefined;
         return mm.has(key) && typeof value === "number" ? pxToMm(value) : value;
       },
@@ -449,9 +457,10 @@ export class Inspector {
         const route = type?.fieldRoute?.(key);
         if (route) {
           // One call of the type's command per selected node of the type, in one commit, as `node.update` writes are.
+          const ctx = this.context();
           const routed = this.view.store.doc.nodes
-            .filter((node) => targets.has(node.id) && node.type === first.type && (route.applies?.(node, this.view.store.doc) ?? true))
-            .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value)));
+            .filter((node) => targets.has(node.id) && node.type === first.type && (route.applies?.(node, this.view.store.doc, ctx) ?? true))
+            .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value, ctx)));
           if (routed.length > 0) this.runWrite(key, fields, routed);
           return;
         }

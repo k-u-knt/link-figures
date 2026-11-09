@@ -20,6 +20,7 @@ import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page } from "../model/types";
 import type { Command, CommandContext, DragTargets, ToolPreview, UndoStep } from "../registry/command";
+import type { ImageState } from "../registry/node-type";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { Inspector } from "./inspector";
 import { NodeHost } from "./node-host";
@@ -474,6 +475,11 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** The natural size of the image a node shows if it has loaded; null while it has not, and for a node that shows none. */
   imageSizeNow(id: NodeId): { width: number; height: number } | null {
     return this.nodeHost.naturalSizeNow(id);
+  }
+
+  /** Whether node `id` shows an image now (see `ImageState`): `none` for a panel that shows only its badge. */
+  imageStateNow(id: NodeId): ImageState | null {
+    return this.nodeHost.imageStateNow(id);
   }
 
   /** The URL the image a node shows was loaded from, if it has loaded; null otherwise (the crop ghost draws an outline then). */

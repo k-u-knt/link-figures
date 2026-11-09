@@ -100,13 +100,34 @@ const twoNodes = (d: Document) => {
   file(d, { id: "b", x: 200, y: 200, z: 1 });
 };
 
-test("at zoom 1, a drag that would leave a's left 4 px short of b's left lands it on b's left, with one guide while dragging, in one undo step", () => {
+test("a drag whose top meets a's top as its middle meets c's middle draws both guides, the same at every move (finding 4)", () => {
+  // a (10, 20)–(110, 120): its top is 20. c (500, 30)–(550, 50): its middle is 40. b (250, 200)–(350, 240) is dragged up.
+  const { pointer, nodeOf, guides } = setup((d) => {
+    file(d, { id: "a", x: 10, y: 20, height: 100, z: 0 });
+    file(d, { id: "c", x: 500, y: 30, width: 50, height: 20, z: 1 });
+    file(d, { id: "b", x: 250, y: 200, z: 2 });
+  });
+  pointer("pointerdown", 300, 220);
+  for (const dy of [-178, -177.7, -178.3, -178.1, -177.9]) {
+    pointer("pointermove", 300, 220 + dy);
+    expect(nodeOf("b").y).toBe(20);
+    expect(guides().map((g) => [g.className, g.style.top])).toEqual([
+      ["lf-snap-guide is-horizontal", "20px"],
+      ["lf-snap-guide is-horizontal", "40px"],
+    ]);
+  }
+  pointer("pointerup", 300, 42);
+  expect(guides()).toHaveLength(0);
+});
+
+test("at zoom 1, a drag that would leave a's left 4 px short of b's left lands it on b's left, with guides while dragging, in one undo step", () => {
   const { view, pointer, nodeOf, guides } = setup(twoNodes);
   pointer("pointerdown", 50, 30);
   pointer("pointermove", 50 + 186, 30 + 100);
   expect(nodeOf("a").x).toBe(200);
   expect(nodeOf("a").y).toBe(120);
-  expect(guides()).toHaveLength(1);
+  // a is as wide as b, so its left, centre and right all land on b's: a guide for each.
+  expect(guides().map((g) => g.style.left)).toEqual(["200px", "250px", "300px"]);
   pointer("pointerup", 50 + 186, 30 + 100);
   expect(nodeOf("a")).toMatchObject({ x: 200, y: 120 });
   expect(guides()).toHaveLength(0);
@@ -129,7 +150,7 @@ test("Escape clears the guides of a drag under way", () => {
   const { pointer, key, guides } = setup(twoNodes);
   pointer("pointerdown", 50, 30);
   pointer("pointermove", 50 + 186, 30 + 100);
-  expect(guides()).toHaveLength(1);
+  expect(guides()).toHaveLength(3);
   key("Escape");
   expect(guides()).toHaveLength(0);
 });

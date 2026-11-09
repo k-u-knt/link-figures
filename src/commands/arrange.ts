@@ -1,8 +1,8 @@
-import { hasAttachedEnd } from "../connectors/geometry";
+import { hasAttachedEnd, isConnector } from "../connectors/geometry";
 import { alignOffsets, distributeOffsets, referenceRect, type AlignEdge, type AlignTo, type Axis, type DistributeBy } from "../model/arrange";
 import type { Pt } from "../model/geometry";
 import { commonParent, isLocked, unitsOf } from "../model/groups";
-import type { ConnectorNode, Document, NodeId, Page } from "../model/types";
+import type { Document, NodeId, Page } from "../model/types";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import { targetIds } from "./builtin";
 import { translateUnits } from "./drawing";
@@ -26,7 +26,7 @@ type DistributeArgs = { ids?: unknown[]; axis: Axis; by: DistributeBy };
 function unitsFor(doc: Document, ids: readonly NodeId[]): NodeId[] {
   const follows = (id: NodeId) => {
     const node = doc.nodes.find((n) => n.id === id);
-    return node?.type === "connector" && hasAttachedEnd(node as ConnectorNode);
+    return isConnector(node) && hasAttachedEnd(node);
   };
   return unitsOf(doc, ids, commonParent(doc, ids)).filter((id) => !isLocked(doc, id) && !follows(id));
 }

@@ -10,6 +10,7 @@ import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../mod
 import type LinkFiguresPlugin from "../main";
 import { CommandError, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
+import type { ImageState } from "../registry/node-type";
 import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
 
@@ -29,6 +30,8 @@ export interface EditorView extends FigureViewLike {
   imageSizeNow(id: NodeId): { width: number; height: number } | null;
   /** The URL the image a node shows was loaded from, if it has loaded, else null. */
   imageSourceNow(id: NodeId): string | null;
+  /** Whether node `id` shows an image now (see `ImageState`): `none` for a panel that shows only its badge. */
+  imageStateNow(id: NodeId): ImageState | null;
   /** Starts crop mode on the page for the image panel `id`; a rotated panel shows a Notice instead. */
   startCrop(id: NodeId): void;
   /** Shows `message` to the user as a Notice. */

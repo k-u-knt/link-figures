@@ -36,6 +36,7 @@ class FakeView implements EditorView {
   openLink(linktext: string): void { this.calls.push(`open:${linktext}`); }
   imageSizeNow = (id: NodeId) => this.sizes[id] ?? null;
   imageSourceNow = (): string | null => null;
+  imageStateNow = (id: NodeId) => (this.sizes[id] ? ("image" as const) : null);
   startCrop(id: NodeId): void { this.calls.push(`crop:${id}`); }
   notify(message: string): void { this.calls.push(`notice:${message}`); }
   imageSize = (id: NodeId) => (this.sizes[id] ? Promise.resolve(this.sizes[id]) : Promise.reject(new Error("no image")));

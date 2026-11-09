@@ -34,13 +34,22 @@ function imageSizeNow(ctx: CommandContext, id: NodeId): { width: number; height:
   return view?.imageSizeNow?.(id) ?? null;
 }
 
+/**
+ * Whether the view shows panel `id` without an image: only its badge (its link does not resolve), or an image that
+ * failed to load. Not one still loading; and headless, where it is not known, never.
+ */
+function showsNoImageNow(ctx: CommandContext, id: NodeId): boolean {
+  const view = ctx.view as Partial<EditorView> | null;
+  return view?.imageStateNow?.(id) === "none";
+}
+
 /** The file panel `id` of the figure, which may be changed; refuses anything else with a message naming `command`. */
 function panel(ctx: CommandContext, command: string, id: NodeId): FileNode {
   const doc = ctx.store.doc;
   const node = doc.nodes.find((n) => n.id === id);
   if (!node) throw new CommandError(`${command}: there is no node "${id}"`);
   if (node.type !== "file") throw new CommandError(`${command}: "${id}" is not a file panel`);
-  if (node.show !== "image") throw new CommandError(`${command}: "${id}" shows no image`);
+  if (node.show !== "image" || showsNoImageNow(ctx, id)) throw new CommandError(`${command}: "${id}" shows no image`);
   if (isLocked(doc, id)) throw new CommandError(`${command}: "${id}" is locked`);
   return node;
 }
@@ -70,7 +79,9 @@ function crop(ctx: CommandContext, args: CropArgs): Record<string, never> {
 function selectedCroppedPanel(ctx: CommandContext): FileNode | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
-  return node?.type === "file" && node.show === "image" && node.crop !== null && !isLocked(ctx.store.doc, node.id) ? node : undefined;
+  return node?.type === "file" && node.show === "image" && node.crop !== null && !isLocked(ctx.store.doc, node.id) && !showsNoImageNow(ctx, node.id)
+    ? node
+    : undefined;
 }
 
 /**
@@ -80,7 +91,7 @@ function selectedCroppedPanel(ctx: CommandContext): FileNode | undefined {
 function selectedImagePanel(ctx: CommandContext): FileNode | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
-  return node?.type === "file" && node.show === "image" && !isLocked(ctx.store.doc, node.id) ? node : undefined;
+  return node?.type === "file" && node.show === "image" && !isLocked(ctx.store.doc, node.id) && !showsNoImageNow(ctx, node.id) ? node : undefined;
 }
 
 /** `panel.crop`, `panel.crop-reset` and `crop.edit`. */
@@ -99,7 +110,8 @@ export function cropCommands(): Command[] {
     {
       id: "panel.crop-reset",
       name: "Reset crop",
-      icon: "crop",
+      // Not Crop's icon: the two sit side by side in the toolbar.
+      icon: "scan",
       group: "edit",
       params: { id: { type: "string" } },
       applies: (ctx) => selectedCroppedPanel(ctx) !== undefined,

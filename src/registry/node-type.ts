@@ -41,9 +41,20 @@ export interface AttachContext {
   registries: Pick<Registries, "shapes">;
 }
 
+/**
+ * What the view shows for a node that may show an image, now: `image` once an image has loaded, `loading` while one may
+ * still come (not resolved or not loaded yet), and `none` when the node shows no image (its link does not resolve, so it
+ * shows only its badge, or the image failed to load, or it shows note content).
+ */
+export type ImageState = "loading" | "image" | "none";
+
 /** What a node type's inspector fields may depend on besides the node. */
 export interface InspectorContext {
   registries: Registries;
+  /** The natural size of the image node `id` shows, once it has loaded; absent or null without a view (headless). */
+  imageSizeNow?(id: NodeId): { width: number; height: number } | null;
+  /** What the view shows for node `id` (see `ImageState`); absent or null without a view, or for a node not drawn. */
+  imageStateNow?(id: NodeId): ImageState | null;
 }
 
 /** What a node type's part in `node.update` may depend on besides the node. */
@@ -175,14 +186,15 @@ export interface NodeType<N extends Node = Node> {
 
 /** How the inspector reads and writes a field that a command writes (see `NodeType.fieldRoute`). */
 export interface FieldRoute<N extends Node = Node> {
-  read(node: N): unknown;
+  /** The field's value on `node`; `ctx` says what the view shows now, when there is a view. */
+  read(node: N, ctx?: InspectorContext): unknown;
   /**
    * Whether the field is written on `node` at all (a crop inset only on a panel that shows an image and is not locked, in
    * `doc`, as the command would refuse it); every node of the type when not given.
    */
-  applies?(node: N, doc: Document): boolean;
+  applies?(node: N, doc: Document, ctx?: InspectorContext): boolean;
   /** The command call (its id and JSON arguments) that sets the field of `node` to `value`. */
-  call(node: N, value: unknown): { id: string; args: Record<string, unknown> };
+  call(node: N, value: unknown, ctx?: InspectorContext): { id: string; args: Record<string, unknown> };
 }
 
 /** What a node type's `pageAfterMove` may depend on besides the node. */

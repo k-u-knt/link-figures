@@ -31,14 +31,18 @@ function registries() {
 }
 
 /** A 200×100 image shown whole in a 200×100 box at 10,10. */
-function setup(partial: Partial<FileNode> = {}, natural: { width: number; height: number } | null = { width: 200, height: 100 }) {
+function setup(
+  partial: Partial<FileNode> = {},
+  natural: { width: number; height: number } | null = { width: 200, height: 100 },
+  state: "image" | "loading" | "none" = "image",
+) {
   const doc: Document = createDocument("a4-portrait");
   const panel = { ...fileNodeDefaults(doc.pages[0], { file: "plot.png", subpath: "", show: "image" }, []), id: "p-1", x: 10, y: 10, width: 200, height: 100, ...partial } as FileNode;
   const shape = shapeNodeDefaults(doc.pages[0], { id: "s-1", x: 0, y: 0, width: 10, height: 10, z: 1 }, []);
   doc.nodes.push(panel, shape as Node);
   const r = registries();
   const store = createFigureStore(doc, r);
-  const view = { imageSizeNow: (id: string) => (id === "p-1" ? natural : null) };
+  const view = { imageSizeNow: (id: string) => (id === "p-1" ? natural : null), imageStateNow: (id: string) => (id === "p-1" ? state : null) };
   const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection: [], page: undefined });
   const call = async (id: string, args: Record<string, unknown>, c: CommandContext = ctx()) => runCall(store, c, prepareCall(r, { id, args }));
   const node = () => store.doc.nodes.find((n) => n.id === "p-1") as FileNode;
@@ -164,10 +168,29 @@ describe("panel.crop-reset", () => {
     expect(node().crop).toBeNull();
   });
 
+  test("a panel the view shows only a badge for (its link does not resolve) shows no image: refused, keep box too", async () => {
+    const { call, node, ctx, r } = setup({ crop: { x: 0, y: 0, w: 0.5, h: 0.5 } }, null, "none");
+    await expect(call("panel.crop", { id: "p-1", crop: { x: 0.5, y: 0, w: 0.5, h: 1 } })).rejects.toThrow('panel.crop: "p-1" shows no image');
+    await expect(call("panel.crop", { id: "p-1", crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, keep: "box" })).rejects.toThrow('panel.crop: "p-1" shows no image');
+    await expect(call("panel.crop-reset", { id: "p-1" })).rejects.toThrow('panel.crop: "p-1" shows no image');
+    expect(node().crop).toEqual({ x: 0, y: 0, w: 0.5, h: 0.5 });
+    expect(r.commands.get("panel.crop-reset")!.applies({ ...ctx(), selection: ["p-1"] })).toBe(false);
+    expect(r.commands.get("crop.edit")!.applies({ ...ctx(), selection: ["p-1"] })).toBe(false);
+  });
+
+  test("a panel still loading is not taken for one without an image: keep box crops it", async () => {
+    const { call, node } = setup({}, null, "loading");
+    await expect(call("panel.crop", { id: "p-1", crop: { x: 0.5, y: 0, w: 0.5, h: 1 } })).rejects.toThrow('use keep "box"');
+    await call("panel.crop", { id: "p-1", crop: { x: 0.5, y: 0, w: 0.5, h: 1 }, keep: "box" });
+    expect(node().crop).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
+  });
+
   test("is a toolbar button in edit, labelled Reset crop, that applies to one selected cropped panel", () => {
     const { r, ctx, store } = setup({ crop: { x: 0, y: 0, w: 0.5, h: 0.5 } });
     const reset = r.commands.get("panel.crop-reset")!;
-    expect([reset.group, reset.icon, reset.name, !!reset.hidden]).toEqual(["edit", "crop", "Reset crop", false]);
+    expect([reset.group, reset.icon, reset.name, !!reset.hidden]).toEqual(["edit", "scan", "Reset crop", false]);
+    // Not the icon of Crop (crop.edit), so the two buttons side by side can be told apart.
+    expect(r.commands.get("crop.edit")!.icon).toBe("crop");
     expect(reset.applies({ ...ctx(), selection: ["p-1"] })).toBe(true);
     expect(reset.applies({ ...ctx(), selection: [] })).toBe(false);
     expect(reset.applies({ ...ctx(), selection: ["p-1", "s-1"] })).toBe(false);
@@ -177,7 +200,7 @@ describe("panel.crop-reset", () => {
 });
 
 describe("inspector crop fields", () => {
-  function inspect(partial: Partial<FileNode> = {}) {
+  function inspect(partial: Partial<FileNode> = {}, state: "image" | "loading" | "none" = "image") {
     const { r, store, node, box } = setup(partial);
     const selection = new SelectionState();
     const view = {
@@ -187,7 +210,8 @@ describe("inspector crop fields", () => {
       plugin: { registries: r },
       currentPage: () => store.doc.pages[0],
       focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[0])!,
-      imageSizeNow: (id: string) => (id === "p-1" ? { width: 200, height: 100 } : null),
+      imageSizeNow: (id: string) => (id === "p-1" && state === "image" ? { width: 200, height: 100 } : null),
+      imageStateNow: (id: string) => (id === "p-1" ? state : null),
       commandContext: (): CommandContext => ({ app: {} as never, registries: r, view: view as never, store, selection: [...selection.ids], page: view.focusPage() }),
     };
     const el = new FakeEl("div");
@@ -200,7 +224,8 @@ describe("inspector crop fields", () => {
   }
 
   test("a file panel shows the four insets, in %", () => {
-    const { el } = inspect({ crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
+    // A 100×60 box has the crop's aspect, so what shows is the crop itself.
+    const { el } = inspect({ width: 100, height: 60, crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
     expect(el.control("crop.left").value).toBe("10");
     expect(el.control("crop.top").value).toBe("20");
     expect(el.control("crop.right").value).toBe("40");
@@ -233,8 +258,26 @@ describe("inspector crop fields", () => {
     expect((store.doc.nodes.find((n) => n.id === "p-2") as FileNode).crop).toBeNull();
   });
 
+  test("on a cover panel that shows less than its crop, the first write starts from what is visible: the box does not jump", () => {
+    // The 200×100 image covers a 200×50 box: 25 px of it are cut off at the top and at the bottom.
+    const { el, node, box } = inspect({ height: 50, fit: "cover", crop: null });
+    // The fields read what shows: the top and bottom quarters are hidden.
+    expect([el.control("crop.top").value, el.control("crop.bottom").value]).toEqual(["25", "25"]);
+    el.typeInto("crop.left", "10");
+    // The left edge moves right by 10 % of the image's width as drawn (200 px); the other edges stay.
+    expect(box()).toEqual({ x: 30, y: 10, width: 180, height: 50 });
+    expect(node().crop).toEqual({ x: 0.1, y: 0.25, w: 0.9, h: 0.5 });
+  });
+
+  test("a panel the view shows only a badge for has no crop fields; one still loading has them", () => {
+    const badge = inspect({}, "none");
+    expect(badge.el.findAll((e) => e.attrs["data-key"]?.startsWith("crop."))).toEqual([]);
+    const loading = inspect({}, "loading");
+    expect(loading.el.control("crop.left").value).toBe("0");
+  });
+
   test("writing one side leaves the others as they are", () => {
-    const { el, node } = inspect({ crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
+    const { el, node } = inspect({ width: 100, height: 60, crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 } });
     el.typeInto("crop.right", "10");
     const crop = node().crop!;
     expect(crop.x).toBeCloseTo(0.1, 10);

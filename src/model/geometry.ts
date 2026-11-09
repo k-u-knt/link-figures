@@ -122,6 +122,25 @@ export function cropPlacement(
   return { image, fitted, region };
 }
 
+/**
+ * What a panel shows now, as a crop of its image: the visible `region` of `cropPlacement` (the box with `cover`, the
+ * letterboxed crop with `contain`) taken back into the image's 0–1 frame. It differs from the panel's own crop when its
+ * fit leaves part of the crop unseen (cover with the box's aspect not the crop's); crop mode and the inspector's crop
+ * fields start an edit from it, so that the box does not take in what was hidden. `natural` is the image's natural size.
+ */
+export function visibleCrop(
+  panel: { width: number; height: number; crop: Crop | null; fit: "cover" | "contain" },
+  natural: { width: number; height: number },
+): Crop {
+  const { image, region } = cropPlacement(panel, natural, panel.crop, panel.fit);
+  return {
+    x: (region.x - image.x) / image.width,
+    y: (region.y - image.y) / image.height,
+    w: region.width / image.width,
+    h: region.height / image.height,
+  };
+}
+
 /** The least share of the image's width or height a crop keeps. */
 export const MIN_CROP = 0.01;
 

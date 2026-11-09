@@ -71,8 +71,11 @@ export default class LinkFiguresPlugin extends Plugin {
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
     for (const command of drawingCommands()) this.registries.commands.register(command);
-    for (const command of groupCommands()) this.registries.commands.register(command);
-    for (const command of arrangeCommands()) this.registries.commands.register(command);
+    // Group, Ungroup, Align and Distribute act on the selection, so they are in the palette (and can take hotkeys); the hidden ones need arguments.
+    for (const command of [...groupCommands(), ...arrangeCommands()]) {
+      if (command.hidden) this.registries.commands.register(command);
+      else registerPaletteCommand(this, command);
+    }
     // panel.crop takes arguments (the inspector and crop mode give them); Reset crop is also in the palette.
     for (const command of cropCommands()) {
       if (command.hidden) this.registries.commands.register(command);

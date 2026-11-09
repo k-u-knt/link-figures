@@ -11,6 +11,8 @@ import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { builtinPaintTypes } from "../../src/paint/builtin";
+import { cropCommands } from "../../src/commands/crop";
+import { fileNodeType } from "../../src/nodes/file-node";
 import { drawingCommands } from "../../src/commands/drawing";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
@@ -19,12 +21,18 @@ import { pageInFocus } from "../../src/view/viewport";
 import { SelectionState } from "../../src/view/selection";
 import { FakeEl } from "./fake-dom";
 
+// `obsidian` ships only typings, so the file node type is loaded with it stubbed.
+vi.mock("obsidian", () => ({ Component: class {}, MarkdownRenderer: {}, setIcon: () => {} }));
+
 /** A node type that, like the file node, offers a field of its own for PDFs only. */
 const fileType = {
   type: "file",
   name: "Linked file",
   icon: "image",
+  // The file node's own crop routes, with a crop inset offered on a panel that has a crop.
+  fieldRoute: fileNodeType.fieldRoute,
   inspector: (node: any) => [
+    ...(node.crop ? [{ kind: "number", key: "crop.left", label: "Crop left", unit: "%", min: 0, max: 100 }] : []),
     ...(String(node.file).endsWith(".pdf") ? [{ kind: "number", key: "pageIndex", label: "Page", min: 0, step: 1 }] : []),
     // A frame's fields, as a node type with a stroke offers them: dotted keys into the node.
     ...(node.frame ? [{ kind: "paint", key: "frame.paint", label: "Frame" }, { kind: "number", key: "frame.width", label: "Frame width", unit: "pt", min: 0 }] : []),
@@ -51,6 +59,7 @@ function setup(build: (doc: ReturnType<typeof createDocument>) => void = () => {
   const store = options.figure ? createFigureStore(doc, registries) : new DocumentStore(doc);
   // The inspector's node writes run the node.update command.
   for (const command of drawingCommands()) registries.commands.register(command);
+  for (const command of cropCommands()) registries.commands.register(command);
   const selection = new SelectionState();
   const pageLimits: number[] = [];
   // The stage is centred on the page at `pageIndex`; `focusPage` is the view's rule for the page that is acted on.
@@ -454,6 +463,23 @@ describe("node section", () => {
     locked.checked = false;
     locked.fire("change");
     expect(store.doc.nodes[0].locked).toBe(false);
+  });
+
+  test("a crop inset is not written on a locked panel, or one in a locked group; panel.crop would refuse it", () => {
+    const crop = { x: 0, y: 0, w: 1, h: 1 };
+    const { el, store, selection, notices } = setup((d) => {
+      addNode(d, { id: "p-locked", locked: true, crop } as Partial<Node>);
+      addNode(d, { id: "p-member", parent: "g", crop } as Partial<Node>);
+      d.nodes.push(groupNodeDefaults(d.pages[0], { id: "g", locked: true }, d.nodes.map((n) => n.id)) as Node);
+    });
+    for (const id of ["p-locked", "p-member"]) {
+      selection.set([id]);
+      el.typeInto("crop.left", "10");
+      expect((store.doc.nodes.find((n) => n.id === id) as FileNode).crop).toEqual(crop);
+    }
+    expect(store.canUndo()).toBe(false);
+    // Nothing was offered to panel.crop, so nothing was refused.
+    expect(notices).toEqual([]);
   });
 
   test("an emptied name is removed, not kept as an empty string", () => {

@@ -64,6 +64,10 @@ interface Grab {
   /** Whether the panel's box and crop already are `visible` and `crop` (no entry normalisation is needed). */
   normalised: boolean;
   snap: CropSnap;
+  /** The crop Escape puts back: the panel's own when the drag began, or what showed if the drag normalised the panel. */
+  restore: Crop | null;
+  /** Whether the drag has edited the panel. */
+  dragged: boolean;
 }
 
 /**
@@ -147,7 +151,7 @@ export class CropSession {
       if (handle.includes("n")) from.y += visible.y - box.y;
       if (handle.includes("s")) from.y += visible.y + visible.height - (box.y + box.height);
     }
-    this.grab = { handle, at: from, image, visible, crop, normalised, snap };
+    this.grab = { handle, at: from, image, visible, crop, normalised, snap, restore: normalised ? node.crop ?? null : crop, dragged: false };
   }
 
   /**
@@ -171,6 +175,7 @@ export class CropSession {
         this.run({ id: this.id, crop: g.crop, keep: "image" });
         g.normalised = true;
       }
+      g.dragged = true;
       this.run({ id: this.id, crop, keep: "box" });
       return;
     }
@@ -188,7 +193,19 @@ export class CropSession {
     if (g.snap && guides.length > 0) this.host.drawGuides(g.snap, guides, rect);
     else this.host.clearGuides();
     g.normalised = true;
+    g.dragged = true;
     this.run({ id: this.id, crop: cropOf(rect, g.image), keep: "image" });
+  }
+
+  /**
+   * Escape during a drag: the crop goes back to what it was when the drag began, and the session goes on. The restoring
+   * edit is merged into the session's step like the drag's own, so the session is still one step.
+   */
+  abortDrag(): void {
+    const g = this.grab;
+    if (!this.active || !g?.dragged) return;
+    this.run({ id: this.id, crop: g.restore ?? { x: 0, y: 0, w: 1, h: 1 }, keep: g.handle === "pan" ? "box" : "image" });
+    g.dragged = false;
   }
 
   /** The end of a drag: the guides go; the session's step stays open for the next drag. */

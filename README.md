@@ -153,8 +153,8 @@ The paint defaults are `{ type: "solid", color: "#000000" }`, a linear gradient 
 | `group.remove` | `ids` (required) | `{}` |
 | `align` | `ids` (the selection), `edge` (`"left"`, `"hcenter"`, `"right"`, `"top"`, `"vcenter"` or `"bottom"`; required), `to` (`"selection"` for two or more items, else `"margins"`; or `"page"`) | `{ ids }` |
 | `distribute` | `ids` (the selection), `axis` (`"horizontal"` or `"vertical"`; required), `by` (`"gap"` or `"center"`) | `{ ids }` |
-| `panel.crop` | `id`, `crop` (`{ x, y, w, h }` as fractions of the image, or `null` for none; required), `keep` (`"image"`: the image stays put and the box becomes the visible part; or `"box"`: the box stays and the image refits) | `{}` |
-| `panel.crop-reset` | `id` (the selected panel) | `{}` |
+| `panel.crop` | `id`, `crop` (`{ x, y, w, h }` as fractions of the image, or `null` for none; required), `keep` (`"image"`, the default: the image stays put and the box becomes the visible part; or `"box"`: the box stays and the image refits) | `{}` |
+| `panel.crop-reset` | `id` (the selected panel); needs the figure open, as it crops with keep `"image"` | `{}` |
 
 `keep: "image"` needs the image's size, so it works on an open figure once the image has loaded; use `keep: "box"` on a figure that is not open. `node.update` does not set `parent`; use `group.add` and `group.remove`.
 

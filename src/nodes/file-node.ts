@@ -5,6 +5,7 @@ import type { Resolved } from "../links/types";
 import { boxAttachable } from "../model/attach";
 import { defaultBorder } from "../model/defaults";
 import { cropInset, cropPlacement, cropWithInset, type CropSide, type Rect } from "../model/geometry";
+import { isLocked } from "../model/groups";
 import { nodeLabel } from "../model/labels";
 import type { FileNode } from "../model/types";
 import type { Field } from "../registry/fields";
@@ -358,7 +359,7 @@ function cropRoute(key: string): FieldRoute<FileNode> | undefined {
   if (!side) return undefined;
   return {
     read: (node) => cropInset(node.crop, side) * 100,
-    applies: (node) => node.show === "image",
+    applies: (node, doc) => node.show === "image" && !isLocked(doc, node.id),
     call: (node, value) => ({
       id: "panel.crop",
       args: { id: node.id, crop: cropWithInset(node.crop, side, Number(value) / 100), keep: "image" },

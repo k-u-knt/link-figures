@@ -379,10 +379,6 @@ async function resetAspect(ctx: CommandContext): Promise<void> {
 }
 
 /**
- * Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). Those
- * that act on the selection, the zoom, a tool or a dialog are `needsView`; the rest can run headless through the API.
- */
-/**
  * The toolbar toggle for snapping drags to items, the page and its margins (see `model/snap`): a setting of the view's
  * own (`SNAP_OPTION`), on until turned off; its button says which it is, and is shown pressed while on.
  */
@@ -403,6 +399,10 @@ export const snapToggle: Command = {
   },
 };
 
+/**
+ * Defined in the order the toolbar shows them within a group (the registry sorts by group, then by this order). Those
+ * that act on the selection, the zoom, a tool or a dialog are `needsView`; the rest can run headless through the API.
+ */
 function builtinCommands(): Command[] {
   // A tool: the toolbar button and the palette entry arm it, and the next press on a page places a label there.
   const text: Command = {

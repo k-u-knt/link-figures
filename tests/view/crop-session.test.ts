@@ -238,6 +238,56 @@ describe("crop session", () => {
     expect(view.store.canUndo()).toBe(false);
   });
 
+  test("Escape during a drag puts the crop back as the drag found it; Escape with no drag then cancels the session", () => {
+    const { controller, view, pointer, key, session, node } = setup(panel());
+    const entry = view.store.doc;
+    controller.startCrop("p");
+    // Two edits, each its own drag.
+    pointer("pointerdown", 210, 60);
+    pointer("pointermove", 160, 60);
+    pointer("pointerup", 160, 60);
+    pointer("pointerdown", 12, 60);
+    pointer("pointermove", 40, 60);
+    pointer("pointerup", 40, 60);
+    const afterTwo = { crop: node().crop, box: { x: node().x, y: node().y, width: node().width, height: node().height } };
+    // A third drag, then Escape in the middle of it.
+    pointer("pointerdown", 100, 12);
+    pointer("pointermove", 100, 40);
+    expect(node().crop).not.toEqual(afterTwo.crop);
+    key("Escape");
+    expect(node().crop).toEqual(afterTwo.crop);
+    expect({ x: node().x, y: node().y, width: node().width, height: node().height }).toEqual(afterTwo.box);
+    expect(session().active).toBe(true);
+    // The rest of that drag does nothing.
+    pointer("pointermove", 100, 50);
+    pointer("pointerup", 100, 50);
+    expect(node().crop).toEqual(afterTwo.crop);
+    // Escape again: the whole session goes, with no step left.
+    key("Escape");
+    expect(session().active).toBe(false);
+    expect(view.store.doc).toEqual(entry);
+    expect(view.store.canUndo()).toBe(false);
+    expect(view.store.canRedo()).toBe(false);
+  });
+
+  test("Escape during a pan puts the image back, in the session's one step", () => {
+    const { controller, view, pointer, key, session, node } = setup(panel());
+    controller.startCrop("p");
+    pointer("pointerdown", 210, 60);
+    pointer("pointermove", 110, 60);
+    pointer("pointerup", 110, 60);
+    const crop = node().crop;
+    pointer("pointerdown", 60, 60);
+    pointer("pointermove", 40, 60);
+    expect(node().crop).not.toEqual(crop);
+    key("Escape");
+    expect(node().crop).toEqual(crop);
+    expect(session().active).toBe(true);
+    session().finish();
+    view.store.undo();
+    expect(view.store.canUndo()).toBe(false);
+  });
+
   test("cancel with no edit leaves the history as it was", () => {
     const { controller, view, session } = setup(panel());
     view.store.commit("before", (d) => void (d.nodes[0].x = 12));

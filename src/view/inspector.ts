@@ -450,7 +450,7 @@ export class Inspector {
         if (route) {
           // One call of the type's command per selected node of the type, in one commit, as `node.update` writes are.
           const routed = this.view.store.doc.nodes
-            .filter((node) => targets.has(node.id) && node.type === first.type && (route.applies?.(node) ?? true))
+            .filter((node) => targets.has(node.id) && node.type === first.type && (route.applies?.(node, this.view.store.doc) ?? true))
             .map((node) => prepareCall(this.view.plugin.registries, route.call(node, value)));
           if (routed.length > 0) this.runWrite(key, fields, routed);
           return;

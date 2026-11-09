@@ -176,8 +176,11 @@ export interface NodeType<N extends Node = Node> {
 /** How the inspector reads and writes a field that a command writes (see `NodeType.fieldRoute`). */
 export interface FieldRoute<N extends Node = Node> {
   read(node: N): unknown;
-  /** Whether the field is written on `node` at all (a crop inset only on a panel that shows an image); every node of the type when not given. */
-  applies?(node: N): boolean;
+  /**
+   * Whether the field is written on `node` at all (a crop inset only on a panel that shows an image and is not locked, in
+   * `doc`, as the command would refuse it); every node of the type when not given.
+   */
+  applies?(node: N, doc: Document): boolean;
   /** The command call (its id and JSON arguments) that sets the field of `node` to `value`. */
   call(node: N, value: unknown): { id: string; args: Record<string, unknown> };
 }

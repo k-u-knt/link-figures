@@ -883,11 +883,17 @@ export class PointerController {
       this.endGesture();
       return;
     }
-    // Crop mode: Enter finishes it, Escape takes it back (a drag under way with it).
+    // Crop mode: Enter finishes it; Escape ends a drag under way, putting the crop back as it was when the drag began, and
+    // with no drag takes the whole session back.
     const crop = this.cropSession;
     if (crop.active && !this.view.readOnly && !ev.isComposing && !isEditable(ev.target) && (ev.key === "Enter" || ev.key === "Escape")) {
       if (ev.key === "Enter" && this.gesture.kind !== "idle") return;
       ev.preventDefault();
+      if (ev.key === "Escape" && this.gesture.kind === "cropping") {
+        crop.abortDrag();
+        this.endGesture();
+        return;
+      }
       this.endGesture();
       if (ev.key === "Enter") crop.finish();
       else crop.cancel();

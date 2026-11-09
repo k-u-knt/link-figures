@@ -206,7 +206,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
-    this.unreadableNodes = new Set(loaded.hookFailures.map((f) => f.id));
+    this.unreadableNodes = loaded.unreadable;
     // Said once per type as the figure opens, not again each time the file is read back.
     if (!reload) {
       for (const report of hookFailureReports(loaded.hookFailures)) {

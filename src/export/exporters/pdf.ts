@@ -259,7 +259,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
         }
         await drawPdfPanel(input.doc, lib, out, target, page, panel);
         const assets = input.assets.get(page.id) ?? new Map();
-        const overlay = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([layer.nodeId]), paper: false, overlaysOnly: true });
+        const overlay = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([layer.nodeId]), paper: false, overlaysOnly: true, unreadable: input.unreadable });
         // What drawing the overlay had to say (a frame's paint that is not registered) is said in the notice too.
         for (const warning of overlay.warnings) warnings.add(warning);
         if (overlay.drawn > 0) {
@@ -277,6 +277,7 @@ async function layeredPdf(jsPDF: JsPdfConstructor, input: ExportInput, plans: Pa
           : buildPageSvg(input.doc, page, input.registries, input.assets.get(page.id) ?? new Map(), {
               only: new Set(layer.nodeIds),
               paper: index === 0,
+              unreadable: input.unreadable,
             }).svg;
       const [embedded] = await out.embedPdf(await svgLayerPdf(jsPDF, svg, input.doc, page, fonts, warnings));
       target.drawPage(embedded, { x: 0, y: 0, width, height });

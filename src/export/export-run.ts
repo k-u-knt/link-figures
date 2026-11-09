@@ -25,6 +25,8 @@ export interface ExportRun {
   maxPageSizeMm: number;
   /** The exporter's options (see `exportOptions`); none when left out. */
   options?: Record<string, unknown>;
+  /** The nodes their plugin could not read when the figure was loaded: skipped, with a warning (`BuildOptions.unreadable`). */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 export interface ExportDeps {
@@ -77,14 +79,14 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
       warnings,
     });
     const pageAssets = await trimAssets(run.doc, page, collected, deps.trim, trimReport, run.exporter.pdfPanels);
-    const built = buildPageSvg(run.doc, page, deps.registries, pageAssets);
+    const built = buildPageSvg(run.doc, page, deps.registries, pageAssets, { unreadable: run.unreadable });
     warnings.push(...built.warnings);
     assets.set(page.id, pageAssets);
     svgs.set(page.id, built.svg);
   }
 
   const result = await run.exporter.run(
-    { doc: run.doc, pages: run.pages, svgs, assets, registries: deps.registries, warnings, baseName: run.baseName, dpi: run.dpi },
+    { doc: run.doc, pages: run.pages, svgs, assets, registries: deps.registries, warnings, baseName: run.baseName, dpi: run.dpi, unreadable: run.unreadable },
     run.options ?? {},
   );
 
@@ -212,6 +214,8 @@ export interface FigureExportTarget {
    * waited on for at most `DRAWN_WAIT_MS` before the export. None: the figure is taken as drawn.
    */
   drawn?: () => Promise<void>;
+  /** The nodes their plugin could not read when the figure was loaded (the load result's `unreadable`), which are skipped. */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /** How long an export waits for its figure to be drawn (`FigureExportTarget.drawn`) before it goes on with a warning. */
@@ -278,7 +282,7 @@ export async function exportFigure(target: FigureExportTarget, request: ExportRe
   // Content cards are snapshotted from the stage: wait (bounded) for it to settle, open figures too.
   const drawn = target.drawn ? await drawnWithin(target.drawn, DRAWN_WAIT_MS) : true;
   const { paths, warnings } = await runExport(
-    { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi, maxPageSizeMm: target.settings.maxPageSizeMm, options },
+    { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi, maxPageSizeMm: target.settings.maxPageSizeMm, options, unreadable: target.unreadable },
     target.deps,
   );
   if (!drawn) warnings.unshift(`"${target.baseName}": exported before every item was drawn`);

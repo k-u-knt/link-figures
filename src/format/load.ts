@@ -1,5 +1,5 @@
 import { createDocument } from "../model/defaults";
-import type { Document } from "../model/types";
+import type { Document, NodeId } from "../model/types";
 import type { Registries } from "../registry";
 import { FormatError } from "./errors";
 import { splitLinktext } from "./links-section";
@@ -10,15 +10,16 @@ import { parseFigureFile, type ParsedFigureFile } from "./parse";
  * Parses a figure file into a document. The Links section is the only copy of link targets: it wins over
  * anything in the JSON, a file node without an entry gets an empty link, and an entry without a node is dropped.
  * A node of a type a plugin registers is validated by that type's `migrate` hook, found in `registries`; the nodes whose
- * hook failed are kept as they are and listed in `hookFailures`.
+ * hook failed are kept as they are and listed in `hookFailures`; `unreadable` holds their ids, which the stage draws as
+ * placeholders and an export skips (`BuildOptions.unreadable`).
  */
 export function loadDocument(
   text: string,
   registries?: Pick<Registries, "nodeTypes">,
-): { doc: Document; parsed: ParsedFigureFile; hookFailures: HookFailure[] } {
+): { doc: Document; parsed: ParsedFigureFile; hookFailures: HookFailure[]; unreadable: ReadonlySet<NodeId> } {
   const parsed = parseFigureFile(text);
   const hookFailures: HookFailure[] = [];
-  if (parsed.bodyJson === null) return { doc: createDocument("nature-double"), parsed, hookFailures };
+  if (parsed.bodyJson === null) return { doc: createDocument("nature-double"), parsed, hookFailures, unreadable: new Set() };
 
   let json: unknown;
   try {
@@ -30,7 +31,7 @@ export function loadDocument(
   const doc = migrate(json, registries ? (type) => registries.nodeTypes.get(type) : undefined, hookFailures);
   const linktexts = new Map(parsed.links.map((l) => [l.id, l.linktext]));
   doc.nodes = doc.nodes.map((n) => (n.type === "file" ? { ...n, ...splitLinktext(linktexts.get(n.id) ?? "") } : n));
-  return { doc, parsed, hookFailures };
+  return { doc, parsed, hookFailures, unreadable: new Set(hookFailures.map((f) => f.id)) };
 }
 
 /**

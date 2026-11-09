@@ -147,6 +147,18 @@ describe("exportFigure", () => {
     expect(out.warnings).toEqual(['"x.chart" item skipped: no plugin draws it', "twice"]);
   });
 
+  test("the figure's unreadable nodes go to the SVG builder and the exporter: skipped with the warning", async () => {
+    const { t, doc, spy } = target();
+    t.doc.nodes.push({ id: "x-1", type: "x.chart", page: doc.pages[1].id, x: 0, y: 0, width: 10, height: 10, z: 0, rotation: 0, opacity: 1, locked: false } as never);
+    const toSvg = vi.fn(() => "<g/>");
+    t.deps.registries.nodeTypes.register({ type: "x.chart", name: "Chart", icon: "c", mount: vi.fn(), bounds: vi.fn(), inspector: () => [], toSvg } as never);
+    t.unreadable = new Set(["x-1"]);
+    await exportFigure(t, { format: "spy" });
+    expect(toSvg).not.toHaveBeenCalled();
+    expect(spy.runs[0].input.unreadable).toEqual(new Set(["x-1"]));
+    expect(spy.runs[0].input.warnings).toEqual(['"x.chart" item skipped: its plugin could not read it']);
+  });
+
   test("a file that would replace a source of the figure is not written, and that is said", async () => {
     const { t } = target();
     t.deps.isProtected = (path) => path === "figs/Fig - Page 2.txt";

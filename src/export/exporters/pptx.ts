@@ -12,7 +12,7 @@ import { pictureXml } from "../pptx/media";
 import { buildPptx, MAX_SLIDE_EMU, MIN_SLIDE_EMU, slideMediaRId, type PptxMedia, type PptxSlideInput } from "../pptx/package";
 import { fitDpi } from "../raster-size";
 import { renderClearPngOnCanvas, type RenderClearPng } from "../rasterise";
-import { buildPageSvg, skippedTypeWarning } from "../svg-builder";
+import { buildPageSvg, skippedTypeWarning, unreadableTypeWarning } from "../svg-builder";
 
 const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const MEDIA_TYPES = { png: "image/png", jpeg: "image/jpeg" } as const;
@@ -108,7 +108,7 @@ function svgWarnings(input: ExportInput): Set<string> {
   const said = new Set<string>();
   for (const page of input.pages) {
     try {
-      for (const w of buildPageSvg(input.doc, page, input.registries, input.assets.get(page.id) ?? new Map()).warnings) said.add(w);
+      for (const w of buildPageSvg(input.doc, page, input.registries, input.assets.get(page.id) ?? new Map(), { unreadable: input.unreadable }).warnings) said.add(w);
     } catch {
       // A page whose SVG cannot be built again has no warnings to take out.
     }
@@ -183,7 +183,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
           let box: Rect;
           let inner: string;
           try {
-            const built = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([node.id]), paper: false });
+            const built = buildPageSvg(input.doc, page, input.registries, assets, { only: new Set([node.id]), paper: false, unreadable: input.unreadable });
             // What the SVG build said (rasterised, skipped) is not said by `svgWarnings`, as it is not about the slide.
             for (const w of built.warnings) warn(w);
             if (built.drawn === 0) {
@@ -211,6 +211,11 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
         };
 
         const writeItem = async (node: Node): Promise<string> => {
+          // An item its plugin could not read is never handed to its type: skipped, as one no plugin draws is.
+          if (input.unreadable?.has(node.id)) {
+            warn(unreadableTypeWarning(node.type));
+            return "";
+          }
           const type = input.registries.nodeTypes.get(node.type);
           if (!type) {
             warn(skippedTypeWarning(node.type));

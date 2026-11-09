@@ -11,6 +11,11 @@ export function skippedTypeWarning(type: string): string {
   return `"${type}" item skipped: no plugin draws it`;
 }
 
+/** What an export says of the items of `type` its plugin could not read when the figure was loaded, which it leaves out. */
+export function unreadableTypeWarning(type: string): string {
+  return `"${type}" item skipped: its plugin could not read it`;
+}
+
 /** For a value written between double quotes. */
 export function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -23,6 +28,11 @@ export interface BuildOptions {
   paper?: boolean;
   /** Draw only the nodes' overlays (`NodeType.overlaySvg`), for what is drawn over a PDF panel embedded on its own. */
   overlaysOnly?: boolean;
+  /**
+   * Nodes their plugin's `migrate` hook could not read (see `loadDocument`'s `unreadable`): skipped as a type no plugin
+   * draws is, with `unreadableTypeWarning`; their type's hooks are never called on them.
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 /** A node's fragment, wrapped in a group when it is translucent or rotated (about its own centre). */
@@ -74,9 +84,9 @@ export function buildPageSvg(
 
   const body: string[] = [];
   for (const node of nodes) {
-    const type = registries.nodeTypes.get(node.type);
+    const type = opts.unreadable?.has(node.id) ? undefined : registries.nodeTypes.get(node.type);
     if (!type) {
-      const warning = skippedTypeWarning(node.type);
+      const warning = opts.unreadable?.has(node.id) ? unreadableTypeWarning(node.type) : skippedTypeWarning(node.type);
       // Said once for all the items of the type.
       if (!warnings.includes(warning)) warnings.push(warning);
       continue;

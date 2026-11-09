@@ -45,6 +45,8 @@ export function viewExportTarget(view: LinkFiguresView, file: { path: string }, 
       isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
     },
     drawn: () => view.nodeHost.drawn(),
+    // As the view loaded the figure (an export opened in the background loads it too).
+    unreadable: view.unreadableNodes,
   };
 }
 

@@ -1,5 +1,5 @@
 import type { AssetMap } from "../export/asset-types";
-import type { Document, Page, PageId } from "../model/types";
+import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { Field } from "./fields";
 import type { Registries } from "./index";
 
@@ -14,6 +14,11 @@ export interface ExportInput {
   warnings: string[];
   baseName: string;
   dpi: number;
+  /**
+   * The nodes their plugin could not read when the figure was loaded (see `loadDocument`): an exporter that builds SVG
+   * again passes them to `buildPageSvg`, and one that draws items itself skips them with `unreadableTypeWarning`.
+   */
+  unreadable?: ReadonlySet<NodeId>;
 }
 
 export interface ExportResult {

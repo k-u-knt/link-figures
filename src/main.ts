@@ -10,9 +10,11 @@ import { displayCommands } from "./commands/display";
 import { registerDevCommands } from "./commands/dev";
 import { drawingCommands } from "./commands/drawing";
 import { panelCommands } from "./commands/panels";
+import { blockIdPrefix } from "./links/block-id";
+import { noteBlockId, type NoteHost } from "./links/note-block-id";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
-import { VIEW_TYPE, normalisePageLimit } from "./constants";
+import { VIEW_TYPE } from "./constants";
 import { pdfExporter } from "./export/exporters/pdf";
 import { svgExporter } from "./export/exporters/svg";
 import { localFontSource } from "./fonts/local-source";
@@ -28,7 +30,7 @@ import { builtinPaintTypes } from "./paint/builtin";
 import { createRegistries, type Registries } from "./registry";
 import { CommandError } from "./registry/command";
 import { builtinShapeKinds } from "./shapes/builtin";
-import { DEFAULT_SETTINGS, LinkFiguresSettingTab, type LinkFiguresSettings } from "./settings/settings";
+import { DEFAULT_SETTINGS, LinkFiguresSettingTab, normaliseSettings, type LinkFiguresSettings } from "./settings/settings";
 import { LinkFiguresView } from "./view/figure-view";
 import { createFigureFile } from "./view/new-figure";
 import { hasFigureMarker, installOpenHook, showInFigureView } from "./view/open-hook";
@@ -53,6 +55,7 @@ export default class LinkFiguresPlugin extends Plugin {
     },
     normalizePath,
     openFigure: (path) => this.openFigureView(path),
+    noteBlockId: (path, line) => noteBlockId(this.noteHost(), path, line, blockIdPrefix(this.settings.blockIdPrefix)),
   });
   /** When each figure view was last made active, by a counter: the API acts on the most recent view of a figure. */
   private readonly viewActivity = new WeakMap<LinkFiguresView, number>();
@@ -164,6 +167,29 @@ export default class LinkFiguresPlugin extends Plugin {
   }
 
   /** The file at vault path `path`; a `CommandError` when there is none. */
+  /** Notes as `noteBlockId` reads and writes them: by path, through the cache, an open Markdown editor, and `vault.process`. */
+  private noteHost(): NoteHost {
+    const { vault, metadataCache, workspace } = this.app;
+    const note = (path: string): TFile | null => {
+      const file = vault.getAbstractFileByPath(path);
+      return file instanceof TFile ? file : null;
+    };
+    return {
+      resolve: (path) => (note(path) ?? note(`${path}.md`))?.path ?? null,
+      cache: (path) => {
+        const file = note(path);
+        return file ? metadataCache.getFileCache(file) : null;
+      },
+      editor: (path) => {
+        for (const leaf of workspace.getLeavesOfType("markdown")) {
+          if (leaf.view instanceof MarkdownView && leaf.view.file?.path === path) return leaf.view.editor;
+        }
+        return null;
+      },
+      process: async (path, edit) => void (await vault.process(this.vaultFile(path), edit)),
+    };
+  }
+
   private vaultFile(path: string): TFile {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
     if (!(file instanceof TFile)) throw new CommandError(`there is no file "${path}"`);
@@ -171,8 +197,7 @@ export default class LinkFiguresPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.settings.maxPageSizeMm = normalisePageLimit(this.settings.maxPageSizeMm);
+    this.settings = normaliseSettings(await this.loadData());
   }
 
   async saveSettings(): Promise<void> {

@@ -14,6 +14,8 @@ const settings = (exportFolder: string): LinkFiguresSettings => ({
   exportFolder,
   exportDpi: 300,
   maxPageSizeMm: 2000,
+  dropFromNote: "block-id",
+  blockIdPrefix: "fig",
 });
 const blob = (text: string) => new Blob([text]);
 const text = (data: ArrayBuffer | undefined) => new TextDecoder().decode(data);

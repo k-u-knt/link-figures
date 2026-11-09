@@ -1,7 +1,17 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
 import { DEFAULT_PAGE_LIMIT_MM, MAX_DPI, MAX_PAGE_LIMIT_MM, MIN_DPI, MIN_PAGE_LIMIT_MM, normalisePageLimit } from "../constants";
 import type LinkFiguresPlugin from "../main";
+import { blockIdPrefix } from "../links/block-id";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
+
+/**
+ * What a drop from a note's editor links to: the block, by its id (`"block-id"`, written into the note when it has
+ * none); the block's id when it has one, else the nearest heading above it, writing nothing (`"heading"`); or, as before
+ * this setting, the dropped links themselves and an image's own file (`"direct"`).
+ */
+export type DropFromNote = "block-id" | "heading" | "direct";
+
+export const DROP_FROM_NOTE_MODES: readonly DropFromNote[] = ["block-id", "heading", "direct"];
 
 export interface LinkFiguresSettings {
   /** Where OS drops and pasted images are saved; "" uses Obsidian's own attachment setting. */
@@ -15,6 +25,9 @@ export interface LinkFiguresSettings {
   exportDpi: number;
   /** The largest width or height, in mm, that the inspector lets a page have. */
   maxPageSizeMm: number;
+  dropFromNote: DropFromNote;
+  /** The first part of a block id written into a note: `<prefix>-<4 base36>`. Letters, digits and dashes. */
+  blockIdPrefix: string;
 }
 
 export const DEFAULT_SETTINGS: LinkFiguresSettings = {
@@ -24,7 +37,18 @@ export const DEFAULT_SETTINGS: LinkFiguresSettings = {
   exportFolder: "",
   exportDpi: 300,
   maxPageSizeMm: DEFAULT_PAGE_LIMIT_MM,
+  dropFromNote: "block-id",
+  blockIdPrefix: "fig",
 };
+
+/** The settings as saved (`loadData`, possibly from an older version, possibly null) with defaults for what is missing and every value made one it can take. */
+export function normaliseSettings(saved: unknown): LinkFiguresSettings {
+  const settings: LinkFiguresSettings = Object.assign({}, DEFAULT_SETTINGS, saved);
+  settings.maxPageSizeMm = normalisePageLimit(settings.maxPageSizeMm);
+  if (!DROP_FROM_NOTE_MODES.includes(settings.dropFromNote)) settings.dropFromNote = DEFAULT_SETTINGS.dropFromNote;
+  settings.blockIdPrefix = blockIdPrefix(typeof settings.blockIdPrefix === "string" ? settings.blockIdPrefix : "");
+  return settings;
+}
 
 export class LinkFiguresSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly owner: LinkFiguresPlugin) {
@@ -115,6 +139,36 @@ export class LinkFiguresSettingTab extends PluginSettingTab {
           await this.owner.saveSettings();
         });
       });
+
+    new Setting(containerEl)
+      .setName("Drop from a note")
+      .setDesc(
+        "What a panel dragged out of a note's editor links to. Block: the paragraph, list item, table or image's block, by its block id, which is added to the note when it has none. Heading: the block's id when it has one, else the nearest heading above it; the note is never changed. Direct: the links in the dragged text, and an image's own file.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("block-id", "Block (adds a block id)");
+        dropdown.addOption("heading", "Heading");
+        dropdown.addOption("direct", "Direct");
+        dropdown.setValue(settings.dropFromNote);
+        dropdown.onChange(async (value) => {
+          settings.dropFromNote = DROP_FROM_NOTE_MODES.includes(value as DropFromNote) ? (value as DropFromNote) : DEFAULT_SETTINGS.dropFromNote;
+          await this.owner.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Block id prefix")
+      .setDesc("New block ids are this prefix, a dash and four letters or digits, such as fig-3k9x. Letters, digits and dashes only.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.blockIdPrefix)
+          .setValue(settings.blockIdPrefix)
+          .onChange(async (value) => {
+            // What an id cannot hold is left out; an empty field is the default.
+            settings.blockIdPrefix = blockIdPrefix(value);
+            await this.owner.saveSettings();
+          }),
+      );
 
     // A note, not a control: where a TIFF source is not shown in the explorer, panels from it still work.
     new Setting(containerEl)

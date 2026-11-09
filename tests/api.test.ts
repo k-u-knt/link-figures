@@ -392,3 +392,17 @@ describe("a batch is normalised call by call", () => {
     expect(line.ends[0]).toEqual({ kind: "free", x: 220, y: 25 });
   });
 });
+
+describe("blockId", () => {
+  test("passes the normalised note path and the line to the host, and resolves to its {id, subpath}", async () => {
+    const noteBlockId = vi.fn(async () => ({ id: "fig-ab12", subpath: "#^fig-ab12" }));
+    const api = createApi({ app: {} as never, registries: createRegistries(), files: {} as never, normalizePath, openFigure: () => null, noteBlockId });
+    expect(await api.blockId("/Notes//a.md", 3)).toEqual({ id: "fig-ab12", subpath: "#^fig-ab12" });
+    expect(noteBlockId).toHaveBeenCalledWith("Notes/a.md", 3);
+  });
+
+  test("rejects when the host cannot write notes", async () => {
+    const api = createApi({ app: {} as never, registries: createRegistries(), files: {} as never, normalizePath, openFigure: () => null });
+    await expect(api.blockId("Notes/a.md", 3)).rejects.toThrow(/blockId/);
+  });
+});

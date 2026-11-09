@@ -11,6 +11,7 @@ import {
   type Call,
   type FigureFiles,
 } from "./commands/headless";
+import type { BlockIdResult } from "./links/note-block-id";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
 import type { Registries } from "./registry";
@@ -43,6 +44,14 @@ export interface LinkFiguresApi {
   batch(figurePath: string, calls: Call[]): Promise<unknown[]>;
   /** The figure's document as JSON: the open view's current one, else the file's. */
   read(figurePath: string): Promise<Document>;
+  /**
+   * The block id of the block that holds `line` (0-based) of the note at `notePath` (with or without `.md`), for
+   * linking a panel to it (`subpath`, `#^id`): the id it has, or a new one (`<prefix>-<4 base36>`, the prefix from the
+   * settings) written into the note, through its editor when it is open (so it can be undone there), else into the file.
+   * Never writes when the block has an id. Rejects for a line in no block, a heading line (link it by its heading), and a
+   * note that is not there. Not a figure command: it acts on a note, and finishes later.
+   */
+  blockId(notePath: string, line: number): Promise<BlockIdResult>;
   registries: Registries;
 }
 
@@ -61,6 +70,8 @@ export interface ApiHost {
   normalizePath(path: string): string;
   /** The most recently active view that has the figure at `path` (normalised) loaded, or null when none has. */
   openFigure(path: string): OpenFigure | null;
+  /** Finds or writes the block id at `line` of the note at `path` (normalised): see `noteBlockId`. Without it, `blockId` rejects. */
+  noteBlockId?(path: string, line: number): Promise<BlockIdResult>;
 }
 
 export function createApi(host: ApiHost): LinkFiguresApi {
@@ -114,6 +125,11 @@ export function createApi(host: ApiHost): LinkFiguresApi {
         if (view) return runBatch(view.store, view.commandContext(), prepared);
         return withHeadlessFigure(app, registries, files, path, (ctx, store) => runBatch(store, ctx, prepared));
       });
+    },
+
+    async blockId(notePath, line) {
+      if (!host.noteBlockId) throw new Error("blockId: notes cannot be written here");
+      return host.noteBlockId(host.normalizePath(notePath), line);
     },
 
     async read(figurePath) {

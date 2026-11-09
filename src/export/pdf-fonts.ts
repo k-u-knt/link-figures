@@ -412,6 +412,39 @@ function missingIn(face: LoadedFace, text: string): string[] {
   return missing;
 }
 
+/**
+ * The characters above Latin-1 that WinAnsiEncoding has (cp1252's 0x80–0x9F). A standard font can draw these and every
+ * character U+0020–U+00FF; for a string with any other character, jsPDF writes the whole string as UTF-16 into the
+ * one-byte font, which garbles all of it.
+ */
+const WIN_ANSI_EXTRA = new Set("\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178");
+const inWinAnsi = (char: string) => {
+  const code = char.codePointAt(0)!;
+  return (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.has(char);
+};
+/** What a standard font cannot draw is shown as this. */
+const NOT_IN_WIN_ANSI = "?";
+
+/** Replaces, in the text nodes under `el`, each character a standard font cannot encode with "?"; the characters replaced. */
+function toWinAnsi(el: Element): string[] {
+  const replaced: string[] = [];
+  const walker = el.ownerDocument.createTreeWalker(el, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? "";
+    let out = "";
+    for (const char of value) {
+      // Line breaks and tabs are white space to svg2pdf.js, not characters it draws.
+      if (inWinAnsi(char) || /[\t\n\r]/.test(char)) out += char;
+      else {
+        out += NOT_IN_WIN_ANSI;
+        if (!replaced.includes(char)) replaced.push(char);
+      }
+    }
+    if (out !== value) node.nodeValue = out;
+  }
+  return replaced;
+}
+
 /** Sets `font-family` in an element's inline style, which wins over every other source in svg2pdf.js. */
 function setInlineFamily(el: Element, family: string): void {
   const kept = declarations(el.getAttribute("style") ?? "").filter((d) => d.property !== "font-family");
@@ -499,10 +532,13 @@ export async function prepareFonts(svg: string, resolve: FaceResolver, labelOf: 
     if (lacking.length > 0) {
       const fallback = fallbackFor(lacking[0]!.family, lacking[0]!.face.bytes);
       for (const el of [text, ...Array.from(text.querySelectorAll("tspan"))]) setInlineFamily(el, fallback.toLowerCase());
+      // The standard font encodes only WinAnsi: anything else is shown as "?" (and said), not left to garble the string.
+      const shownAs = toWinAnsi(text);
+      const lost = shownAs.length > 0 ? `; "${shownAs.join(", ")}" shown as ${NOT_IN_WIN_ANSI}` : "";
       changed = true;
       const byFamily = new Map<string, string[]>();
       for (const l of lacking) byFamily.set(l!.family, [...new Set([...(byFamily.get(l!.family) ?? []), ...l!.missing])]);
-      for (const [family, missing] of byFamily) warn(`font "${family}" lacks "${missing.join(", ")}" — ${label()} set in ${fallback} in PDF`);
+      for (const [family, missing] of byFamily) warn(`font "${family}" lacks "${missing.join(", ")}" — ${label()} set in ${fallback} in PDF${lost}`);
       continue;
     }
 

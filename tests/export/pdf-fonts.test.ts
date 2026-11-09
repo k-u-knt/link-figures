@@ -237,9 +237,11 @@ describe("prepareFonts", () => {
   test("a character the face lacks: the whole text is set in Helvetica, with the warning, and the face is not registered", async () => {
     const source = fakeSource({ Calibri: family("Calibri", ["normal"], "0123456789 m") });
     const result = await prepareFonts(svgOf('<text font-family="Calibri"><tspan>5 µm −</tspan></text>'), resolverOver(source), () => 'Text "5 µm −" (Page 1)');
-    expect(result.warnings).toEqual(['font "Calibri" lacks "µ, −" — Text "5 µm −" (Page 1) set in Helvetica in PDF']);
+    expect(result.warnings).toEqual(['font "Calibri" lacks "µ, −" — Text "5 µm −" (Page 1) set in Helvetica in PDF; "−" shown as ?']);
     expect(result.faces).toEqual([]);
     expect(result.svg).toMatch(/<text[^>]*style="font-family: ?helvetica;?"/);
+    // The minus sign is not in WinAnsi, so the standard font shows it as "?"; µ is, and stays.
+    expect(result.svg).toContain(">5 µm ?</tspan>");
   });
 
   test("a serif family that lacks a character falls back to Times", async () => {
@@ -389,6 +391,18 @@ describe("PDF export with installed fonts", () => {
     expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica"]);
     // The whole string, µ included (WinAnsi \265), in one piece.
     expect(out.content).toMatch(/\(5 (\\265|µ)m\) Tj/);
+  });
+
+  test("m2d check 7: a missing character outside WinAnsi does not garble the fallback label; it is drawn as ? and named", async () => {
+    const f = figure();
+    const node = f.label("→ µ Ag", { family: "Calibri" });
+    const out = await exportPdf(f.doc, f.page, registries(fakeSource({ Calibri: family("Calibri") })));
+    expect(out.warnings).toEqual([`font "Calibri" lacks "→, µ" — ${nodeLabel(f.doc, node)} set in Helvetica in PDF; "→" shown as ?`]);
+    expect(fontsDrawn(out.text, out.content)).toEqual(["Helvetica"]);
+    // One byte per character in the standard font's WinAnsi encoding: ASCII as it is, µ as 0xB5, and no UTF-16 NULs.
+    const shown = [...out.content.matchAll(/\(((?:[^()\\]|\\.)*)\) Tj/g)].map((m) => m[1]);
+    expect(shown).toEqual(["? \xb5 Ag"]);
+    expect(shown.join("")).not.toContain("\0");
   });
 
   test("a linked SVG's <style> font is embedded, and a warning about it names the panel", async () => {

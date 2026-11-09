@@ -132,6 +132,15 @@ describe("noteBlockId", () => {
     expect(s.editor!.text).toBe(edited);
   });
 
+  test("an editor ahead of the file only below the block, whose cache does not catch up in time: refused at once, nothing written", async () => {
+    // The block's places would still hold in the editor's text, so only the time-out can refuse this.
+    const edited = TEXT.replace("Has one ^old-1", "Has one more ^old-1");
+    const s = setup({ open: true, editorText: edited, reindexTo: null });
+    await expect(noteBlockId(s.host, "Notes/a.md", 2, "fig", s.random)).rejects.toThrow(/the note "Notes\/a.md" has changed; try again/);
+    expect(s.editor!.transaction).not.toHaveBeenCalled();
+    expect(s.editor!.text).toBe(edited);
+  });
+
   test("a file newer than its cache (just after a write): refused, nothing written", async () => {
     const s = setup();
     s.files.set("Notes/a.md", `Added\n${TEXT}`);

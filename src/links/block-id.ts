@@ -140,10 +140,17 @@ const CLOSING_LINE = /^\s*(?:`{3,}|~{3,}|\$\$)\s*$|\$\$\s*$|^\s*\||\|\s*\r?$/;
 /** A list item's first line: the indent, the marker and the spaces after it, which together give its content column. */
 const LIST_MARKER = /^(\s*)([-*+]|\d{1,9}[.)])( {1,4}|\t|$)/;
 
+/** A line's quote markers (`> `, `> > `), which a line inside a quote starts with; "" for a line outside one. */
+const QUOTE_PREFIX = /^(?:[ \t]*>[ \t]?)+/;
+
+const quotePrefix = (line: string | undefined): string => (line === undefined ? "" : (QUOTE_PREFIX.exec(line)?.[0] ?? ""));
+/** `line` without its quote markers. */
+const unquoted = (line: string | undefined): string | undefined => (line === undefined ? undefined : line.slice(quotePrefix(line).length));
+
 /** Whether `block`'s id goes on a line of its own: a structured block, or a block ending in a line that cannot carry it. */
 function idOnOwnLine(lines: readonly string[], block: Block): boolean {
   if (idPlacement(block.type) === "own-line") return true;
-  const last = lines[block.end];
+  const last = unquoted(lines[block.end]);
   return last !== undefined && CLOSING_LINE.test(last);
 }
 
@@ -157,8 +164,9 @@ export function blockIdInText(lines: readonly string[], block: Block): string | 
   const atEnd = END_ID.exec(last)?.[1];
   if (atEnd) return atEnd;
   if (!idOnOwnLine(lines, block)) return null;
-  const next = isBlank(lines[block.end + 1]) ? lines[block.end + 2] : lines[block.end + 1];
-  return next === undefined ? null : (OWN_LINE_ID.exec(next)?.[1] ?? null);
+  // Inside a quote, the id's line and the blank line before it carry the quote's markers.
+  const next = isBlank(unquoted(lines[block.end + 1])) ? lines[block.end + 2] : lines[block.end + 1];
+  return next === undefined ? null : (OWN_LINE_ID.exec(unquoted(next) ?? "")?.[1] ?? null);
 }
 
 /** The note's line ending: CRLF when most of its line breaks are, else LF. */
@@ -223,15 +231,21 @@ export function blockIdInsertion(lines: readonly string[], block: Block, id: str
   const eol = dominantEol(lines);
   const next = lines[block.end + 1];
   let indent = "";
+  let quote = "";
   let after = next !== undefined && !isBlank(next) ? eol : "";
   if (placement === "end") {
     // Inside the item, at its content column, so it stays the item's; text that follows at once and is not the next
-    // item would run on into the id's paragraph, so it gets a blank line too.
-    const marker = LIST_MARKER.exec(lines[block.start] ?? "");
+    // item would run on into the id's paragraph, so it gets a blank line too. An item inside a quote keeps the quote's
+    // markers on the id's line and on the blank lines, so the id stays inside the quote and the item.
+    const first = lines[block.start] ?? "";
+    quote = quotePrefix(first);
+    const marker = LIST_MARKER.exec(first.slice(quote.length));
     if (marker) indent = " ".repeat(marker[1].replace(/\t/g, "    ").length + marker[2].length + Math.max(1, marker[3].length));
-    if (next !== undefined && LIST_MARKER.test(next)) after = "";
+    const rest = unquoted(next);
+    if (rest !== undefined && LIST_MARKER.test(rest)) after = "";
+    else if (rest !== undefined && !isBlank(rest)) after = `${eol}${quotePrefix(next).trimEnd()}`;
   }
-  return { line: block.end, ch, text: `${eol}${eol}${indent}^${id}${after}` };
+  return { line: block.end, ch, text: `${eol}${quote.trimEnd()}${eol}${quote}${indent}^${id}${after}` };
 }
 
 /** `text` with `block` given the id `id` (see `blockIdInsertion`); nothing else in it changes. */

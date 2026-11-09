@@ -84,7 +84,10 @@ export async function noteBlockId(host: NoteHost, notePath: string, line: number
   const editor = host.editor(path);
   if (editor) {
     // Unsaved edits are newer than the cache: save them and let the cache catch up before its lines are trusted.
-    if (editor.getValue() !== (await host.read(path))) await host.saveAndReindex(path, REINDEX_TIMEOUT_MS);
+    // A cache that did not catch up in time cannot be trusted, even where its places happen to hold.
+    if (editor.getValue() !== (await host.read(path)) && !(await host.saveAndReindex(path, REINDEX_TIMEOUT_MS))) {
+      throw new Error(`blockId: the note "${path}" has changed; try again`);
+    }
     const text = editor.getValue();
     const { block, cache, cached } = locate(text);
     if (cached) return result(cached);

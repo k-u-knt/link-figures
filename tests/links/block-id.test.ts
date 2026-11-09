@@ -195,6 +195,20 @@ describe("insertBlockId", () => {
     expect(insertBlockId(text, { type: "listItem", start: 1, end: 4 }, "fig-3")).toBe([...text.split("\n"), "", "    ^fig-3"].join("\n"));
   });
 
+  test("a list item in a quote that ends in a fence keeps the quote's prefix on the id's lines, at the item's content column", () => {
+    const text = ["> - item", ">   ```", ">   x", ">   ```", "> - next"].join("\n");
+    const out = insertBlockId(text, { type: "listItem", start: 0, end: 3 }, "fig-q");
+    expect(out).toBe(["> - item", ">   ```", ">   x", ">   ```", ">", ">   ^fig-q", "> - next"].join("\n"));
+    expect(blockIdInText(out.split("\n"), { type: "listItem", start: 0, end: 3 })).toBe("fig-q");
+  });
+
+  test("a list item in a quote that ends in a table, followed by quoted text, gets a quoted blank line after the id too", () => {
+    const text = ["> 1. item", ">    | a |", ">    | - |", "> After."].join("\n");
+    expect(insertBlockId(text, { type: "listItem", start: 0, end: 2 }, "fig-r")).toBe(
+      ["> 1. item", ">    | a |", ">    | - |", ">", ">    ^fig-r", ">", "> After."].join("\n"),
+    );
+  });
+
   test("an id on its own line inside an item that ends in a fence is found", () => {
     const lines = ["- item", "  ```", "  x", "  ```", "", "  ^fig-9", "- next"];
     expect(blockIdInText(lines, { type: "listItem", start: 0, end: 3 })).toBe("fig-9");

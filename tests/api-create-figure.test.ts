@@ -2,7 +2,8 @@ import { createApi, type ApiHost } from "../src/api";
 import { loadDocument } from "../src/format/load";
 import { createRegistries } from "../src/registry";
 import { CommandError } from "../src/registry/command";
-import { newFigureText, writeNewFigureFile } from "../src/view/new-figure";
+import { newFigureText } from "../src/format/new-figure";
+import { writeNewFigureFile } from "../src/view/new-figure";
 import { FakeTFile, FakeTFolder, normalizePath } from "./export/fake-vault";
 
 vi.mock("obsidian", async () => {
@@ -72,6 +73,12 @@ describe("api.createFigure", () => {
     expect([...written.keys()]).toEqual(["figs/Fig 2.lnkfig.md", "Fig 3.md.lnkfig.md"]);
   });
 
+  test("an absolute path is made vault-relative", async () => {
+    const { api, written } = setup();
+    expect(await api.createFigure("/Fig 4.lnkfig.md")).toEqual({ path: "Fig 4.lnkfig.md" });
+    expect([...written.keys()]).toEqual(["Fig 4.lnkfig.md"]);
+  });
+
   test("a named preset and a number of pages", async () => {
     const { api, doc } = setup();
     await api.createFigure("a.lnkfig.md", { preset: "nature-double", pages: 3 });
@@ -102,6 +109,32 @@ describe("api.createFigure", () => {
     expect(calls.filter((c) => c.startsWith("create "))).toEqual([]);
   });
 
+  test("an error from Obsidian while writing is a CommandError naming createFigure", async () => {
+    const vault = fakeApp();
+    (vault.app as any).vault.create = async () => {
+      throw new Error("EACCES: permission denied");
+    };
+    const run = writeNewFigureFile(vault.app, "f.lnkfig.md", "x");
+    await expect(run).rejects.toThrow(CommandError);
+    await expect(run).rejects.toThrow('createFigure: could not create "f.lnkfig.md": EACCES: permission denied');
+    const folders = fakeApp();
+    (folders.app as any).vault.createFolder = async () => {
+      throw new Error("disk full");
+    };
+    const inFolder = writeNewFigureFile(folders.app, "a/f.lnkfig.md", "x");
+    await expect(inFolder).rejects.toThrow(CommandError);
+    await expect(inFolder).rejects.toThrow('createFigure: could not create the folder "a": disk full');
+  });
+
+  test("a folder that createFolder fails on but is there afterwards (on disk, not indexed) is fine, whatever the error says", async () => {
+    const vault = fakeApp({}, ["a"]);
+    (vault.app as any).vault.createFolder = async () => {
+      throw new Error("Folder exists (localised)");
+    };
+    await writeNewFigureFile(vault.app, "a/f.lnkfig.md", "x");
+    expect(vault.written.get("a/f.lnkfig.md")).toBe("x");
+  });
+
   test("refuses a path that only the disk has (not yet indexed)", async () => {
     const vault = fakeApp({}, ["fig.lnkfig.md"]);
     await expect(writeNewFigureFile(vault.app, "fig.lnkfig.md", "x")).rejects.toThrow(/already a file or folder/);
@@ -115,6 +148,11 @@ describe("api.createFigure", () => {
     ["an empty path", "  ", {}, /^createFigure: the path must name a file in the vault/],
     ["a path that is not text", 3, {}, /^createFigure: the path must name a file in the vault/],
     ["options that are not an object", "f", "a4-portrait", /^createFigure: the options must be an object/],
+    ["a null preset", "f", { preset: null }, /^createFigure: there is no page preset null$/],
+    ["a path up out of the vault", "../x", {}, /^createFigure: the path must name a file in the vault$/],
+    ["a path through ..", "figs/../x", {}, /^createFigure: the path must name a file in the vault$/],
+    ["a path through .", "./x", {}, /^createFigure: the path must name a file in the vault$/],
+    ["a path ending in ..", "figs/..", {}, /^createFigure: the path must name a file in the vault$/],
   ])("refuses %s, writing nothing", async (_name, path, options, message) => {
     const { api, calls } = setup();
     const run = api.createFigure(path as string, options as never);

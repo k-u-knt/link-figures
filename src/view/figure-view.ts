@@ -6,7 +6,7 @@ import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
 import { applyLinkEntries, classifyReload } from "../format/links-reload";
-import { loadDocument } from "../format/load";
+import { hookFailureReports, loadDocument } from "../format/load";
 import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
@@ -100,6 +100,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   /** This view's settings that are not part of the figure (a tool's mode): see `viewOption`. */
   private readonly options = new Map<string, unknown>();
 
+  /**
+   * The nodes a plugin's `migrate` hook could not read when the figure was loaded (see `HookFailure`): drawn, inspected
+   * and pressed as placeholders, whatever type is registered for them, and saved as the file has them.
+   */
+  unreadableNodes: ReadonlySet<NodeId> = new Set();
+
   /** The file text as `setViewData` received it. */
   private rawText = "";
   /** What the loaded document serialises to, to tell whether it has changed since the file was read. */
@@ -189,6 +195,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       loaded = loadDocument(data, this.plugin.registries);
     } catch (error) {
       // Refuse to open, and with it to save: the file is shown as it is and never replaced by a default document.
+      this.unreadableNodes = new Set();
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
       this.showError(describeLoadError(error), data);
@@ -199,6 +206,14 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (reload && this.adoptReload(data, loaded)) return;
     this.clearError();
     this.readOnly = false;
+    this.unreadableNodes = new Set(loaded.hookFailures.map((f) => f.id));
+    // Said once per type as the figure opens, not again each time the file is read back.
+    if (!reload) {
+      for (const report of hookFailureReports(loaded.hookFailures)) {
+        new Notice(report);
+        console.warn(report);
+      }
+    }
     this.setDocument(loaded.doc, loaded.parsed, reload);
     this.rawText = data;
     this.serializedAtLoad = serializeFigureFile(loaded.doc, loaded.parsed);

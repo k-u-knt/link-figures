@@ -171,15 +171,15 @@ describe("moving a connector", () => {
     expect(connector().page).toBe("pg-2");
   });
 
-  test("a free end that follows its items onto another page is moved by the page-origin delta, as they are", async () => {
+  test("a free end that follows its items onto another page is moved by the drag, then by the page-origin delta, as they are", async () => {
     const { api, saved, connector } = await withConnector();
     const origins = pageOriginsPx(saved());
     const delta = origins.get("pg-2")!.y - origins.get("pg-1")!.y;
-    // Down by the second page's offset: s lands where it was, on the second page, and the connector goes with it.
-    await api.run(PATH, "node.move", { ids: ["s", "c"], dx: 0, dy: delta });
-    const s = saved().nodes.find((n) => n.id === "s")!;
-    expect(s).toMatchObject({ page: "pg-2", x: 100, y: 100 });
-    expect(connector()).toMatchObject({ page: "pg-2", ends: [{ kind: "free", x: 10, y: 20 }, { kind: "attached", node: "s", anchor: "w" }] });
+    // Down by the second page's offset and 30 px more: s lands 30 px lower than it was, on the second page, and the
+    // connector goes with it, its free end 30 px lower too (a free end left where it was would still be at y 20).
+    await api.run(PATH, "node.move", { ids: ["s", "c"], dx: 0, dy: delta + 30 });
+    expect(saved().nodes.find((n) => n.id === "s")).toMatchObject({ page: "pg-2", x: 100, y: 130 });
+    expect(connector()).toMatchObject({ page: "pg-2", ends: [{ kind: "free", x: 10, y: 50 }, { kind: "attached", node: "s", anchor: "w" }] });
   });
 });
 
@@ -189,6 +189,8 @@ describe("a malformed sibling field next to an end that needs its nearest anchor
     ["caps", 5, /"caps" must be two caps/],
     ["stroke", "thick", /stroke/],
     ["routeParams", 3, /routeParams/],
+    ["stroke", null, /stroke/],
+    ["caps", [{ kind: "none", size: 1 }], /"caps" must be two caps/],
   ])("%s: no TypeError; the command reports the malformed field", async (key, value, message) => {
     const { api, saved } = await withConnector();
     const before = saved();
@@ -197,4 +199,19 @@ describe("a malformed sibling field next to an end that needs its nearest anchor
     await expect(run).rejects.toThrow(message);
     expect(saved()).toEqual(before);
   });
+});
+
+test("an error in drawing the line that is not a malformed field is not swallowed", async () => {
+  const s = await withConnector();
+  // A registered route that fails: its error reaches the caller rather than being taken for a malformed field.
+  const r = (s.api as unknown as { registries: Registries }).registries;
+  const straight = r.routes.get("straight")!;
+  let calls = 0;
+  // It fails the first time only, which is when the nearest anchor is looked for: a later draw (the normaliser's) works.
+  r.routes.register({ ...straight, id: "x.broken", path: (...args: Parameters<typeof straight.path>) => {
+    if (calls++ === 0) throw new Error("route exploded");
+    return straight.path(...args);
+  } } as never);
+  const run = s.api.run(PATH, "node.update", { id: "c", patch: { route: "x.broken", ends: [{ kind: "free", x: 0, y: 0 }, { kind: "attached", node: "s", snap: "anchor" }] } });
+  await expect(run).rejects.toThrow("route exploded");
 });

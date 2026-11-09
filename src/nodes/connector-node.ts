@@ -19,7 +19,7 @@ import type {
   UpdateContext,
 } from "../registry/node-type";
 import { paintToSvg, strokeAttrs, strokeFields } from "../registry/paint";
-import { fieldError, isCap, isEnd, type ParamSpec } from "../registry/params";
+import { fieldError, isCap, isEnd, isStroke, type ParamSpec } from "../registry/params";
 import { roundPx } from "../view/pointer-math";
 import { connectorNodePptx } from "./connector-node-pptx";
 
@@ -165,15 +165,11 @@ function withNearestAnchors(node: ConnectorNode, ctx: UpdateContext): ConnectorN
   if (ends.length !== 2 || !ends.some(lacking)) return node;
   // Drawn with an anchor id no item has, an end is placed as a centre-snapped one: where the normaliser looks too.
   const placeholder = ends.map((end) => (lacking(end) ? { ...end, anchor: "" } : end)) as [End, End];
-  let drawn: Pt[] | null;
-  try {
-    drawn = resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends.map((e) => e.pt);
-  } catch {
-    // A malformed field beside the ends (caps that are not two caps) leaves the line undrawable. The end then takes the
-    // anchor nearest its item's centre, so that the ends are well formed and the check of the malformed field is the
-    // one that refuses the patch, with its own message.
-    drawn = null;
-  }
+  // Caps or a stroke too malformed to draw the line by (the patch's checks refuse them, with their own messages): the
+  // line is not drawn, and each end takes the anchor nearest its item's centre, so the ends are well formed and the
+  // malformed field is what the patch is refused for. Any other error in drawing it is a real one, and goes on up.
+  const drawable = pairOf(node.caps, isCap) && isStroke(node.stroke);
+  const drawn: Pt[] | null = drawable ? resolveConnector(ctx.doc, { ...node, ends: placeholder }, ctx.registries).ends.map((e) => e.pt) : null;
   const filled = ends.map((end, i) => {
     if (!lacking(end)) return end;
     const target = attachTarget(ctx.doc, ctx.registries, end.node);

@@ -110,7 +110,8 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
   return {
     files: paths.length,
     paths,
-    warnings: [...trimReport.filter(isTrimFallback), ...reported, ...trimReport.filter((line) => !isTrimFallback(line))],
+    // A line said for several pages, or by the exporter again, is listed once, whichever exporter ran.
+    warnings: [...new Set([...trimReport.filter(isTrimFallback), ...reported, ...trimReport.filter((line) => !isTrimFallback(line))])],
   };
 }
 

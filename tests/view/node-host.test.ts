@@ -792,4 +792,18 @@ describe("a node of a type no plugin registers", () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  test("a node its plugin's migrate hook could not read is drawn as a placeholder though its type is registered", () => {
+    const t = setup();
+    const page = t.doc.pages[0];
+    const node = { id: "x-1", type: "x.chart", page: page.id, x: 1, y: 2, width: 30, height: 40, z: 9, rotation: 0, opacity: 1, locked: false } as unknown as Node;
+    const host = new DomEl([]);
+    const view = { ...t.view, unreadableNodes: new Set(["x-1"]) };
+    const nodeHost = new NodeHost(view as never, { nodesHost: () => host } as never, { nodeTypes: { get: () => t.recording.type } } as unknown as Registries);
+    nodeHost.renderAll({ ...t.doc, nodes: [node] });
+    const el = nodeHost.elementFor("x-1") as unknown as DomEl;
+    expect(el.cls).toEqual(["lf-node", "lf-placeholder"]);
+    expect(el.children.map((c) => c.text)).toEqual(["Unreadable: x.chart"]);
+    expect(t.recording.mounted).toEqual([]);
+  });
 });

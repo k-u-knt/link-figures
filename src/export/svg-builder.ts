@@ -6,6 +6,11 @@ import type { SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
 import { isTransparentPaper } from "../model/paper";
 
+/** What an export says of the items of `type`, a type no plugin registers, which it leaves out. */
+export function skippedTypeWarning(type: string): string {
+  return `"${type}" item skipped: no plugin draws it`;
+}
+
 /** For a value written between double quotes. */
 export function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -71,7 +76,9 @@ export function buildPageSvg(
   for (const node of nodes) {
     const type = registries.nodeTypes.get(node.type);
     if (!type) {
-      warnings.push(`"${node.type}" item skipped: no plugin draws it`);
+      const warning = skippedTypeWarning(node.type);
+      // Said once for all the items of the type.
+      if (!warnings.includes(warning)) warnings.push(warning);
       continue;
     }
     if (opts.overlaysOnly) {

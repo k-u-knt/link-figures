@@ -126,6 +126,27 @@ describe("exportFigure", () => {
     expect(spy.runs).toEqual([]);
   });
 
+  test("a warning said for several pages, or said twice by the exporter, is listed once", async () => {
+    const { t, doc } = target();
+    for (const page of doc.pages) {
+      t.doc.nodes.push({ id: `x-${page.id}`, type: "x.chart", page: page.id, x: 0, y: 0, width: 10, height: 10, z: 0, rotation: 0, opacity: 1, locked: false } as never);
+    }
+    const passthrough: Exporter = {
+      id: "pass",
+      name: "Pass",
+      ext: "txt",
+      mime: "text/plain",
+      pdfPanels: "raster",
+      options: () => [],
+      async run(input) {
+        return { files: [{ name: "Fig.txt", blob: new Blob(["x"]) }], warnings: [...input.warnings, "twice", "twice"] };
+      },
+    };
+    t.deps.registries.exporters.register(passthrough);
+    const out = await exportFigure(t, { format: "pass", pages: "all" });
+    expect(out.warnings).toEqual(['"x.chart" item skipped: no plugin draws it', "twice"]);
+  });
+
   test("a file that would replace a source of the figure is not written, and that is said", async () => {
     const { t } = target();
     t.deps.isProtected = (path) => path === "figs/Fig - Page 2.txt";

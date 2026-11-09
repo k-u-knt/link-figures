@@ -12,7 +12,7 @@ import { pictureXml } from "../pptx/media";
 import { buildPptx, MAX_SLIDE_EMU, MIN_SLIDE_EMU, slideMediaRId, type PptxMedia, type PptxSlideInput } from "../pptx/package";
 import { fitDpi } from "../raster-size";
 import { renderClearPngOnCanvas, type RenderClearPng } from "../rasterise";
-import { buildPageSvg } from "../svg-builder";
+import { buildPageSvg, skippedTypeWarning } from "../svg-builder";
 
 const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const MEDIA_TYPES = { png: "image/png", jpeg: "image/jpeg" } as const;
@@ -213,7 +213,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
         const writeItem = async (node: Node): Promise<string> => {
           const type = input.registries.nodeTypes.get(node.type);
           if (!type) {
-            warn(`${nodeLabel(input.doc, node)}: no node type "${node.type}" is registered, skipped`);
+            warn(skippedTypeWarning(node.type));
             return "";
           }
           let part: PptxPart | "raster" | null | undefined;

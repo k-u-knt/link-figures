@@ -73,6 +73,16 @@ describe("pptx exporter", () => {
     expect(one(second, "p:sldSz").getAttribute("cy")).toBe(String(297 * 36000));
   });
 
+  it("skips an item of a type no plugin draws with the spec's warning, said once for several such items", async () => {
+    const doc = createDocument("nature-double");
+    const page = doc.pages[0];
+    for (const id of ["x-1", "x-2"]) doc.nodes.push({ id, type: "x.chart", page: page.id, x: 0, y: 0, width: 10, height: 10, z: 0, rotation: 0, opacity: 1, locked: false } as never);
+    doc.nodes.push(shape(page, { id: "s", z: 1 }));
+    const { files, warnings } = await run(input(doc));
+    expect(all(slideOf(files[0].bytes), "p:cNvPr").slice(1).map((c) => c.getAttribute("name"))).toEqual(["s"]);
+    expect(warnings).toEqual(['"x.chart" item skipped: no plugin draws it']);
+  });
+
   it("writes the page's items by z, the paper as the background, and unique ids", async () => {
     const doc = createDocument("nature-double");
     const page = doc.pages[0];

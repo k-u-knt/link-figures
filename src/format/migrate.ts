@@ -111,23 +111,50 @@ export type NodeMigrations = (type: string) => { migrate?(raw: Record<string, un
 /**
  * A node of a type this plugin does not build in: with the common defaults filled in, it goes through the `migrate` hook
  * of the NodeType a plugin registered for it, when there is one; otherwise (no plugin registers the type, or its NodeType
- * has no hook) it is kept as it is, every key of its own included, so saving it loses nothing.
+ * has no hook, or the hook fails: see `HookFailure`) it is kept as it is, every key of its own included, so saving it
+ * loses nothing.
  */
-function migrateForeign(id: string, type: string, raw: Json, nodeTypes: NodeMigrations | undefined): Json {
+function migrateForeign(id: string, type: string, raw: Json, nodeTypes: NodeMigrations | undefined, failures: HookFailure[] | undefined): Json {
   const node = fill(raw, COMMON_DEFAULTS());
   const hook = nodeTypes?.(type)?.migrate;
   if (!hook) return node;
   let out: unknown;
   try {
-    out = hook(node);
+    // A copy, so a hook that changes what it is given and then throws leaves the node as the file has it.
+    out = hook(structuredClone(node));
   } catch (error) {
-    throw new FormatError(`Node ${id}: ${error instanceof Error ? error.message : String(error)}`);
+    failures?.push({ id, type, message: error instanceof Error ? error.message : String(error) });
+    return node;
   }
-  if (!isRecord(out) || out.id !== id || out.type !== type) throw new FormatError(`Node ${id}: the "${type}" type's migrate hook did not give the node back`);
-  return out;
+  const wrong = baseFieldsError(out, id, type);
+  if (wrong !== null) {
+    failures?.push({ id, type, message: `its migrate hook gave back a node whose ${wrong}` });
+    return node;
+  }
+  return out as Json;
 }
 
-function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations): Json {
+/** What is wrong with the base fields of `out`, a node a migrate hook gave back for node `id` of `type`; null when nothing. */
+function baseFieldsError(out: unknown, id: string, type: string): string | null {
+  if (!isRecord(out)) return "is not an object";
+  if (out.id !== id) return `"id" is not "${id}"`;
+  if (out.type !== type) return `"type" is not "${type}"`;
+  if (typeof out.page !== "string") return `"page" is not a string`;
+  for (const key of ["x", "y", "width", "height"]) if (!isNumber(out[key])) return `"${key}" is not a finite number`;
+  return null;
+}
+
+/**
+ * A node a plugin's `migrate` hook could not read (it threw, or gave back a node whose base fields are not right): the
+ * node is kept as the file has it, drawn as a placeholder, and the view reports the failure once per type.
+ */
+export interface HookFailure {
+  id: string;
+  type: string;
+  message: string;
+}
+
+function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations, failures?: HookFailure[]): Json {
   if (!isRecord(raw)) throw new FormatError(`Node ${index + 1} is not an object`);
   const { id, type, page } = raw;
   if (typeof id !== "string" || id === "") throw new FormatError(`Node ${index + 1} has no id`);
@@ -138,7 +165,7 @@ function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations): J
   }
   // Whether the group it names exists is the store's group normaliser's to check, as the document is loaded.
   if (raw.parent !== undefined && typeof raw.parent !== "string") throw new FormatError(`Node ${id}: "parent" must be a string`);
-  if (!Object.hasOwn(NODE_DEFAULTS, type)) return migrateForeign(id, type, raw, nodeTypes);
+  if (!Object.hasOwn(NODE_DEFAULTS, type)) return migrateForeign(id, type, raw, nodeTypes, failures);
   const node = fill(raw, NODE_DEFAULTS[type]());
   if (type === "file") {
     node.adjustments = migrateAdjustments(id, node.adjustments);
@@ -162,13 +189,14 @@ function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations): J
  * Validates the parsed JSON body and fills missing optional fields with the model's defaults, by node type.
  * Unknown extra keys on the document, pages and nodes are kept. File nodes get empty `file`/`subpath`;
  * the loader fills those from the Links section. A node of a type that is not built in is kept (see `migrateForeign`);
- * `nodeTypes` finds the hooks of the types plugins register.
+ * `nodeTypes` finds the hooks of the types plugins register; a hook that fails does not refuse the file but is added to
+ * `failures` (see `HookFailure`).
  */
-export function migrate(json: unknown, nodeTypes?: NodeMigrations): Document {
+export function migrate(json: unknown, nodeTypes?: NodeMigrations, failures?: HookFailure[]): Document {
   if (!isRecord(json)) throw new FormatError("Figure JSON must be an object");
   if (json.version !== FORMAT_VERSION) throw new FormatError(`Unsupported figure format version: ${String(json.version)}`);
   if (!Array.isArray(json.pages)) throw new FormatError('Figure JSON has no "pages" array');
   if (!Array.isArray(json.nodes)) throw new FormatError('Figure JSON has no "nodes" array');
-  const doc = { ...json, version: FORMAT_VERSION, pages: json.pages.map(migratePage), nodes: json.nodes.map((n, i) => migrateNode(n, i, nodeTypes)), edges: [] };
+  const doc = { ...json, version: FORMAT_VERSION, pages: json.pages.map(migratePage), nodes: json.nodes.map((n, i) => migrateNode(n, i, nodeTypes, failures)), edges: [] };
   return doc as unknown as Document;
 }

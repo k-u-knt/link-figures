@@ -1315,6 +1315,8 @@ export class PointerController {
   }
 
   private nodeType(node: Node): NodeType | undefined {
+    // A node its plugin could not read is pressed by its box, as a placeholder (see `LinkFiguresView.unreadableNodes`).
+    if (this.view.unreadableNodes?.has(node.id)) return undefined;
     return this.view.plugin.registries.nodeTypes.get(node.type);
   }
 

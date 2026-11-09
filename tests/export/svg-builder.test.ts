@@ -147,6 +147,14 @@ test("a node of a type no plugin draws (another plugin's item) is skipped with t
   expect(drawn).toBe(1);
 });
 
+test("several items of one type no plugin draws are reported once", () => {
+  const d = docWith({});
+  for (const id of ["x-1", "x-2", "x-3"]) d.nodes.push({ id, type: "x.chart", page: d.pages[0].id, x: 0, y: 0, width: 10, height: 10, z: 5, rotation: 0, opacity: 1, locked: false } as never);
+  d.nodes.push({ id: "y-1", type: "y.map", page: d.pages[0].id, x: 0, y: 0, width: 10, height: 10, z: 5, rotation: 0, opacity: 1, locked: false } as never);
+  const { warnings } = buildPageSvg(d, d.pages[0], reg(), new Map([[d.nodes[0].id, image()]]));
+  expect(warnings).toEqual(['"x.chart" item skipped: no plugin draws it', '"y.map" item skipped: no plugin draws it']);
+});
+
 test("nodes are drawn in z order, equal z keeping document order", () => {
   const d = docWith({ z: 2, file: "top.png" });
   const page = d.pages[0];

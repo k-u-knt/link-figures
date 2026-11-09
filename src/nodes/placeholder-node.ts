@@ -1,5 +1,5 @@
 import type { Rect } from "../model/geometry";
-import type { Node } from "../model/types";
+import type { Node, NodeId } from "../model/types";
 import type { Registries } from "../registry";
 import type { NodeRenderer, NodeType } from "../registry/node-type";
 
@@ -37,8 +37,7 @@ class PlaceholderRenderer implements NodeRenderer {
  * only, and the node is pressed, moved, resized, deleted and grouped by its box, as any item is. It is never registered:
  * an export skips such a node with a warning (see `buildPageSvg`), and the file keeps it as it is.
  */
-export function placeholderNodeType(type: string): NodeType {
-  const label = `Missing: ${type}`;
+export function placeholderNodeType(type: string, label = `Missing: ${type}`): NodeType {
   return {
     type,
     name: label,
@@ -48,6 +47,14 @@ export function placeholderNodeType(type: string): NodeType {
     inspector: () => [],
     toSvg: () => "",
   } as NodeType;
+}
+
+/**
+ * The NodeType the view draws, inspects and presses `node` by: a placeholder labelled "Unreadable: <type>" for a node
+ * its plugin's `migrate` hook could not read (one of `unreadable`), else `nodeTypeOrPlaceholder`.
+ */
+export function viewNodeType(registries: Pick<Registries, "nodeTypes">, node: Node, unreadable?: ReadonlySet<NodeId>): NodeType {
+  return unreadable?.has(node.id) ? placeholderNodeType(node.type, `Unreadable: ${node.type}`) : nodeTypeOrPlaceholder(registries, node.type);
 }
 
 /** The NodeType registered for `type`, else its placeholder (see `placeholderNodeType`). */

@@ -1,14 +1,8 @@
 import { normalizePath, TFolder, type App, type TFile } from "obsidian";
 import { FILE_SUFFIX } from "../constants";
-import { emptyParsed, serializeFigureFile } from "../format/serialize";
-import { newFigureDocument } from "../model/defaults";
+import { newFigureText } from "../format/new-figure";
 import { DEFAULT_PRESET_ID, getPreset } from "../model/presets";
 import { CommandError } from "../registry/command";
-
-/** A new figure file's text: `pages` empty pages of the preset `presetId` (a known one), as "New figure" writes them. */
-export function newFigureText(presetId: string, pages: number): string {
-  return serializeFigureFile(newFigureDocument(presetId, pages), emptyParsed());
-}
 
 /**
  * Writes a one-page figure to `<folder>/<baseName>.lnkfig.md`, numbering the name (" 1", " 2", ...) while it is taken.
@@ -28,10 +22,12 @@ export async function createFigureFile(app: App, folderPath: string, baseName: s
 /**
  * Writes `text` as a new file at `path` (a normalised vault path), creating the folders above it that are missing: what
  * `api.createFigure` does once it has made the figure's text. Refuses (a `CommandError` naming `createFigure`), writing
- * nothing, when something is already at `path` (in the vault, or on disk and not indexed yet) or a folder above it is a file.
+ * nothing, when something is already at `path` (in the vault, or on disk and not indexed yet) or a folder above it is a
+ * file; an error Obsidian gives while writing comes back as a `CommandError` naming `createFigure` too.
  */
 export async function writeNewFigureFile(app: App, path: string, text: string): Promise<void> {
   const command = "createFigure";
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
   if (app.vault.getAbstractFileByPath(path) || (await app.vault.adapter.exists(path))) {
     throw new CommandError(`${command}: there is already a file or folder at "${path}"`);
   }
@@ -47,9 +43,14 @@ export async function writeNewFigureFile(app: App, path: string, text: string): 
     try {
       await app.vault.createFolder(folder);
     } catch (error) {
-      // The folder can exist on disk without being in the vault's index yet.
-      if (!/already exists/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      // The folder can exist on disk without being in the vault's index yet: what counts is whether it is there now,
+      // not what the error says (its wording is Obsidian's, and may change or be translated).
+      if (!(await app.vault.adapter.exists(folder))) throw new CommandError(`${command}: could not create the folder "${folder}": ${reason(error)}`);
     }
   }
-  await app.vault.create(path, text);
+  try {
+    await app.vault.create(path, text);
+  } catch (error) {
+    throw new CommandError(`${command}: could not create "${path}": ${reason(error)}`);
+  }
 }

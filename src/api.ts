@@ -13,9 +13,8 @@ import {
 } from "./commands/headless";
 import { FILE_SUFFIX } from "./constants";
 import type { ExportOutcome, ExportRequest } from "./export/export-run";
-import { emptyParsed, serializeFigureFile } from "./format/serialize";
+import { newFigureText } from "./format/new-figure";
 import type { BlockIdResult } from "./links/note-block-id";
-import { newFigureDocument } from "./model/defaults";
 import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
 import type { DocumentStore } from "./model/store";
 import type { Document } from "./model/types";
@@ -69,7 +68,8 @@ export interface LinkFiguresApi {
    */
   export(figurePath: string, request: ExportRequest): Promise<ExportOutcome>;
   /**
-   * Creates a new figure file at `path` (a vault path; `.lnkfig.md` is appended when it does not end so), as the "New
+   * Creates a new figure file at `path` (a vault path, normalised: an absolute path such as "/figs/a" is taken as
+   * vault-relative, and a "." or ".." segment is refused; `.lnkfig.md` is appended when it does not end so), as the "New
    * figure" command makes one: `pages` empty pages (1 by default, up to 100) of the page preset `preset` (an id from
    * the presets list; the Default page preset setting when left out). The folders above it that are missing are
    * created. Refuses (`CommandError`) an unknown preset, a bad number of pages, and a path something is already at.
@@ -195,21 +195,26 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       if (typeof figurePath !== "string" || figurePath.trim() === "") throw new CommandError(`${command}: the path must name a file in the vault`);
       if (typeof options !== "object" || options === null || Array.isArray(options)) throw new CommandError(`${command}: the options must be an object`);
       const { pages = 1 } = options;
-      // A stale setting falls back to the default preset, as the New figure command does; a preset the caller names must be one.
+      // A stale setting falls back to the default preset, as the New figure command does; a preset the caller names
+      // (null included) must be one.
       const setting = host.defaultPreset?.();
-      const preset = options.preset ?? (setting !== undefined && getPreset(setting) ? setting : DEFAULT_PRESET_ID);
-      if (typeof preset !== "string" || !getPreset(preset)) throw new CommandError(`${command}: there is no page preset "${String(preset)}"`);
+      const preset: unknown = options.preset !== undefined ? options.preset : setting !== undefined && getPreset(setting) ? setting : DEFAULT_PRESET_ID;
+      if (typeof preset !== "string" || !getPreset(preset)) throw new CommandError(`${command}: there is no page preset ${JSON.stringify(preset) ?? String(preset)}`);
       if (typeof pages !== "number" || !Number.isInteger(pages) || pages < 1 || pages > MAX_NEW_FIGURE_PAGES) {
         throw new CommandError(`${command}: "pages" must be a whole number from 1 to ${MAX_NEW_FIGURE_PAGES}`);
       }
       const write = host.createFigureFile;
       if (!write) throw new CommandError(`${command}: figures cannot be created here`);
+      // Obsidian's normalizePath drops a leading "/" (so an absolute path is taken as vault-relative) but leaves "." and
+      // "..", which would name a file outside the folder written, or outside the vault.
       const normalised = host.normalizePath(figurePath);
-      if (normalised === "/") throw new CommandError(`${command}: the path must name a file in the vault`);
+      if (normalised === "/" || normalised.split("/").some((part) => part === "." || part === "..")) {
+        throw new CommandError(`${command}: the path must name a file in the vault`);
+      }
       const path = normalised.endsWith(FILE_SUFFIX) ? normalised : `${normalised}${FILE_SUFFIX}`;
       // In the figure's queue, so a call on it made right after this one waits for the file to be there.
       return queued(path, async () => {
-        await write(path, serializeFigureFile(newFigureDocument(preset, pages), emptyParsed()));
+        await write(path, newFigureText(preset, pages));
         return { path };
       });
     },

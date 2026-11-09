@@ -2,7 +2,7 @@ import { groupCommands } from "../../src/commands/groups";
 import { drawingCommands } from "../../src/commands/drawing";
 import { prepareCall, runCall, withHeadlessFigure } from "../../src/commands/headless";
 import { FormatError } from "../../src/format/errors";
-import { loadDocument } from "../../src/format/load";
+import { hookFailureReports, loadDocument } from "../../src/format/load";
 import { parseFigureFile } from "../../src/format/parse";
 import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { createDocument, shapeNodeDefaults } from "../../src/model/defaults";
@@ -156,23 +156,54 @@ describe("a type a plugin registers: its NodeType's migrate hook", () => {
     expect(node.series).toEqual([]);
   });
 
-  test("a hook that throws refuses the file, naming the node", () => {
+  test("a hook that throws does not block the figure: the node is kept as the file has it, and the failure listed", () => {
     const doc = createDocument("a4-portrait");
     const r = registries();
     r.nodeTypes.register(
-      chartType(() => {
+      chartType((raw) => {
+        (raw as Record<string, unknown>).series = "mangled";
         throw new Error('"series" must be a list');
       }),
     );
-    expect(() => loadDocument(fileWith([foreign(doc.pages[0].id)]), r)).toThrow(FormatError);
-    expect(() => loadDocument(fileWith([foreign(doc.pages[0].id)]), r)).toThrow('Node x-1: "series" must be a list');
+    const text = fileWith([foreign(doc.pages[0].id), { ...foreign(doc.pages[0].id), id: "x-2" }]);
+    const { doc: loaded, parsed, hookFailures } = loadDocument(text, r);
+    expect(loaded.nodes[0]).toEqual(foreign(doc.pages[0].id));
+    expect(hookFailures).toEqual([
+      { id: "x-1", type: "x.chart", message: '"series" must be a list' },
+      { id: "x-2", type: "x.chart", message: '"series" must be a list' },
+    ]);
+    expect(serializeFigureFile(loaded, parsed)).toBe(text);
   });
 
-  test("a hook that changes the node's id or type refuses the file", () => {
+  test.each([
+    ["changes the id", (raw: Record<string, unknown>) => ({ ...raw, id: "other" }), /"id" is not "x-1"/],
+    ["changes the type", (raw: Record<string, unknown>) => ({ ...raw, type: "y" }), /"type" is not "x.chart"/],
+    ["drops the page", (raw: Record<string, unknown>) => ({ ...raw, page: 3 }), /"page" is not a string/],
+    ["gives a box that is not finite", (raw: Record<string, unknown>) => ({ ...raw, width: Infinity }), /"width" is not a finite number/],
+    ["gives back nothing", () => undefined, /is not an object/],
+  ])("a hook that %s counts as failed: the node is kept as it was", (_name, hook, message) => {
     const doc = createDocument("a4-portrait");
     const r = registries();
-    r.nodeTypes.register(chartType((raw) => ({ ...raw, id: "other" }) as Node));
-    expect(() => loadDocument(fileWith([foreign(doc.pages[0].id)]), r)).toThrow(FormatError);
+    r.nodeTypes.register(chartType(hook as never));
+    const { doc: loaded, hookFailures } = loadDocument(fileWith([foreign(doc.pages[0].id)]), r);
+    expect(loaded.nodes[0]).toEqual(foreign(doc.pages[0].id));
+    expect(hookFailures).toHaveLength(1);
+    expect(hookFailures[0]).toMatchObject({ id: "x-1", type: "x.chart" });
+    expect(hookFailures[0].message).toMatch(message);
+  });
+
+  test("the failures are reported once per type, with the type and the first message", () => {
+    const reports = hookFailureReports([
+      { id: "x-1", type: "x.chart", message: "bad series" },
+      { id: "x-2", type: "x.chart", message: "other" },
+      { id: "m-1", type: "y.map", message: "no tiles" },
+    ]);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toContain('"x.chart"');
+    expect(reports[0]).toContain("bad series");
+    expect(reports[0]).not.toContain("other");
+    expect(reports[1]).toContain('"y.map"');
+    expect(reports[1]).toContain("no tiles");
   });
 
   test("without the hook, the node is accepted as it is", () => {

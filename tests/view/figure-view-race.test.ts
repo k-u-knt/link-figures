@@ -1,5 +1,6 @@
 import { createApi } from "../../src/api";
 import { registerBuiltinCommands } from "../../src/commands/builtin";
+import { cardCommands } from "../../src/commands/cards";
 import { drawingCommands } from "../../src/commands/drawing";
 import { FigureWrites } from "../../src/commands/figure-writes";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
@@ -161,7 +162,7 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
   for (const route of builtinRoutes) registries.routes.register(route);
   for (const cap of builtinCapKinds) registries.caps.register(cap);
-  for (const command of drawingCommands()) registries.commands.register(command);
+  for (const command of [...drawingCommands(), ...cardCommands()]) registries.commands.register(command);
 
   type FakeFile = { path: string; name: string; saving: boolean };
   const texts = new Map<string, string>();
@@ -727,6 +728,23 @@ describe("a rename's link update in Obsidian, and the view's own save", () => {
     expect(t.disk.text).toBe(broken);
     expect(t.writes.filter((w) => w.by !== "external")).toEqual([]);
     expect(t.view.hasDocument()).toBe(false);
+  });
+
+  test("a card made and not saved yet when its note is renamed (Obsidian's cache knows no link to it) takes the new name", async () => {
+    for (const prompt of [Promise.resolve(), new Promise<void>((r) => setTimeout(r, 800))]) {
+      const t = setup(twoNoteCards());
+      await t.opened();
+      const page = loadDocument(t.disk.text).doc.pages[0].id;
+      await t.api.run(PATH, "card.create", { page, x: -300, y: 400, file: "Notes/Cards legend", subpath: "#Fig 1", id: "c-new" });
+      // Renamed before the view's save: the file has no link of c-new for Obsidian to rewrite.
+      const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", prompt);
+      await vi.advanceTimersByTimeAsync(1000);
+      await renaming;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(linkOf(t.disk.text, "c-new")).toBe("Notes/Cards legend 2");
+      expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
+      expect((t.view.store.doc.nodes.find((n) => n.id === "c-new") as { file?: string }).file).toBe("Notes/Cards legend 2");
+    }
   });
 
   test("a relink the user made before the link update landed is kept, not taken from the file", async () => {

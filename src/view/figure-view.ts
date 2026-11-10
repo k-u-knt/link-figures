@@ -656,6 +656,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.app.metadataCache.fileToLinktext(file, figurePath, omitMd),
     );
     this.store.rebasePaths(renames);
+    this.renameUnsavedLinks(renames);
     // Kept for a link update that leaves the file unreadable (`repairLinkUpdate`): only renames of what it links to.
     const linked = new Set(this.store.doc.nodes.flatMap((n) => linkOf(n)?.file ?? []));
     let touched = false;
@@ -670,6 +671,25 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.linkUpdateEndQueued = true;
       void afterLinkUpdates(this.app, () => this.endLinkUpdate(), { alwaysQueue: true });
     }
+  }
+
+  /**
+   * Renames the links of the open figure's nodes that the file does not hold yet (a card or panel made, or relinked,
+   * since the last save): Obsidian rewrites only the links its metadata cache has of the file, so these would keep
+   * the old name and be saved stale. A link the file holds as the view has it is left to Obsidian's link update (and
+   * to the user's answer to its prompt), which the view then takes up (`adoptReload`, `adoptLinkUpdate`).
+   */
+  private renameUnsavedLinks(renames: ReadonlyMap<string, string>): void {
+    if (renames.size === 0) return;
+    let onDisk: Map<NodeId, string>;
+    try {
+      onDisk = new Map(loadDocument(this.diskText, this.plugin.registries).doc.nodes.map((n) => [n.id, linktextOf(n)]));
+    } catch {
+      onDisk = new Map();
+    }
+    const doc = this.store.doc;
+    const nodes = doc.nodes.map((n) => (onDisk.get(n.id) === linktextOf(n) ? n : renamedLink(n, renames)));
+    if (nodes.some((n, i) => n !== doc.nodes[i])) this.store.replace({ ...doc, nodes }, "links", { keepHistory: true });
   }
 
   /** The figure file was modified. Whoever wrote it, if it was not this view, its Links section may have been rewritten. */

@@ -19,6 +19,12 @@ export interface ExportInput {
    * again passes them to `buildPageSvg`, and one that draws items itself skips them with `unreadableTypeWarning`.
    */
   unreadable?: ReadonlySet<NodeId>;
+  /**
+   * The Markdown of the cards tied to a page, in card order (a note card's section as its note has it now; a card that
+   * cannot be read is left out, with a warning the export reports). Read once per export, when first asked for, so an
+   * exporter that does not ask reads nothing. None: the export has no cards to give.
+   */
+  cardMarkdown?(page: PageId): Promise<string[]>;
 }
 
 export interface ExportResult {

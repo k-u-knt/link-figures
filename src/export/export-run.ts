@@ -1,16 +1,19 @@
 import type { App } from "obsidian";
 import { MAX_DPI, MIN_DPI } from "../constants";
-import type { Decoders, Resolved } from "../links/types";
+import type { Decoders, Resolved, VaultAccess } from "../links/types";
 import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { Registries } from "../registry";
 import type { Exporter } from "../registry/exporter";
-import type { Field } from "../registry/fields";
 import type { LinkFiguresSettings } from "../settings/settings";
 import type { AssetMap } from "./asset-types";
 import { collectAssets } from "./assets";
+import { cardTextSource, writeCardFiles } from "./cards-markdown";
+import { exportOptions, splitCommonOptions } from "./export-options";
 import { buildPageSvg } from "./svg-builder";
 import { isTrimFallback, trimAssets, type TrimDeps } from "./trim";
 import { exportDir, exportFolderFor, exportPathFor, safeFileName, uniqueFileNames, writeExportFile } from "./write";
+
+export { exportOptions, optionDefaults } from "./export-options";
 
 export interface ExportRun {
   exporter: Exporter;
@@ -27,6 +30,10 @@ export interface ExportRun {
   options?: Record<string, unknown>;
   /** The nodes their plugin could not read when the figure was loaded: skipped, with a warning (`BuildOptions.unreadable`). */
   unreadable?: ReadonlySet<NodeId>;
+  /** "Export cards as Markdown" (`options.cards: "markdown"`): each exported page's cards, with their images, beside the files. */
+  cards?: boolean;
+  /** The figure's vault path, which a text card's links are resolved from; `""` when left out. */
+  figurePath?: string;
 }
 
 export interface ExportDeps {
@@ -38,8 +45,13 @@ export interface ExportDeps {
   decoders: Decoders;
   /** How each panel's source is trimmed to the part of it that shows (see `trimAssets`). */
   trim: TrimDeps;
-  /** True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). */
-  isProtected: (path: string) => boolean;
+  /**
+   * True for a vault path no export may write over: the figure file and its sources (see `isFigureSource`). With
+   * `cardsFile`, the path is a cards Markdown file, which may replace a note (an earlier export of it).
+   */
+  isProtected: (path: string, cardsFile?: boolean) => boolean;
+  /** The vault, as links are resolved in it: the note cards' sections are read through it (with the figure closed too). */
+  access?: VaultAccess;
 }
 
 /**
@@ -49,7 +61,9 @@ export interface ExportDeps {
  * protected: `deps.isProtected`), and what trimming did to each cropped panel. They come in that order of urgency: the
  * panels that could not be trimmed first, then the other warnings, then the rest of the trim report, so that the
  * notice, which shows only the first few, never leaves out a panel embedded whole for a line saying all went well.
- * `files` counts the files actually written, and `paths` are their vault paths.
+ * `files` counts the files actually written, and `paths` are their vault paths. The exporter is given the cards'
+ * Markdown (`ExportInput.cardMarkdown`, read from the vault when first asked for), and with `run.cards` each exported
+ * page's cards are written as Markdown after its files (`writeCardFiles`), with what could not be read reported last.
  */
 export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ files: number; paths: string[]; warnings: string[] }> {
   const { app } = deps;
@@ -85,8 +99,22 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
     svgs.set(page.id, built.svg);
   }
 
+  // The cards' Markdown, read from the vault once, when the exporter (presenter notes) or the cards pass first asks.
+  const cardWarnings: string[] = [];
+  const cardTexts = cardTextSource({ doc: run.doc, registries: deps.registries, figurePath: run.figurePath ?? "", access: deps.access, unreadable: run.unreadable }, cardWarnings);
   const result = await run.exporter.run(
-    { doc: run.doc, pages: run.pages, svgs, assets, registries: deps.registries, warnings, baseName: run.baseName, dpi: run.dpi, unreadable: run.unreadable },
+    {
+      doc: run.doc,
+      pages: run.pages,
+      svgs,
+      assets,
+      registries: deps.registries,
+      warnings,
+      baseName: run.baseName,
+      dpi: run.dpi,
+      unreadable: run.unreadable,
+      cardMarkdown: async (page) => (await cardTexts(page)).map((card) => card.markdown),
+    },
     run.options ?? {},
   );
 
@@ -109,6 +137,15 @@ export async function runExport(run: ExportRun, deps: ExportDeps): Promise<{ fil
     await writeExportFile(app, run.folder, names[i], file.blob);
     paths.push(path);
   }
+  if (run.cards) {
+    const written = await writeCardFiles(
+      { pages: run.pages, baseName: run.baseName, folder: run.folder, figurePath: run.figurePath ?? "", texts: cardTexts },
+      { app, access: deps.access, isProtected: deps.isProtected },
+      cardWarnings,
+    );
+    paths.push(...written);
+  }
+  reported.push(...cardWarnings);
   return {
     files: paths.length,
     paths,
@@ -124,62 +161,6 @@ export function exportSummary(files: number, folder: string): string {
 
 /** The dpi preset buttons of the export modal: the resolutions journals ask for. */
 export const DPI_PRESETS = [300, 600, 1000] as const;
-
-/** The kinds of field an exporter's options may use, and so the ones the modal draws. */
-const OPTION_KINDS = new Set<Field["kind"]>(["select", "toggle", "number", "text"]);
-
-const isOption = (field: Field) => OPTION_KINDS.has(field.kind);
-
-/** An option field's value when none is given: a select's first choice, a toggle off, a number's minimum (or 0), empty text. */
-function fieldDefault(field: Field): unknown {
-  switch (field.kind) {
-    case "select":
-      return field.options?.[0]?.value ?? "";
-    case "toggle":
-      return false;
-    case "number":
-      return field.min ?? 0;
-    default:
-      return "";
-  }
-}
-
-/** The value of each of the option fields when none is given (a `Field` has no default of its own). */
-export function optionDefaults(fields: Field[]): Record<string, unknown> {
-  return Object.fromEntries(fields.filter(isOption).map((field) => [field.key, fieldDefault(field)]));
-}
-
-/** Why `value` is not one `field` takes, or null when it is. */
-function badValue(field: Field, value: unknown): string | null {
-  switch (field.kind) {
-    case "select": {
-      const choices = (field.options ?? []).map((o) => o.value);
-      return choices.includes(value as string) ? null : `must be one of ${choices.join(", ")}`;
-    }
-    case "toggle":
-      return typeof value === "boolean" ? null : "must be true or false";
-    case "number": {
-      const [min, max] = [field.min ?? -Infinity, field.max ?? Infinity];
-      const ok = typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
-      return ok ? null : `must be a number from ${min} to ${max}`;
-    }
-    default:
-      return typeof value === "string" ? null : "must be text";
-  }
-}
-
-/** The options the exporter is run with: its defaults, with `given` over them. An unknown option or a bad value is an Error. */
-export function exportOptions(exporter: Exporter, given: Record<string, unknown> = {}): Record<string, unknown> {
-  if (typeof given !== "object" || given === null || Array.isArray(given)) throw new Error(`${exporter.id}: options must be an object`);
-  const fields = exporter.options().filter(isOption);
-  for (const [key, value] of Object.entries(given)) {
-    const field = fields.find((f) => f.key === key);
-    if (!field) throw new Error(`${exporter.id}: unknown option "${key}"`);
-    const problem = badValue(field, value);
-    if (problem) throw new Error(`${exporter.id}: option "${key}" ${problem}`);
-  }
-  return { ...optionDefaults(fields), ...given };
-}
 
 /** What to export, as the modal and `api.export` ask for it. */
 export interface ExportRequest {
@@ -257,7 +238,7 @@ function pagesOf(doc: Document, current: Page | undefined, asked: ExportRequest[
  * Checks what of `request` needs no figure: the format, the resolution (the settings' when left out), the exporter's
  * options and the form of `pages`. Returns the exporter, the dpi and the options to run it with; an Error otherwise.
  */
-function checkRequest(registries: Registries, exportDpi: number, request: ExportRequest): { exporter: Exporter; dpi: number; options: Record<string, unknown> } {
+function checkRequest(registries: Registries, exportDpi: number, request: ExportRequest): { exporter: Exporter; dpi: number; options: Record<string, unknown>; cards: boolean } {
   const exporter = registries.exporters.get(request.format);
   if (!exporter) {
     throw new Error(`export: there is no format "${request.format}" (${registries.exporters.all().map((e) => e.id).join(", ")})`);
@@ -267,8 +248,10 @@ function checkRequest(registries: Registries, exportDpi: number, request: Export
     throw new Error(`export: the resolution must be a number from ${MIN_DPI} to ${MAX_DPI} dpi`);
   }
   if (!pagesInForm(request.pages)) throw new Error('export: pages must be "current", "all" or a list of page ids');
-  const options = exportOptions(exporter, request.options);
-  return { exporter, dpi: Math.round(dpi), options };
+  // The options every format has are the run's; the rest are the exporter's own.
+  const { common, rest } = splitCommonOptions(request.options);
+  const options = exportOptions(exporter, rest);
+  return { exporter, dpi: Math.round(dpi), options, cards: common.cards };
 }
 
 /**
@@ -276,13 +259,25 @@ function checkRequest(registries: Registries, exportDpi: number, request: Export
  * the request is checked whole before anything is drawn, and no file may replace a source of the figure (`deps.isProtected`).
  */
 export async function exportFigure(target: FigureExportTarget, request: ExportRequest): Promise<ExportOutcome & { folder: string }> {
-  const { exporter, dpi, options } = checkRequest(target.deps.registries, target.settings.exportDpi, request);
+  const { exporter, dpi, options, cards } = checkRequest(target.deps.registries, target.settings.exportDpi, request);
   const pages = pagesOf(target.doc, target.currentPage, request.pages);
   const folder = exportFolderFor(target.settings, target.figurePath);
   // Content cards are snapshotted from the stage: wait (bounded) for it to settle, open figures too.
   const drawn = target.drawn ? await drawnWithin(target.drawn, DRAWN_WAIT_MS) : true;
   const { paths, warnings } = await runExport(
-    { exporter, doc: target.doc, pages, baseName: target.baseName, folder, dpi, maxPageSizeMm: target.settings.maxPageSizeMm, options, unreadable: target.unreadable },
+    {
+      exporter,
+      doc: target.doc,
+      pages,
+      baseName: target.baseName,
+      folder,
+      dpi,
+      maxPageSizeMm: target.settings.maxPageSizeMm,
+      options,
+      unreadable: target.unreadable,
+      cards,
+      figurePath: target.figurePath,
+    },
     target.deps,
   );
   if (!drawn) warnings.unshift(`"${target.baseName}": exported before every item was drawn`);

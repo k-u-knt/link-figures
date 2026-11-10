@@ -3,6 +3,7 @@ import { MAX_DPI, MIN_DPI } from "../constants";
 import type { Page, PageId } from "../model/types";
 import type { Exporter } from "../registry/exporter";
 import type { LinkFiguresView } from "../view/figure-view";
+import { COMMON_EXPORT_OPTIONS } from "./export-options";
 import { DPI_PRESETS, exportFigure, exportSummary, optionDefaults, type FigureExportTarget } from "./export-run";
 import { browserTrimDeps } from "./trim";
 import { isFigureSource } from "./write";
@@ -42,7 +43,9 @@ export function viewExportTarget(view: LinkFiguresView, file: { path: string }, 
       elementFor: (id) => view.nodeHost.elementFor(id),
       decoders: plugin.decoders,
       trim: browserTrimDeps,
-      isProtected: (path) => isFigureSource(path, file.path, (p) => view.index.has(p)),
+      isProtected: (path, cardsFile) => isFigureSource(path, file.path, (p) => view.index.has(p), cardsFile),
+      // Note cards are read from the vault, not from the stage, so a figure exported in the background has them too.
+      access: plugin.access,
     },
     drawn: () => view.nodeHost.drawn(),
     // As the view loaded the figure (an export opened in the background loads it too).
@@ -173,13 +176,13 @@ export class ExportModal extends Modal {
     (first ?? this.modalEl).focus();
   }
 
-  /** The chosen format's options, under the Format menu, each at its default. */
+  /** The chosen format's options, under the Format menu, then the options every format has, each at its default. */
   private renderOptions(): void {
     const el = this.optionsEl;
     if (!el) return;
     el.empty();
     const exporter: Exporter | undefined = this.view.plugin.registries.exporters.get(this.formatId);
-    const fields = exporter?.options() ?? [];
+    const fields = [...(exporter?.options() ?? []), ...COMMON_EXPORT_OPTIONS];
     this.optionValues = optionDefaults(fields);
     for (const field of fields) {
       if (!(field.key in this.optionValues)) continue;
@@ -194,7 +197,10 @@ export class ExportModal extends Modal {
           dropdown.setValue(String(value)).onChange(set);
         });
       } else if (field.kind === "toggle") {
-        setting.addToggle((toggle) => toggle.setValue(value === true).onChange(set));
+        // A toggle with an `onValue` is on while its value is that ("cards": "markdown"), and null when off.
+        const onValue = field.onValue;
+        if (onValue !== undefined) setting.addToggle((toggle) => toggle.setValue(value !== null && value !== undefined).onChange((on) => set(on ? onValue : null)));
+        else setting.addToggle((toggle) => toggle.setValue(value === true).onChange(set));
       } else if (field.kind === "number") {
         setting.addText((text) => {
           text.inputEl.type = "number";

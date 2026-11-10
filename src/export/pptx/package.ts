@@ -1,4 +1,8 @@
 import { zip, type ZipInput } from "../zip";
+import { notesMasterXml, notesSlideXml } from "./notes";
+import { CLR_MAP, DECL, escapeXml, listStyle, NS_A, NS_PML, PML_CT, relsXml, rt, TREE_HEAD, type Rel } from "./xml";
+
+export { escapeXml };
 
 /** A file a slide shows (a picture's PNG or JPEG): its name in `ppt/media/` (made unique if taken) and its MIME type. */
 export interface PptxMedia {
@@ -15,6 +19,8 @@ export interface PptxSlideInput {
   xml: string;
   background?: string;
   media: PptxMedia[];
+  /** The slide's presenter notes, plain text with one paragraph per line; none (or empty) writes no notes slide. */
+  notes?: string;
 }
 
 export interface PptxPackageInput {
@@ -33,61 +39,17 @@ export const MAX_SLIDE_EMU = 51206400;
 /** The relationship id of a slide's media `index` (its layout is `rId1`). */
 export const slideMediaRId = (index: number): string => `rId${index + 2}`;
 
-const DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
-const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
-const NS_P = "http://schemas.openxmlformats.org/presentationml/2006/main";
-const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const NS_PML = `xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"`;
-const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const PML_CT = "application/vnd.openxmlformats-officedocument.presentationml";
-
-/** `s` escaped for XML text and attribute values (tabs and line breaks as character references, so an attribute keeps them). */
-export function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;")
-    .replace(/[\t\n\r]/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
-interface Rel {
-  id: string;
-  /** The relationship type's full URI. */
-  type: string;
-  target: string;
-}
-
-/** An officeDocument relationship type's URI (`slide`, `image`…). */
-const rt = (name: string): string => `${REL}/${name}`;
 const CORE_PROPERTIES_REL = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
-
-function relsXml(rels: Rel[]): string {
-  const items = rels.map((r) => `<Relationship Id="${r.id}" Type="${escapeXml(r.type)}" Target="${escapeXml(r.target)}"/>`).join("");
-  return `${DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
-}
 
 // `r:id` is written before `id` on the id-list items: happy-dom, which the tests parse with, drops a prefixed attribute
 // whose local name an earlier attribute has.
-
-/** The group properties every shape tree starts with (id 1 is the tree's; a slide's shapes take ids from 2). */
-const TREE_HEAD =
-  '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
-  '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
 const MASTER_ID = 2147483648;
 const LAYOUT_ID = 2147483649;
 const FIRST_SLIDE_ID = 256;
 
-/** A text style list with one level: `latin` the theme font (`+mj-lt`, `+mn-lt`), `sz` in 1/100 pt. */
-const listStyle = (latin: string, sz: number): string =>
-  `<a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="${sz}" kern="1200">` +
-  `<a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="${latin}"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl1pPr>`;
-
 const MASTER =
-  `${DECL}<p:sldMaster ${NS_PML}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree>${TREE_HEAD}</p:spTree></p:cSld>` +
-  '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>' +
+  `${DECL}<p:sldMaster ${NS_PML}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree>${TREE_HEAD}</p:spTree></p:cSld>${CLR_MAP}` +
   `<p:sldLayoutIdLst><p:sldLayoutId r:id="rId1" id="${LAYOUT_ID}"/></p:sldLayoutIdLst>` +
   `<p:txStyles><p:titleStyle>${listStyle("+mj-lt", 4400)}</p:titleStyle><p:bodyStyle>${listStyle("+mn-lt", 2800)}</p:bodyStyle>` +
   `<p:otherStyle>${listStyle("+mn-lt", 1800)}</p:otherStyle></p:txStyles></p:sldMaster>`;
@@ -151,8 +113,9 @@ const w3cdtf = (date: Date): string => date.toISOString().replace(/\.\d{3}Z$/, "
 /**
  * A PresentationML package (`.pptx` bytes) of `input`: the package and document properties, one presentation with one
  * master, one blank layout and one theme, one slide per `input.slides` with its relationships (`rId1` its layout, then
- * its media), and the media in `ppt/media/` (stored, not deflated). Throws on no slides, a slide size PowerPoint
- * does not open, or a background that is not a colour.
+ * its media), and the media in `ppt/media/` (stored, not deflated). A slide with `notes` gets a notes slide, and the
+ * package then has a notes master with its own theme; without notes, none of these parts are written. Throws on no
+ * slides, a slide size PowerPoint does not open, or a background that is not a colour.
  */
 export function buildPptx(input: PptxPackageInput): Uint8Array {
   const { cx, cy } = input.sizeEmu;
@@ -184,7 +147,16 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
     ["jpeg", "image/jpeg"],
   ]);
 
-  // Slides, their rels and their media (named uniquely across the package).
+  // Notes parts only when some slide has notes, so a package without them is as it always was.
+  const hasNotes = input.slides.some((slide) => slide.notes !== undefined && slide.notes !== "");
+  if (hasNotes) {
+    overrides.push(
+      ["/ppt/notesMasters/notesMaster1.xml", `${PML_CT}.notesMaster+xml`],
+      ["/ppt/theme/theme2.xml", "application/vnd.openxmlformats-officedocument.theme+xml"],
+    );
+  }
+
+  // Slides, their rels, their notes and their media (named uniquely across the package).
   const usedMedia = new Set<string>();
   const media: ZipInput[] = [];
   const slideParts: ZipInput[] = [];
@@ -204,6 +176,21 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
       media.push({ name: `ppt/media/${name}`, data: m.bytes, store: true });
       rels.push({ id: slideMediaRId(j), type: rt("image"), target: `../media/${name}` });
     });
+    if (slide.notes !== undefined && slide.notes !== "") {
+      // After the slide's media: its rIds are `slideMediaRId`'s.
+      rels.push({ id: `rId${slide.media.length + 2}`, type: rt("notesSlide"), target: `../notesSlides/notesSlide${n}.xml` });
+      overrides.push([`/ppt/notesSlides/notesSlide${n}.xml`, `${PML_CT}.notesSlide+xml`]);
+      slideParts.push({ name: `ppt/notesSlides/notesSlide${n}.xml`, data: encoder.encode(notesSlideXml(slide.notes)) });
+      slideParts.push({
+        name: `ppt/notesSlides/_rels/notesSlide${n}.xml.rels`,
+        data: encoder.encode(
+          relsXml([
+            { id: "rId1", type: rt("notesMaster"), target: "../notesMasters/notesMaster1.xml" },
+            { id: "rId2", type: rt("slide"), target: `../slides/slide${n}.xml` },
+          ]),
+        ),
+      });
+    }
     slideParts.push({ name: `ppt/slides/slide${n}.xml`, data: encoder.encode(slideXml(slide)) });
     slideParts.push({ name: `ppt/slides/_rels/slide${n}.xml.rels`, data: encoder.encode(relsXml(rels)) });
   });
@@ -250,10 +237,13 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
     { id: `rId${next + 2}`, type: rt("viewProps"), target: "viewProps.xml" },
     { id: `rId${next + 3}`, type: rt("tableStyles"), target: "tableStyles.xml" },
   );
+  const notesMasterRId = `rId${next + 4}`;
+  if (hasNotes) presRels.push({ id: notesMasterRId, type: rt("notesMaster"), target: "notesMasters/notesMaster1.xml" });
+  const notesMasterList = hasNotes ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRId}"/></p:notesMasterIdLst>` : "";
   xml(
     "ppt/presentation.xml",
     `${DECL}<p:presentation ${NS_PML} saveSubsetFonts="1">` +
-      `<p:sldMasterIdLst><p:sldMasterId r:id="rId1" id="${MASTER_ID}"/></p:sldMasterIdLst>` +
+      `<p:sldMasterIdLst><p:sldMasterId r:id="rId1" id="${MASTER_ID}"/></p:sldMasterIdLst>${notesMasterList}` +
       `<p:sldIdLst>${slideIds.join("")}</p:sldIdLst><p:sldSz cx="${cx}" cy="${cy}"/><p:notesSz cx="6858000" cy="9144000"/>` +
       `<p:defaultTextStyle>${listStyle("+mn-lt", 1800)}</p:defaultTextStyle></p:presentation>`,
   );
@@ -272,6 +262,11 @@ export function buildPptx(input: PptxPackageInput): Uint8Array {
   xml("ppt/slideLayouts/slideLayout1.xml", LAYOUT);
   xml("ppt/slideLayouts/_rels/slideLayout1.xml.rels", relsXml([{ id: "rId1", type: rt("slideMaster"), target: "../slideMasters/slideMaster1.xml" }]));
   xml("ppt/theme/theme1.xml", THEME);
+  if (hasNotes) {
+    xml("ppt/notesMasters/notesMaster1.xml", notesMasterXml());
+    xml("ppt/notesMasters/_rels/notesMaster1.xml.rels", relsXml([{ id: "rId1", type: rt("theme"), target: "../theme/theme2.xml" }]));
+    xml("ppt/theme/theme2.xml", THEME);
+  }
 
   return zip([...parts, ...slideParts, ...media]);
 }

@@ -53,10 +53,12 @@ export function exportPathFor(folder: string, name: string): string {
 
 /**
  * True for what an export must never write over: the figure file itself, any note, and any file a node of the figure
- * depends on (`isDependency`). Writing goes through `modifyBinary`, which bypasses the trash.
+ * depends on (`isDependency`). Writing goes through `modifyBinary`, which bypasses the trash. A cards file
+ * (`cardsFile`: "Export cards as Markdown") is a note, and may replace one of its name, an earlier export of it; never
+ * the figure or a source.
  */
-export function isFigureSource(path: string, figurePath: string, isDependency: (path: string) => boolean): boolean {
-  return path === figurePath || /\.md$/i.test(path) || isDependency(path);
+export function isFigureSource(path: string, figurePath: string, isDependency: (path: string) => boolean, cardsFile = false): boolean {
+  return path === figurePath || (!cardsFile && /\.md$/i.test(path)) || isDependency(path);
 }
 
 /** Creates `folder` and the folders above it that are missing. */

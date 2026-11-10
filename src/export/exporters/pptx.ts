@@ -10,6 +10,7 @@ import type { AssetMap } from "../asset-types";
 import { EMU_PER_MM, EMU_PER_PX, hexColor, nvPrXml, xfrmXml } from "../pptx/drawingml";
 import { pictureXml } from "../pptx/media";
 import { buildPptx, MAX_SLIDE_EMU, MIN_SLIDE_EMU, slideMediaRId, type PptxMedia, type PptxSlideInput } from "../pptx/package";
+import { markdownToPlainText } from "../markdown-text";
 import { fitDpi } from "../raster-size";
 import { renderClearPngOnCanvas, type RenderClearPng } from "../rasterise";
 import { buildPageSvg, skippedTypeWarning, unreadableTypeWarning } from "../svg-builder";
@@ -123,17 +124,18 @@ function svgWarnings(input: ExportInput): Set<string> {
  * a type without it, or one that answers `"raster"`, is written as a picture of its drawing at the export dpi, with a
  * warning. Groups whose members are next to each other in z order are `p:grpSp`; others are written loose, with a
  * warning. A page outside PowerPoint's slide sizes is scaled to fit, with a warning. Panels are trimmed (`pdfPanels`
- * raster: a PDF panel is its page's raster). The same warning is reported once.
+ * raster: a PDF panel is its page's raster). The same warning is reported once. With the `notes` option, each slide's
+ * presenter notes hold the plain text of the cards tied to its page (`ExportInput.cardMarkdown`). `now` dates the files.
  */
-export function createPptxExporter(backend: PptxBackend = { renderClearPng: renderClearPngOnCanvas }): Exporter {
+export function createPptxExporter(backend: PptxBackend = { renderClearPng: renderClearPngOnCanvas }, now: () => Date = () => new Date()): Exporter {
   return {
     id: "pptx",
     name: "PowerPoint (editable)",
     ext: "pptx",
     mime: PPTX_MIME,
     pdfPanels: "raster",
-    options: () => [],
-    async run(input: ExportInput) {
+    options: () => [{ kind: "toggle", key: "notes", label: "Card text in presenter notes" }],
+    async run(input: ExportInput, opts: Record<string, unknown>) {
       const warnings = new Set<string>();
       const fromSvg = svgWarnings(input);
       for (const w of input.warnings) if (!fromSvg.has(w)) warnings.add(w);
@@ -270,7 +272,14 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
           if (rgb) background = `#${rgb}`;
           else warn(`"${page.name}": the paper colour ${JSON.stringify(page.paper)} is not one PowerPoint can take, left white`);
         }
-        return { xml, background, media };
+        return { xml, background, media, notes: await notesOf(page) };
+      };
+
+      /** With the `notes` option, the plain text of the cards tied to the page, in their order, a paragraph apart. */
+      const notesOf = async (page: Page): Promise<string | undefined> => {
+        if (opts.notes !== true || !input.cardMarkdown) return undefined;
+        const texts = (await input.cardMarkdown(page.id)).map(markdownToPlainText).filter((text) => text !== "");
+        return texts.length > 0 ? texts.join("\n\n") : undefined;
       };
 
       // One file per page size, in the order the sizes first come.
@@ -289,7 +298,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
         const slides: PptxSlideInput[] = [];
         for (const page of pages) slides.push(await writeSlide(page));
         const fit = slideFit(pages[0].width, pages[0].height);
-        const bytes = buildPptx({ sizeEmu: { cx: fit.cx, cy: fit.cy }, slides, title: input.baseName });
+        const bytes = buildPptx({ sizeEmu: { cx: fit.cx, cy: fit.cy }, slides, title: input.baseName, created: now() });
         const key = sizeKey(pages[0]);
         const name = key === plainSize ? `${input.baseName}.pptx` : `${input.baseName} (${sizeName(pages[0])}).pptx`;
         files.push({ name, blob: new Blob([bytes as Uint8Array<ArrayBuffer>], { type: PPTX_MIME }) });

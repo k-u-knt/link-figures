@@ -12,6 +12,7 @@ import {
   type FigureFiles,
 } from "./commands/headless";
 import { FILE_SUFFIX } from "./constants";
+import { requestOptionsProblem } from "./export/export-options";
 import type { ExportOutcome, ExportRequest } from "./export/export-run";
 import { newFigureText } from "./format/new-figure";
 import type { BlockIdResult } from "./links/note-block-id";
@@ -62,8 +63,11 @@ export interface LinkFiguresApi {
   blockId(notePath: string, line: number): Promise<BlockIdResult>;
   /**
    * Exports the figure as the export modal does, to the export folder: `format` is an exporter's id (`svg`, `pdf`, `png`,
-   * `tiff`), `pages` the page in focus (`"current"`, the default), `"all"` or a list of page ids, `dpi` the resolution
-   * (the settings' when left out), `options` the exporter's own (each left out has its default). A figure that is not
+   * `tiff`, `pptx`), `pages` the page in focus (`"current"`, the default), `"all"` or a list of page ids, `dpi` the
+   * resolution (the settings' when left out), `options` the exporter's own (each left out has its default), plus
+   * `cards: "markdown"` for every format (each exported page's cards as `<figure> - <page> cards.md`, their images
+   * copied beside it) and, for `pptx`, `notes: true` (the cards' text in each slide's presenter notes). An option of
+   * another format is refused (`api.export: "notes" is a PowerPoint option`). Note cards are read from the vault. A figure that is not
    * open is opened in the background for it, once the request has been checked (a bad one opens nothing), waited on
    * until its links are resolved and its content cards drawn, and closed again. Resolves to the vault paths written and
    * the export report. Not a figure command: it finishes later. Waits for the calls queued on the figure before it.
@@ -223,6 +227,9 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       if (typeof request !== "object" || request === null || typeof request.format !== "string" || request.format === "") {
         throw new Error("export: format must be the id of an export format");
       }
+      // Options another format has ("notes" with svg), or a bad common option, are refused before anything is opened.
+      const problem = requestOptionsProblem(registries, request.format, request.options);
+      if (problem) throw new CommandError(`api.export: ${problem}`);
       const exportFigure = host.exportFigure;
       if (!exportFigure) throw new Error("export: figures cannot be exported here");
       return queued(figurePath, (path) => exportFigure(path, request));

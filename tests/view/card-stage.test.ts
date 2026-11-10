@@ -444,14 +444,15 @@ describe("drops", () => {
     expect([box.x, box.y]).toEqual([-700, 300]);
     expect(off.view.selection.ids).toEqual([card.id]);
 
-    // Two notes off the paper: two note cards, one below the other, a 4 mm gap between them.
+    // Two notes off the paper: two note cards, one below the other, the second's label (15px text on 1.3 lines and a
+    // 3px gap: 23 screen px, whatever the zoom) clear of the first by a 4 mm gap.
     const two = dropSetup(false, [{ path: "Notes/a.md" }, { path: "Notes/b.md" }]);
     await vi.waitFor(() => expect(two.store.doc.nodes).toHaveLength(5));
     const [first, second] = two.store.doc.nodes.slice(3) as CardNode[];
     expect([first.file, second.file]).toEqual(["Notes/a", "Notes/b"]);
     expect(first.text).toBeUndefined();
     expect(second.text).toBeUndefined();
-    expect(second.y).toBeCloseTo(first.y + first.height + GAP, 1);
+    expect(second.y).toBeCloseTo(first.y + first.height + 23 + GAP, 0);
 
     // A heading makes a note card of that section.
     const heading = dropSetup(false, undefined, { type: "link", linktext: "Notes/a#Legend" });

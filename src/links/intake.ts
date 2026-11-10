@@ -5,6 +5,7 @@ import { prepareCall, runInOneCommit } from "../commands/headless";
 import { CARD_PAPER_GAP_MM } from "../model/card-space";
 import { fileNodeDefaults } from "../model/defaults";
 import { CARD_SIZE_MM } from "../nodes/card-node";
+import { labelClearancePx } from "../view/card-label";
 import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
@@ -475,9 +476,10 @@ export class Intake {
     const context = view.commandContext();
     // Off every paper, a note's content goes on a card beside the nearest page (cards are never artwork).
     const cardAt = at.offPaper && store.doc.pages.some((p) => p.id === at.offPaper?.page.id) ? at.offPaper : undefined;
-    // Cards of one drop go one below the other, a gap apart, so none covers the next.
+    // Cards of one drop go one below the other, each one's label clear of the card above by a gap (the label keeps its
+    // size on screen, so its height in the figure is the zoom's).
     let cards = 0;
-    const cardStep = mmToPx(CARD_SIZE_MM.height + CARD_PAPER_GAP_MM);
+    const cardStep = mmToPx(CARD_SIZE_MM.height + CARD_PAPER_GAP_MM) + labelClearancePx() / view.viewport.zoom;
     const calls = items.map((item, i) =>
       cardAt && item.show === "content"
         ? prepareCall(registries, {

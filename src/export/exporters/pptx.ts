@@ -1,5 +1,5 @@
 import { MM_TO_PX } from "../../constants";
-import type { Rect } from "../../model/geometry";
+import { unionRect, type Rect } from "../../model/geometry";
 import { ancestorsOf, isGroup } from "../../model/groups";
 import { nodeLabel } from "../../model/labels";
 import { isTransparentPaper } from "../../model/paper";
@@ -236,28 +236,43 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
           return part?.xml ?? "";
         };
 
-        const write = async (tree: Tree[]): Promise<string> => {
+        /** An item's frame as drawn: its box turned by its rotation, axis-aligned. */
+        const frameOf = (node: Node): Rect => {
+          const type = input.registries.nodeTypes.get(node.type);
+          return turnedBounds(type ? type.bounds(node) : node, node.rotation);
+        };
+
+        /**
+         * The tree's XML, and the union of the frames of what it wrote (`null` when nothing). A group's frame is that
+         * union, not its stored box: the stored box takes in members no export draws (a card beside the paper).
+         */
+        const write = async (tree: Tree[]): Promise<{ xml: string; frame: Rect | null }> => {
           const out: string[] = [];
+          const frames: Rect[] = [];
           for (const t of tree) {
             if (t.kind === "item") {
-              out.push(await writeItem(t.node));
+              const xml = await writeItem(t.node);
+              out.push(xml);
+              if (xml !== "") frames.push(frameOf(t.node));
               continue;
             }
             const inside = await write(t.children);
-            if (inside === "") continue;
+            if (inside.xml === "" || !inside.frame) continue;
             const g = t.node;
-            const off = { x: ctx.px(g.x), y: ctx.px(g.y) };
+            const f = inside.frame;
+            frames.push(f);
+            const off = { x: ctx.px(f.x), y: ctx.px(f.y) };
             // At least 1 EMU: a zero extent (and chExt) makes the group, and its members' scaling, undefined.
-            const ext = { cx: Math.max(1, ctx.px(g.width)), cy: Math.max(1, ctx.px(g.height)) };
+            const ext = { cx: Math.max(1, ctx.px(f.width)), cy: Math.max(1, ctx.px(f.height)) };
             // Child offset and extent equal to the group's own: its members' coordinates are the slide's.
             const xfrm = xfrmXml({ x: off.x, y: off.y, cx: ext.cx, cy: ext.cy }, 0).replace(
               "</a:xfrm>",
               `<a:chOff x="${off.x}" y="${off.y}"/><a:chExt cx="${ext.cx}" cy="${ext.cy}"/></a:xfrm>`,
             );
             const nv = `<p:nvGrpSpPr>${nvPrXml(ctx.nextId(), g.name ?? g.id)}<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>`;
-            out.push(`<p:grpSp>${nv}<p:grpSpPr>${xfrm}</p:grpSpPr>${inside}</p:grpSp>`);
+            out.push(`<p:grpSp>${nv}<p:grpSpPr>${xfrm}</p:grpSpPr>${inside.xml}</p:grpSp>`);
           }
-          return out.join("");
+          return { xml: out.join(""), frame: frames.length > 0 ? unionRect(frames) : null };
         };
 
         const flattened: Node[] = [];
@@ -265,7 +280,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
         for (const group of flattened) {
           warn(`${nodeLabel(input.doc, group)}: its members are not next to each other in the stacking order, written as separate items`);
         }
-        const xml = await write(tree);
+        const { xml } = await write(tree);
         let background: string | undefined;
         if (!isTransparentPaper(page.paper)) {
           const rgb = hexColor(page.paper);

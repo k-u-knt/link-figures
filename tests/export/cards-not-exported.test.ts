@@ -165,3 +165,20 @@ test("a connector to a card its plugin could not read is still not exported", ()
   expect(isExported(doc, r, kc, new Set(["c"]))).toBe(false);
 });
 
+
+test("a group holding a card is framed in PowerPoint by its exported members only", async () => {
+  const { r } = registries();
+  const doc = figure(r, true);
+  const g = doc.nodes.find((n) => n.id === "g")!;
+  // The stored group box reaches the card, beside the paper.
+  expect(g.x + g.width).toBeGreaterThan(200 * MM);
+  const backend = { renderClearPng: async () => PNG_BYTES };
+  const result = await createPptxExporter(backend).run({ doc, pages: doc.pages, svgs: new Map(), assets: new Map(), registries: r, warnings: [], baseName: "Fig", dpi: 150 }, {});
+  const slide = parseXml(unzipText(new Uint8Array(await result.files[0].blob.arrayBuffer())).get("ppt/slides/slide1.xml")!);
+  const xfrm = one(one(slide, "p:grpSp"), "p:grpSpPr");
+  const E = 9525;
+  const at = (tag: string, attr: string) => one(xfrm, tag).getAttribute(attr);
+  // Shape `s`: x 10, y 10, 50 × 50 px.
+  expect([at("a:off", "x"), at("a:off", "y"), at("a:ext", "cx"), at("a:ext", "cy")]).toEqual([10 * E, 10 * E, 50 * E, 50 * E].map(String));
+  expect([at("a:chOff", "x"), at("a:chOff", "y"), at("a:chExt", "cx"), at("a:chExt", "cy")]).toEqual([10 * E, 10 * E, 50 * E, 50 * E].map(String));
+});

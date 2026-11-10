@@ -192,7 +192,11 @@ export class RampSlider {
       });
       // A double-click is told from two presses (`pressHandle`): the drag's pointer capture sends `dblclick` to the track.
       handle.addEventListener("pointerdown", (e: Event) => this.pressHandle(e as PointerEvent, i));
-      handle.addEventListener("focus", () => this.select(i));
+      // Focus selects (Tab), except during a press: the press has chosen the stop (on a stack, the next one), and a
+      // browser that still focuses the pressed handle must not take that choice back.
+      handle.addEventListener("focus", () => {
+        if (!this.drag) this.select(i);
+      });
       handle.addEventListener("keydown", (e: Event) => this.onKey(e as KeyboardEvent, i));
       return handle;
     });
@@ -421,7 +425,11 @@ export class RampSlider {
     this.lastPress = { offset: stop.offset, x: ev.clientX, y: ev.clientY, at: now };
     const stack = ramp.stops.map((s, i) => (s.offset === stop.offset ? i : -1)).filter((i) => i >= 0);
     const at = stack.indexOf(this.state.selected);
+    // The browser is kept from focusing the pressed handle (on a stack, the one that was on top, no longer the chosen
+    // one); the chosen stop's handle takes the focus instead, so the keyboard acts on it.
+    ev.preventDefault?.();
     this.startDrag(ev, stack.length > 1 && at >= 0 ? stack[(at + 1) % stack.length] : index);
+    this.focusSelected();
   }
 
   private startDrag(ev: PointerEvent, index: number): void {
@@ -496,6 +504,8 @@ export class RampSlider {
     }
     this.showOff(drag.index, false);
     if (drag.started) this.host.endMerge?.();
+    // A handle that took the focus during the press, other than the selected one, hands it over.
+    if (this.handleHasFocus() && this.root.ownerDocument?.activeElement !== this.handleEls[this.state.selected]) this.focusSelected();
   }
 
   /** The cue that a release will remove handle `index`: a × on it, the track's cursor, and "Release to remove". */

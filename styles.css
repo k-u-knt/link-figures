@@ -166,9 +166,14 @@
   max-width: 100%;
 }
 
-/* What the paint is, on one line: cut with an ellipsis when narrow (its title holds the whole). */
+/*
+ * What the paint is ("Solid", "Linear gradient", "Mixed"): a full-width line of its own under the select and above the
+ * colour slider, so it shows whole in a 240 px inspector. Kept to one line, cut with an ellipsis only as a fallback in
+ * a narrower one (its title holds the whole).
+ */
 .lf-paint-kind {
-  flex: 1 1 auto;
+  display: block;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;

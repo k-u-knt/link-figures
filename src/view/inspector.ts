@@ -219,7 +219,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
       holder.empty();
       const head = holder.createDiv({ cls: "lf-paint-head" });
       const select = head.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type`, "aria-label": `${field.label}: kind of paint` } });
-      kind = head.createSpan({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite", title: kindName() } });
+
       const types = paints()?.all() ?? [];
       let colourListed = false;
       for (const type of types) {
@@ -241,6 +241,8 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
         syncComposite(holder);
         select.value = entryOf();
       });
+      // What the paint is, on a full-width line of its own under the select (beside it, it had too little room).
+      kind = holder.createDiv({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite", title: kindName() } });
       if (rampNow()) {
         const sliderHolder = holder.createDiv({ cls: "lf-ramp-holder" });
         slider = new RampSlider(sliderHolder, {

@@ -761,3 +761,54 @@ describe("in-app findings", () => {
     expect(t.labels.filter((l) => l !== "inspect:fill")).toEqual([]);
   });
 });
+
+describe("in-app re-check", () => {
+  test("each click on a stack of stops advances exactly one, with the browser's own press, focus, release and click", () => {
+    const stack: Paint = { type: "linear", angle: 0, stops: [{ offset: 0.5, color: "#ff0000" }, { offset: 0.5, color: "#00ff00" }, { offset: 0.5, color: "#0000ff" }, { offset: 1, color: "#ffffff" }] };
+    const t = setup(stack);
+    const selected = () => t.q<HTMLInputElement>('[data-key="fill.stop.color"]').value;
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+    // Start on the third stop, as the in-app run did.
+    t.handles()[2].focus();
+    const seen = [selected()];
+    for (let k = 0; k < 5; k++) {
+      clock += 600;
+      // The handle on top: the selected one among those at 0.5 (z-index), else the last of them in document order.
+      const atStack = t.handles().filter((h) => h.style.left === "50%");
+      const top = atStack.find((h) => h.classList.contains("lf-ramp-handle-selected")) ?? atStack[atStack.length - 1];
+      const down = new t.window.PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 100, clientY: 20, button: 0, buttons: 1, pointerId: 1 });
+      top.dispatchEvent(down as never);
+      // What the browser does after a press it was not stopped from: the pressed element takes the focus.
+      if (!down.defaultPrevented) top.focus();
+      // The track has the pointer captured: the release and the click go to it.
+      const track = t.q(".lf-ramp-track");
+      track.dispatchEvent(new t.window.PointerEvent("pointerup", { bubbles: true, cancelable: true, clientX: 100, clientY: 20, button: 0, buttons: 0, pointerId: 1 }) as never);
+      track.dispatchEvent(new t.window.MouseEvent("click", { bubbles: true, cancelable: true, clientX: 100, clientY: 20 }) as never);
+      seen.push(selected());
+    }
+    now.mockRestore();
+    expect(seen).toEqual(["#0000ff", "#ff0000", "#00ff00", "#0000ff", "#ff0000", "#00ff00"]);
+    expect(t.labels).toEqual([]);
+    // The keyboard acts on the selected stop: the focus is on its handle.
+    expect(t.document.activeElement).toBe(t.handles().find((h) => h.classList.contains("lf-ramp-handle-selected")));
+  });
+
+  test("the kind label is a full-width line of its own under the select, not squeezed beside it", () => {
+    const t = setup({ type: "solid", color: "#ff0000" });
+    const kind = t.q(".lf-paint-kind");
+    const head = t.q(".lf-paint-head");
+    expect(kind.tagName).toBe("DIV");
+    expect(head.contains(kind as never)).toBe(false);
+    expect(head.querySelector('[data-key="fill.type"]')).not.toBeNull();
+    // Straight after the select's row, before the slider.
+    expect(head.nextElementSibling).toBe(kind);
+    expect(kind.nextElementSibling?.classList.contains("lf-ramp-holder")).toBe(true);
+    const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    const rule = /(^|\n)\.lf-paint-kind\s*{([^}]*)}/.exec(css)?.[2] ?? "";
+    expect(rule).toMatch(/display:\s*block/);
+    expect(rule).toMatch(/width:\s*100%/);
+    expect(rule).not.toMatch(/flex:/);
+  });
+});

@@ -1,3 +1,4 @@
+import { EDITING_CLASS, EDITING_EVENT } from "../constants";
 import { boxAttachable } from "../model/attach";
 import { newId } from "../model/defaults";
 import { mmToPx, type Rect } from "../model/geometry";
@@ -177,7 +178,14 @@ class CardNodeRenderer implements NodeRenderer {
     });
     this.body.appendChild(area);
     this.editor = area;
+    this.toldEditing(true);
     area.focus({ preventScroll: true });
+  }
+
+  /** Marks the element as being edited (or not) and tells the stage, whose item bar hides meanwhile (see `view/item-bar`). */
+  private toldEditing(editing: boolean): void {
+    this.el.classList.toggle(EDITING_CLASS, editing);
+    this.el.dispatchEvent(new CustomEvent(EDITING_EVENT, { bubbles: true }));
   }
 
   /** Ends the edit and writes what was typed, if it is anything new; `toStage`: the keys go back to the stage. */
@@ -185,6 +193,7 @@ class CardNodeRenderer implements NodeRenderer {
     const area = this.editor;
     if (!area) return;
     this.editor = null;
+    this.toldEditing(false);
     this.detachSuggest();
     this.detachSuggest = () => {};
     const typed = area.value.replace(/\r\n?/g, "\n");

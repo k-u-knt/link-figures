@@ -573,6 +573,10 @@ function builtinCommands(): Command[] {
       icon: "trash",
       group: "edit",
       menu: ["item"],
+      // In a card's bar too, unless it is locked.
+      itemBar: ["card"],
+      itemBarOrder: 30,
+      itemBarShows: (ctx, id) => !isLocked(ctx.store.doc, id),
       params: NODES_PARAMS,
       applies: (ctx) => ctx.store.doc.nodes.some((n) => ctx.selection.includes(n.id) && !isLocked(ctx.store.doc, n.id)),
       run: deleteNodes,
@@ -612,6 +616,9 @@ function builtinCommands(): Command[] {
       icon: "link",
       group: "edit",
       menu: ["item"],
+      // In a card's bar too, locked or not; disabled when the card holds no link.
+      itemBar: ["card"],
+      itemBarOrder: 20,
       needsView: true,
       applies: (ctx) => selectedLink(ctx) !== undefined,
       run(ctx) {

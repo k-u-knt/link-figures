@@ -8,6 +8,10 @@ export const FILE_SUFFIX = ".lnkfig.md";
 export const FENCE_LANG = "lnkfig";
 /** The class of a node's element whose links (`a`) take their own clicks, not the stage (a card's text: see `isOwnClick`). */
 export const LIVE_LINKS = "lf-live-links";
+/** The class of a node's element while it is edited in place (a card's editor): the item bar hides meanwhile. */
+export const EDITING_CLASS = "is-editing";
+/** The bubbling event a node's element sends as its in-place edit begins and ends, so the item bar is brought in line. */
+export const EDITING_EVENT = "lf-editing";
 
 export const MM_TO_PX = 96 / 25.4;
 export const PAGE_GAP_MM = 20;

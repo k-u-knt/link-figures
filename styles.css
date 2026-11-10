@@ -429,6 +429,43 @@
   cursor: text;
 }
 
+/* The item bar: a small bar floating just above the one selected card (see `item-bar.ts`). It sits in the stage, not in
+   the zoomed viewport, so it keeps its size at any zoom; it is never exported. Below the card when there is no room above. */
+.lf-item-bar {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-1);
+  padding: var(--size-2-1);
+  transform: translate(-50%, calc(-100% - var(--size-4-2)));
+  background-color: var(--background-primary);
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.lf-item-bar.is-below {
+  transform: translate(-50%, var(--size-4-2));
+}
+
+.lf-item-bar[hidden] {
+  display: none;
+}
+
+.lf-item-bar .lf-item-bar-choice {
+  max-width: 14em;
+  height: var(--input-height);
+  font-size: var(--font-ui-small);
+}
+
+.lf-item-bar .lf-item-bar-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* A tool is armed: the next press on a page places it. Its own cursor, set on the stage by the view, or a crosshair. */
 .lf-stage.lf-tool-armed,
 .lf-stage.lf-tool-armed * {

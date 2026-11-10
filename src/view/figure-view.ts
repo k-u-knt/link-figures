@@ -2,7 +2,7 @@ import { Notice, TextFileView, TFile, type Menu, type PaneType, type TAbstractFi
 import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
 import { LOADING_WAIT_MS } from "../api";
-import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
+import { DEFAULT_PAGE_LIMIT_MM, EDITING_EVENT, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
@@ -32,6 +32,7 @@ import { DEFAULT_SETTINGS } from "../settings/settings";
 import { settlesWithin } from "../util/event-loop";
 import { showContextMenu } from "./context-menu";
 import { Inspector } from "./inspector";
+import { ItemBar } from "./item-bar";
 import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
 import { isEditable, PointerController } from "./pointer";
@@ -91,6 +92,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   private intake!: Intake;
   private toolbar!: Toolbar;
   private inspector!: Inspector;
+  /** The bar above the one selected card (see `ItemBar`), in the stage's screen space. */
+  private itemBar!: ItemBar;
 
   /** True while the file could not be read: nothing may be written, and `getViewData` returns the text as it was. */
   readOnly = false;
@@ -821,6 +824,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.viewportEl.style.transform = this.viewport.cssTransform();
     // For what is drawn on the pages but is sized in screen pixels (handles, outlines): see the selection rules in styles.css.
     this.viewportEl.style.setProperty("--lf-zoom", String(this.viewport.zoom));
+    // The item bar is in screen space: it follows a pan or a zoom at once, not a frame later.
+    this.syncItemBar();
     this.scheduleChrome();
   }
 
@@ -1114,6 +1119,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     // Once per view: they read `store` when they render, so a new store needs nothing from them (`setDocument` re-renders).
     this.toolbar = new Toolbar(this, this.toolbarEl);
     this.inspector = new Inspector(this, this.inspectorEl, (message) => new Notice(message));
+    this.itemBar = new ItemBar(this.stageEl);
+    // A card's in-place edit began or ended: the bar hides or comes back.
+    this.stageEl.addEventListener(EDITING_EVENT, () => this.syncItemBar());
     this.selection.onChange(() => this.renderChrome());
     this.applyViewport();
   }
@@ -1126,6 +1134,27 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     } catch (error) {
       console.error("Link Figures: could not draw the toolbar or the inspector", error);
     }
+    this.syncItemBar();
+  }
+
+  /** Brings the item bar in line with the selection, the document, the viewport and the gesture; it must never fail an edit. */
+  private syncItemBar(): void {
+    if (!this.itemBar || !this.store) return;
+    try {
+      this.itemBar.sync(this);
+    } catch (error) {
+      console.error("Link Figures: could not draw the item bar", error);
+    }
+  }
+
+  /** A drag, a resize or a tool's drag began or ended (see `PointerController.busy`): the item bar hides or comes back. */
+  gestureChanged(): void {
+    this.syncItemBar();
+  }
+
+  /** Whether a drag, a resize or a tool's drag is under way (the item bar hides meanwhile). */
+  gestureUnderWay(): boolean {
+    return this.pointer?.busy() ?? false;
   }
 
   /** Wheel zoom and pan, and drag-to-pan with the middle button or the space bar. */

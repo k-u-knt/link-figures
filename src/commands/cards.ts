@@ -1,9 +1,12 @@
 import { mmToPx, type PlacePoint } from "../model/geometry";
-import type { CardNode, NodeId } from "../model/types";
+import type { CardNode, ConnectorNode, End, NodeId, PageId } from "../model/types";
+import { connectorNodeDefaults } from "../model/defaults";
+import { isAssociation } from "../model/attach";
 import { CARD_SIZE_MM, cardContentError, cardNodeDefaults } from "../nodes/card-node";
 import { roundPx } from "../view/pointer-math";
 import { editor } from "./builtin";
-import { CommandError, unreadableIn, type Command, type CommandContext } from "../registry/command";
+import { CommandError, unreadableIn, type Command, type CommandContext, type ItemBarChoice } from "../registry/command";
+import { isLocked } from "../model/groups";
 import { embedText } from "../model/card-links";
 import { addNode, checkMinSize, creationPage, newNodeId, topOf } from "./drawing";
 
@@ -75,6 +78,78 @@ export function convertCard(ctx: CommandContext, args: { id: string }): { id: No
   return { id: node.id };
 }
 
+/** Whether `end` is attached to node `id`. */
+const endOn = (end: End, id: NodeId): boolean => end.kind === "attached" && end.node === id;
+
+/**
+ * The associations of item `id` (connectors tied to a page at one end and attached to it at the other, see
+ * `isAssociation`), in document order. A connector its plugin could not read is never one: it is left as it is.
+ */
+export function tiesOf(ctx: Pick<CommandContext, "store" | "registries" | "unreadable">, id: NodeId): ConnectorNode[] {
+  const doc = ctx.store.doc;
+  const unreadable = unreadableIn(ctx);
+  return doc.nodes.filter(
+    (n): n is ConnectorNode =>
+      n.type === "connector" && !unreadable?.has(n.id) && isAssociation(doc, n as ConnectorNode, ctx.registries, unreadable) && (n as ConnectorNode).ends.some((e) => endOn(e, id)),
+  );
+}
+
+/** The pages item `id` is tied to (see `tiesOf`), each once, in the order of its ties. */
+export function tiedPagesOf(ctx: Pick<CommandContext, "store" | "registries" | "unreadable">, id: NodeId): PageId[] {
+  const pages = tiesOf(ctx, id).flatMap((c) => c.ends.flatMap((e) => (e.kind === "page" ? [e.page] : [])));
+  return [...new Set(pages)];
+}
+
+/**
+ * Sets the one page item `id` (a card: any item whose type may be tied to pages, `NodeType.pageTies`) is tied to.
+ * `page` null removes all its associations. A page replaces them with one, from the item's centre (`snap: "center"`)
+ * to the page with no anchor (its centre), both clipped at the outlines: the first association is re-aimed (its id and
+ * look stay) and the rest are deleted. An item with one association already tied that way to `page` is left alone.
+ * Its other connectors stay. One undo step, under a label of its own for each choice, so two choices in a row are two
+ * steps. Refused for a page that is not the figure's (one deleted while the card bar's dropdown was open).
+ */
+export function tieCard(ctx: CommandContext, args: { id: string; page: string | null }): { connector: NodeId | null } {
+  const command = "card.tie";
+  const doc = ctx.store.doc;
+  const node = doc.nodes.find((n) => n.id === args.id);
+  if (!node) throw new CommandError(`${command}: there is no node "${args.id}"`);
+  // The flag is the type's, even for an item its plugin could not read (see `onPageTiedItem`).
+  if (ctx.registries.nodeTypes.get(node.type)?.pageTies !== true) throw new CommandError(`${command}: "${args.id}" cannot be tied to a page`);
+  const page = args.page;
+  if (page !== null && !doc.pages.some((p) => p.id === page)) throw new CommandError(`${command}: there is no page "${page}"`);
+  const ties = tiesOf(ctx, node.id);
+  const itemEnd: End = { kind: "attached", node: node.id, snap: "center" };
+  const pageEnd: End | null = page === null ? null : { kind: "page", page };
+  const same = (a: End, b: End) => JSON.stringify(a) === JSON.stringify(b);
+  if (pageEnd === null && ties.length === 0) return { connector: null };
+  if (pageEnd !== null && ties.length === 1) {
+    const ends = ties[0].ends;
+    const at = endOn(ends[0], node.id) ? 0 : 1;
+    if (same(ends[at], itemEnd) && same(ends[1 - at], pageEnd)) return { connector: ties[0].id };
+  }
+  const kept = pageEnd === null ? null : (ties[0] ?? null);
+  const gone = new Set(ties.filter((c) => c !== kept).map((c) => c.id));
+  let made: ConnectorNode | null = null;
+  if (pageEnd !== null && kept === null) {
+    const home = doc.pages.find((p) => p.id === node.page) ?? doc.pages[0];
+    const route = ctx.registries.routes.get("straight");
+    made = connectorNodeDefaults(home, { ends: [itemEnd, pageEnd], routeParams: route?.defaults() ?? {}, z: topOf(doc, home) }, doc.nodes.map((n) => n.id));
+  }
+  ctx.store.commit(`${command}:${node.id}:${page ?? ""}`, (draft) => {
+    if (gone.size > 0) draft.nodes = draft.nodes.filter((n) => !gone.has(n.id));
+    if (made) draft.nodes.push(structuredClone(made));
+    if (kept && pageEnd) {
+      const target = draft.nodes.find((n) => n.id === kept.id) as ConnectorNode | undefined;
+      if (!target) return;
+      // The direction stays: the item's end is where it was.
+      const at = endOn(target.ends[0], node.id) ? 0 : 1;
+      target.ends[at] = itemEnd;
+      target.ends[1 - at] = pageEnd;
+    }
+  });
+  return { connector: made?.id ?? kept?.id ?? null };
+}
+
 /**
  * The Card tool's press at `at` (on the canvas beside a page, or on a page's paper): `card.create` with a 60 × 40 mm
  * text card centred there, as a script would run it, which puts a card that would be on paper just outside the
@@ -110,6 +185,38 @@ const cardTool: Command = {
   place: placeCard,
 };
 
+/** The node types whose item bar lists the card commands. */
+const CARD_BAR = ["card"];
+
+/** The card `id` of `ctx`'s figure, read by its type (not one its plugin could not read), or undefined. */
+function readableCard(ctx: CommandContext, id: NodeId): CardNode | undefined {
+  const node = ctx.store.doc.nodes.find((n) => n.id === id);
+  return node?.type === "card" && !unreadableIn(ctx)?.has(id) ? (node as CardNode) : undefined;
+}
+
+/** Whether `id` is a card holding text (not a 0.4.0 note card) that may be changed. */
+function editableTextCard(ctx: CommandContext, id: NodeId): boolean {
+  const card = readableCard(ctx, id);
+  return !!card && card.file === undefined && !isLocked(ctx.store.doc, id);
+}
+
+/** Whether `id` is a 0.4.0 note card that may be changed: what "Convert to text" is offered on. */
+function editableNoteCard(ctx: CommandContext, id: NodeId): boolean {
+  const card = readableCard(ctx, id);
+  return !!card && typeof card.file === "string" && card.file !== "" && !isLocked(ctx.store.doc, id);
+}
+
+/** The card bar's Page dropdown: this figure's pages by name, plus None; "Several pages" when it is tied to more than one. */
+function pageChoice(ctx: CommandContext, id: NodeId): ItemBarChoice {
+  const tied = tiedPagesOf(ctx, id);
+  return {
+    param: "page",
+    options: [{ value: null, label: "None" }, ...ctx.store.doc.pages.map((p, i) => ({ value: p.id, label: p.name || `Page ${i + 1}` }))],
+    value: tied.length === 0 ? null : tied.length === 1 ? tied[0] : undefined,
+    mixed: "Several pages",
+  };
+}
+
 /** The card commands, for the command registry. `card.create` is hidden: it needs arguments to mean anything. */
 export function cardCommands(): Command[] {
   return [
@@ -141,8 +248,41 @@ export function cardCommands(): Command[] {
       group: "edit",
       hidden: true,
       params: { id: { type: "string", required: true } },
+      itemBar: CARD_BAR,
+      itemBarOrder: 40,
+      itemBarShows: editableNoteCard,
       applies: () => true,
       run: (ctx, args) => convertCard(ctx, args as { id: string }),
+    },
+    {
+      id: "card.edit",
+      name: "Edit",
+      icon: "pencil",
+      group: "edit",
+      // The bar's and a script's: it starts the in-place edit of the one selected text card, as a double-click does.
+      hidden: true,
+      needsView: true,
+      itemBar: CARD_BAR,
+      itemBarOrder: 10,
+      itemBarShows: editableTextCard,
+      applies: (ctx) => ctx.selection.length === 1 && editableTextCard(ctx, ctx.selection[0]),
+      run(ctx) {
+        if (ctx.selection.length !== 1 || !editableTextCard(ctx, ctx.selection[0])) throw new CommandError("card.edit: select one text card");
+        editor(ctx).activateNode(ctx.selection[0]);
+      },
+    },
+    {
+      id: "card.tie",
+      name: "Page",
+      icon: "file",
+      group: "edit",
+      hidden: true,
+      params: { id: { type: "string", required: true }, page: { type: "string", nullable: true, required: true } },
+      itemBar: CARD_BAR,
+      itemBarOrder: 0,
+      itemBarChoice: pageChoice,
+      applies: () => true,
+      run: (ctx, args) => tieCard(ctx, args as { id: string; page: string | null }),
     },
   ];
 }

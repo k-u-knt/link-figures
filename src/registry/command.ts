@@ -222,6 +222,30 @@ export interface Command<A = unknown, R = unknown> {
    * and one that does not apply is listed disabled.
    */
   menu?: MenuPlace[];
+  /**
+   * The item bar (see `view/item-bar`): the node types (NodeType ids, `["card"]`) whose bar lists the command when one
+   * item of that type is selected. A hidden command is listed too, as the bar gives it its arguments: a command with an
+   * `id` parameter is run with `{ id: <the item> }` (and a choice's parameter, see `itemBarChoice`); any other is run
+   * as a toolbar button runs it, on the selection (the item). One that does not apply is shown disabled.
+   */
+  itemBar?: string[];
+  /** Where the command sits in the bar: lower first; without it, after those that have one, in the registry's order. */
+  itemBarOrder?: number;
+  /** Whether the bar shows the command for item `id` now (a text card's Edit, a note card's Convert); without it, always. */
+  itemBarShows?(ctx: CommandContext, id: NodeId): boolean;
+  /** Makes the command's bar entry a dropdown of choices for item `id` (the Page dropdown), rather than a button. */
+  itemBarChoice?(ctx: CommandContext, id: NodeId): ItemBarChoice;
+}
+
+/** A dropdown in the item bar: choosing an option runs its command with `{ id: <the item>, [param]: <its value> }`. */
+export interface ItemBarChoice {
+  /** The command's parameter the chosen value is given in. */
+  param: string;
+  options: { value: string | null; label: string }[];
+  /** The value of the option shown chosen; undefined shows `mixed` (several apply), as a disabled entry. */
+  value: string | null | undefined;
+  /** What is shown when no one option is chosen (`value` undefined). */
+  mixed?: string;
 }
 
 export class CommandRegistry {

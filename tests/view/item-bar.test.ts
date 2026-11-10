@@ -1,0 +1,383 @@
+// @vitest-environment happy-dom
+import { registerBuiltinCommands } from "../../src/commands/builtin";
+import { cardCommands } from "../../src/commands/cards";
+import { drawingCommands } from "../../src/commands/drawing";
+import { groupCommands } from "../../src/commands/groups";
+import { prepareCall, runCall } from "../../src/commands/headless";
+import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
+import { isAssociation } from "../../src/model/attach";
+import { createDocument, createPage, shapeNodeDefaults } from "../../src/model/defaults";
+import { nodeWorldRect } from "../../src/model/geometry";
+import { createFigureStore } from "../../src/model/normalise";
+import type { CardNode, ConnectorNode, Document } from "../../src/model/types";
+import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
+import { connectorNodeType } from "../../src/nodes/connector-node";
+import { groupNodeType } from "../../src/nodes/group-node";
+import { shapeNodeType } from "../../src/nodes/shape-node";
+import { builtinPaintTypes } from "../../src/paint/builtin";
+import { createRegistries, type Registries } from "../../src/registry";
+import type { Command, CommandContext, UndoStep } from "../../src/registry/command";
+import { builtinShapeKinds } from "../../src/shapes/builtin";
+
+vi.mock("obsidian", () => ({
+  Menu: class {},
+  Component: class {
+    addChild() {}
+    removeChild() {}
+  },
+  MarkdownRenderer: { render: async (_app: unknown, markdown: string, el: HTMLElement) => void (el.textContent = markdown) },
+  Keymap: { isModEvent: () => false },
+  Notice: class {},
+  Platform: { isMacOS: false },
+  normalizePath: (p: string) => p,
+  setIcon: () => {},
+}));
+
+const { PointerController } = await import("../../src/view/pointer");
+const { SelectionState } = await import("../../src/view/selection");
+const { Viewport } = await import("../../src/view/viewport");
+const { ItemBar } = await import("../../src/view/item-bar");
+
+beforeAll(() => {
+  const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
+  proto.createEl = function (this: HTMLElement, tag: string, info: { cls?: string | string[]; text?: string } = {}) {
+    const el = this.ownerDocument.createElement(tag);
+    for (const c of Array.isArray(info.cls) ? info.cls : info.cls ? [info.cls] : []) el.classList.add(c);
+    if (info.text !== undefined) el.textContent = info.text;
+    this.appendChild(el);
+    return el;
+  };
+  proto.createDiv = function (this: { createEl(tag: string, info?: unknown): unknown }, info?: unknown) {
+    return this.createEl("div", info);
+  };
+  proto.empty = function (this: HTMLElement) {
+    while (this.firstChild) this.removeChild(this.firstChild);
+  };
+});
+
+function registries(extra: Command[] = []): Registries {
+  const r = createRegistries();
+  for (const t of [shapeNodeType, connectorNodeType, cardNodeType, groupNodeType]) r.nodeTypes.register(t);
+  for (const kind of builtinShapeKinds) r.shapes.register(kind);
+  for (const route of builtinRoutes) r.routes.register(route);
+  for (const cap of builtinCapKinds) r.caps.register(cap);
+  for (const paint of builtinPaintTypes) r.paints.register(paint);
+  registerBuiltinCommands({ registries: r, addCommand: () => undefined, activeFigureView: () => null } as never);
+  for (const command of [...drawingCommands(), ...cardCommands(), ...groupCommands(), ...extra]) r.commands.register(command);
+  return r;
+}
+
+/** Pages "Figure 1" (pg-1) and "Figure 2" (pg-2); shape A on pg-1; text card C and note card N beside it, D below. */
+function figure(): Document {
+  const doc = createDocument("a4-portrait");
+  doc.pages.push(createPage("a4-portrait", doc.pages.map((p) => p.id)));
+  doc.pages[0].id = "pg-1";
+  doc.pages[1].id = "pg-2";
+  doc.pages[0].name = "Figure 1";
+  doc.pages[1].name = "Figure 2";
+  const page = doc.pages[0];
+  doc.nodes.push(shapeNodeDefaults(page, { id: "A", kind: "rect", x: 50, y: 50, width: 100, height: 80, z: 0 }, []));
+  doc.nodes.push({ ...cardNodeDefaults(page, -400, 100, ["A"]), id: "C", text: "See [[Notes/a]]" });
+  const note: CardNode = { ...cardNodeDefaults(page, -400, 400, ["A", "C"]), id: "N", file: "Notes/a", subpath: "#Legend" };
+  delete note.text;
+  doc.nodes.push(note);
+  doc.nodes.push({ ...cardNodeDefaults(page, -400, 700, ["A", "C", "N"]), id: "D", text: "Plain" });
+  return doc;
+}
+
+class FakeStage {
+  private readonly listeners = new Map<string, ((ev: any) => void)[]>();
+  addEventListener(type: string, fn: (ev: any) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  fire(type: string, ev: object = {}): void {
+    for (const fn of this.listeners.get(type) ?? []) fn(ev);
+  }
+  setPointerCapture = vi.fn();
+  hasPointerCapture = () => false;
+  releasePointerCapture = () => {};
+  focus = () => {};
+}
+
+function setup(extra: Command[] = []) {
+  const r = registries(extra);
+  let controller: { commitTime(): number } | null = null;
+  const store = createFigureStore(figure(), r, () => controller?.commitTime() ?? Date.now());
+  const pending: Promise<unknown>[] = [];
+  const elements = new Map<string, HTMLElement>();
+  const view: any = {
+    app: {},
+    file: { path: "fig.lnkfig.md" },
+    store,
+    selection: new SelectionState(),
+    viewport: new Viewport(),
+    readOnly: false,
+    enteredGroup: null,
+    plugin: { registries: r },
+    viewOption: () => undefined,
+    pageLimitMm: () => 2000,
+    notePageLimit: () => {},
+    setViewOption: () => {},
+    isPanGesture: () => false,
+    stagePoint: (ev: { clientX: number; clientY: number }) => ({ x: ev.clientX, y: ev.clientY }),
+    nodeHost: { elementFor: (id: string) => elements.get(id) },
+    pageLayer: { overlayHost: () => { throw new Error("no overlay"); } },
+    armedTool: null,
+    selectedIds: () => [...view.selection.ids],
+    setSelection: (ids: string[]) => view.selection.set(ids),
+    currentPage: () => store.doc.pages[0],
+    activateNode: vi.fn(),
+    addChild: vi.fn(),
+    removeChild: vi.fn(),
+    commandContext: (): CommandContext => ({ app: {} as never, registries: r, view, store, selection: view.selectedIds(), page: store.doc.pages[0] }),
+    runCommandById: vi.fn((id: string, args?: Record<string, unknown>, step?: UndoStep) => {
+      if (args === undefined) {
+        const command = r.commands.get(id)!;
+        const ctx = view.commandContext();
+        if (command.applies(ctx)) pending.push(Promise.resolve(command.run(ctx)));
+        return;
+      }
+      pending.push(runCall(store, view.commandContext(), prepareCall(r, { id, args }), step).catch((error) => (view.failures.push(error), null)));
+    }),
+    failures: [] as unknown[],
+  };
+  const stage = new FakeStage();
+  const pointer = new PointerController(view);
+  controller = pointer;
+  pointer.attach(stage as never);
+  view.gestureUnderWay = () => pointer.busy();
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const bar = new ItemBar(host);
+  // As the figure view does: the bar is brought in line on every change of the store, the selection and the gesture.
+  const sync = () => bar.sync(view);
+  store.subscribe(sync);
+  view.selection.onChange(sync);
+  view.gestureChanged = sync;
+  const fire = (type: string, [clientX, clientY]: [number, number]) =>
+    stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, clientX, clientY, target: {}, preventDefault: vi.fn() });
+  const settled = () => Promise.all(pending);
+  const select = (ids: string[]) => {
+    view.selection.set(ids);
+    sync();
+  };
+  const buttons = () => Array.from(bar.el.querySelectorAll<HTMLButtonElement>("button")).map((b) => b.getAttribute("aria-label"));
+  const dropdown = () => bar.el.querySelector<HTMLSelectElement>("select")!;
+  const options = () => Array.from(dropdown().options).map((o) => o.textContent);
+  const chosen = () => dropdown().selectedOptions[0]?.textContent;
+  const press = (label: string) => bar.el.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click();
+  const choose = (label: string) => {
+    const select = dropdown();
+    const option = Array.from(select.options).find((o) => o.textContent === label)!;
+    select.value = option.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const ties = (card: string) =>
+    store.doc.nodes.filter((n): n is ConnectorNode => n.type === "connector" && isAssociation(store.doc, n as ConnectorNode, r) && (n as ConnectorNode).ends.some((e) => e.kind === "attached" && e.node === card));
+  const call = (id: string, args: Record<string, unknown>) => runCall(store, view.commandContext(), prepareCall(r, { id, args }));
+  return { r, store, view, bar, host, sync, fire, settled, select, buttons, dropdown, options, chosen, press, choose, ties, call, elements, pointer };
+}
+
+describe("the item bar", () => {
+  test("the bar shows for one selected card, at the current group level only", async () => {
+    const s = setup();
+    expect(s.bar.el.hidden).toBe(true);
+    s.select(["C"]);
+    expect(s.bar.el.hidden).toBe(false);
+    expect(s.bar.el.parentElement).toBe(s.host);
+    // Not for a shape.
+    s.select(["A"]);
+    expect(s.bar.el.hidden).toBe(true);
+    // A card inside a group that has not been entered: no bar; the group entered, the bar.
+    await s.call("group.create", { ids: ["C", "D"] });
+    const group = s.store.doc.nodes.find((n) => n.id === "C")!.parent!;
+    s.select(["C"]);
+    expect(s.bar.el.hidden).toBe(true);
+    s.select([group]);
+    expect(s.bar.el.hidden).toBe(true);
+    s.view.enteredGroup = group;
+    s.select(["C"]);
+    expect(s.bar.el.hidden).toBe(false);
+    // Read-only: nothing to run.
+    s.view.readOnly = true;
+    s.sync();
+    expect(s.bar.el.hidden).toBe(true);
+  });
+
+  test("the bar is hidden for a multi-selection, during a drag, during a resize and while editing", async () => {
+    const s = setup();
+    s.select(["C", "D"]);
+    expect(s.bar.el.hidden).toBe(true);
+
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    // A drag of the card: hidden while it is under way, back when it ends.
+    s.fire("pointerdown", [card.x + 20, card.y + 20]);
+    expect(s.bar.el.hidden).toBe(false);
+    s.fire("pointermove", [card.x + 60, card.y + 20]);
+    expect(s.pointer.busy()).toBe(true);
+    expect(s.bar.el.hidden).toBe(true);
+    s.fire("pointerup", [card.x + 60, card.y + 20]);
+    expect(s.bar.el.hidden).toBe(false);
+
+    // A resize by its east handle.
+    const moved = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const handle: [number, number] = [moved.x + moved.width, moved.y + moved.height / 2];
+    s.fire("pointerdown", handle);
+    s.fire("pointermove", [handle[0] - 40, handle[1]]);
+    expect(s.bar.el.hidden).toBe(true);
+    s.fire("pointerup", [handle[0] - 40, handle[1]]);
+    expect(s.bar.el.hidden).toBe(false);
+
+    // Editing: the card's element says so, and tells the stage.
+    const host = document.createElement("div");
+    s.host.appendChild(host);
+    const component = { ...s.view, runCommandById: s.view.runCommandById };
+    const ctx = { app: {}, registries: s.r, figurePath: "fig.lnkfig.md", doc: () => s.store.doc, resolved: () => undefined, openLink: vi.fn(), component };
+    const renderer = cardNodeType.mount(s.store.doc.nodes.find((n) => n.id === "C") as CardNode, host, ctx as never);
+    const el = host.firstElementChild as HTMLElement;
+    s.elements.set("C", el);
+    const told = vi.fn(() => s.sync());
+    s.host.addEventListener("lf-editing", told);
+    el.dispatchEvent(new CustomEvent("lf-activate"));
+    expect(el.classList.contains("is-editing")).toBe(true);
+    expect(told).toHaveBeenCalledTimes(1);
+    expect(s.bar.el.hidden).toBe(true);
+    el.querySelector("textarea")!.dispatchEvent(new FocusEvent("blur"));
+    expect(el.classList.contains("is-editing")).toBe(false);
+    expect(told).toHaveBeenCalledTimes(2);
+    expect(s.bar.el.hidden).toBe(false);
+    renderer.unmount();
+  });
+
+  test("the dropdown lists pages by name plus None, and reads 'Several pages' when there are several ties", async () => {
+    const s = setup();
+    s.select(["C"]);
+    expect(s.options()).toEqual(["None", "Figure 1", "Figure 2"]);
+    expect(s.chosen()).toBe("None");
+    await s.call("card.tie", { id: "C", page: "pg-2" });
+    expect(s.chosen()).toBe("Figure 2");
+    await s.call("connector.create", { page: "pg-1", from: { kind: "attached", node: "C", snap: "center" }, to: { kind: "page", page: "pg-1" } });
+    // connector.create selects the line it drew.
+    s.select(["C"]);
+    expect(s.bar.el.hidden).toBe(false);
+    expect(s.chosen()).toBe("Several pages");
+    expect(s.options()).toEqual(["Several pages", "None", "Figure 1", "Figure 2"]);
+    expect(s.dropdown().selectedOptions[0].disabled).toBe(true);
+    // A rename shows at once.
+    await s.call("page.update", { id: "pg-1", patch: { name: "Overview" } });
+    expect(s.bar.el.hidden).toBe(false);
+    expect(s.options()).toContain("Overview");
+  });
+
+  test("choosing a page runs card.tie", async () => {
+    const s = setup();
+    s.select(["C"]);
+    s.choose("Figure 2");
+    await s.settled();
+    expect(s.view.runCommandById).toHaveBeenCalledWith("card.tie", { id: "C", page: "pg-2" });
+    expect(s.ties("C")).toHaveLength(1);
+    expect(s.chosen()).toBe("Figure 2");
+    // The card stays selected, and the bar stays.
+    expect(s.view.selectedIds()).toEqual(["C"]);
+    expect(s.bar.el.hidden).toBe(false);
+    s.choose("None");
+    await s.settled();
+    expect(s.view.runCommandById).toHaveBeenLastCalledWith("card.tie", { id: "C", page: null });
+    expect(s.ties("C")).toHaveLength(0);
+  });
+
+  test("the dropdown is rebuilt after a page is deleted while open", async () => {
+    const s = setup();
+    s.select(["C"]);
+    const select = s.dropdown();
+    const stale = Array.from(select.options).find((o) => o.textContent === "Figure 2")!.cloneNode(true) as HTMLOptionElement;
+    await s.call("delete-page", { page: "pg-2" });
+    expect(s.options()).toEqual(["None", "Figure 1"]);
+    // The choice the open dropdown still showed lands after the page went: card.tie refuses, and nothing changes.
+    const before = JSON.stringify(s.store.doc);
+    const dropdown = s.dropdown();
+    dropdown.appendChild(stale);
+    dropdown.value = stale.value;
+    dropdown.dispatchEvent(new Event("change", { bubbles: true }));
+    await s.settled();
+    expect(s.view.runCommandById).toHaveBeenLastCalledWith("card.tie", { id: "C", page: "pg-2" });
+    expect(s.view.failures).toHaveLength(1);
+    expect(String(s.view.failures[0])).toContain('card.tie: there is no page "pg-2"');
+    expect(JSON.stringify(s.store.doc)).toBe(before);
+    // Rebuilt again from the figure: the stale entry is gone, and what is shown is the card's tie.
+    expect(s.options()).toEqual(["None", "Figure 1"]);
+    expect(s.chosen()).toBe("None");
+  });
+
+  test("a locked card shows only Page and Open source", async () => {
+    const s = setup();
+    s.select(["C"]);
+    expect(s.buttons()).toEqual(["Edit", "Open source", "Delete"]);
+    await s.call("node.update", { id: "C", patch: { locked: true } });
+    expect(s.bar.el.hidden).toBe(false);
+    expect(s.dropdown()).not.toBeNull();
+    expect(s.buttons()).toEqual(["Open source"]);
+    // Open source is there and disabled when the card holds no link.
+    await s.call("node.update", { id: "C", patch: { locked: false } });
+    s.select(["D"]);
+    expect(s.buttons()).toEqual(["Edit", "Open source", "Delete"]);
+    const open = s.bar.el.querySelector<HTMLButtonElement>('button[aria-label="Open source"]')!;
+    expect(open.disabled).toBe(true);
+    s.press("Delete");
+    await s.settled();
+    expect(s.store.doc.nodes.some((n) => n.id === "D")).toBe(false);
+    expect(s.bar.el.hidden).toBe(true);
+  });
+
+  test("Convert to text shows only for 0.4.0 note cards", async () => {
+    const s = setup();
+    s.select(["C"]);
+    expect(s.buttons()).not.toContain("Convert to text");
+    s.press("Edit");
+    expect(s.view.activateNode).toHaveBeenCalledWith("C");
+    s.select(["N"]);
+    expect(s.buttons()).toEqual(["Open source", "Delete", "Convert to text"]);
+    s.press("Convert to text");
+    await s.settled();
+    expect(s.view.runCommandById).toHaveBeenCalledWith("card.convert", { id: "N" });
+    expect(s.store.doc.nodes.find((n) => n.id === "N")).toMatchObject({ text: "![[Notes/a#Legend]]" });
+    expect(s.buttons()).toEqual(["Edit", "Open source", "Delete"]);
+  });
+
+  test("the bar keeps its size when zoomed", () => {
+    const s = setup();
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const at = (zoom: number) => {
+      s.view.viewport.zoom = zoom;
+      s.view.viewport.tx = 300;
+      s.view.viewport.ty = 400;
+      s.sync();
+      return { left: parseFloat(s.bar.el.style.left), top: parseFloat(s.bar.el.style.top), transform: s.bar.el.style.transform };
+    };
+    const one = at(1);
+    const two = at(2);
+    // Placed at the card's top middle in stage px, which follows the zoom; never scaled itself.
+    expect(one.left).toBeCloseTo((card.x + card.width / 2) * 1 + 300, 6);
+    expect(two.left).toBeCloseTo((card.x + card.width / 2) * 2 + 300, 6);
+    expect(two.top).toBeCloseTo(card.y * 2 + 400, 6);
+    expect(two.transform).toBe(one.transform);
+    expect(two.transform).not.toMatch(/scale/);
+    expect(s.bar.el.closest(".lf-viewport")).toBeNull();
+  });
+
+  test("a plugin command with itemBar ['card'] appears", () => {
+    const run = vi.fn();
+    const extra: Command = { id: "other.mark", name: "Mark", icon: "star", group: "edit", hidden: true, itemBar: ["card"], applies: (ctx) => ctx.selection.length === 1, run };
+    const s = setup([extra]);
+    s.select(["C"]);
+    expect(s.buttons()).toContain("Mark");
+    s.press("Mark");
+    expect(s.view.runCommandById).toHaveBeenCalledWith("other.mark");
+    expect(run).toHaveBeenCalledTimes(1);
+    // Not on a shape: it lists cards only.
+    s.select(["A"]);
+    expect(s.bar.el.hidden).toBe(true);
+  });
+});

@@ -33,8 +33,17 @@ describe("markdownToPlainText", () => {
     expect(markdownToPlainText(md)).toBe("First line\nsecond line\n\nNext paragraph\n\nquoted\nCallout title\n\nLast");
   });
 
-  test("front matter and code fences: the matter is dropped, the code kept", () => {
-    expect(markdownToPlainText("---\ntags: [a]\n---\nText\n\n```\nx = 1\n```")).toBe("Text\n\nx = 1");
+  test("code fences are dropped, the code kept", () => {
+    expect(markdownToPlainText("Text\n\n```\nx = 1\n```")).toBe("Text\n\nx = 1");
+  });
+
+  test("a card's text that starts with `---` keeps its text: front matter is the note reader's to strip, not this", () => {
+    expect(markdownToPlainText("---\ntags: [a]\n---\nText")).toBe("tags: [a]\n\nText");
+  });
+
+  test("*emphasis* does not match within words, as _emphasis_ does not", () => {
+    expect(markdownToPlainText("2*3*4 and a_b_c")).toBe("2*3*4 and a_b_c");
+    expect(markdownToPlainText("*one* and (*two*), *three*.")).toBe("one and (two), three.");
   });
 });
 

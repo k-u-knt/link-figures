@@ -104,6 +104,33 @@ const URL_LINK = /^[a-z][a-z0-9+.-]*:/i;
 /** A wikilink alias that is an image size (`300`, `300x200`), not alt text. */
 const SIZE_ALIAS = /^\d+(x\d+)?$/;
 
+/**
+ * Where `markdown` holds code, as [start, end) offsets: fenced blocks (``` or ~~~, from the opening fence line to the
+ * closing one, or to the end when it is never closed) and inline code spans (a run of backticks to the next run of the
+ * same length) outside them. What is in them is text, not Markdown.
+ */
+export function codeRanges(markdown: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  const line = /[^\n]*(\n|$)/g;
+  let open: { start: number; char: string; length: number } | null = null;
+  for (let m = line.exec(markdown); m && m[0] !== ""; m = line.exec(markdown)) {
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(m[0]);
+    if (!open) {
+      if (fence) open = { start: m.index, char: fence[1][0], length: fence[1].length };
+    } else if (fence && fence[1][0] === open.char && fence[1].length >= open.length && /^ {0,3}[`~]+\s*$/.test(m[0])) {
+      ranges.push([open.start, m.index + m[0].length]);
+      open = null;
+    }
+  }
+  if (open) ranges.push([open.start, markdown.length]);
+  const inFence = (at: number) => ranges.some(([a, b]) => at >= a && at < b);
+  const spans: [number, number][] = [];
+  for (const m of markdown.matchAll(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g)) {
+    if (!inFence(m.index)) spans.push([m.index, m.index + m[0].length]);
+  }
+  return [...ranges, ...spans].sort((a, b) => a[0] - b[0]);
+}
+
 function decoded(link: string): string {
   try {
     return decodeURI(link);
@@ -117,7 +144,7 @@ function decoded(link: string): string {
  * the relative path it was copied to) and its embed rewritten as a standard Markdown image with that path in angle
  * brackets: `![alt](<folder/name.png>)`, so the Markdown opens anywhere. What cannot be copied keeps its link, with a
  * warning naming the card (`deps.label`): a file not found, a note embedded, a copy that failed. Links with a scheme
- * (`https:`) are left as they are.
+ * (`https:`), and embeds in code (`codeRanges`), are left as they are.
  */
 export async function rewriteImages(
   markdown: string,
@@ -126,7 +153,10 @@ export async function rewriteImages(
   const warnings: string[] = [];
   const parts: string[] = [];
   let last = 0;
+  const code = codeRanges(markdown);
   for (const m of markdown.matchAll(EMBED)) {
+    // An embed in code is text: left as it is.
+    if (code.some(([a, b]) => m.index >= a && m.index < b)) continue;
     parts.push(markdown.slice(last, m.index));
     last = m.index + m[0].length;
     let link: string;
@@ -303,7 +333,10 @@ export async function writeCardFiles(
     }
     const path = exportPathFor(run.folder, name);
     if (refused(path, true)) continue;
-    await writeExportFile(deps.app, run.folder, name, new Blob([`${parts.join(CARD_SEPARATOR)}\n`], { type: "text/markdown" }));
+    // A file that starts with `---` would be read as front matter: a blank first line keeps the first card's text.
+    const body = parts.join(CARD_SEPARATOR);
+    const lead = body.startsWith("---") ? "\n" : "";
+    await writeExportFile(deps.app, run.folder, name, new Blob([`${lead}${body}\n`], { type: "text/markdown" }));
     paths.push(path);
   }
   return paths;

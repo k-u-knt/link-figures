@@ -1,14 +1,14 @@
 /**
  * Markdown as plain text, for what shows text without markup (PowerPoint's presenter notes). A small line-based pass,
  * not a Markdown parser: headings, emphasis, inline code, links and wikilinks become their text; list items become
- * "• item" (ordered ones keep their number); embeds, comments, block ids, front matter, rules and code fences are
+ * "• item" (ordered ones keep their number); embeds, comments, block ids, rules and code fences are
  * dropped (the code inside is kept), as are real HTML tags (`HTML_TAG`); quote and callout markers go. Lines are kept
  * as lines, and paragraphs are separated by one blank line.
  */
 export function markdownToPlainText(md: string): string {
   let text = md.replace(/\r\n?/g, "\n");
-  // Front matter, only at the very start.
-  text = text.replace(/^---\n[\s\S]*?\n---(\n|$)/, "");
+  // No front matter is stripped here: a note's is left out where it is read (`readNoteSection`), only at the very start
+  // of a whole note, and a card's own text that starts with `---` is text.
   // Comments, which may span lines.
   text = text.replace(/%%[\s\S]*?%%/g, "");
 
@@ -66,7 +66,7 @@ function inline(line: string): string {
       .replace(/`([^`]*)`/g, "$1")
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "$1")
       .replace(/(^|[^\w])__(?=\S)([\s\S]*?\S)__(?!\w)/g, "$1$2")
-      .replace(/\*(?=\S)([\s\S]*?\S)\*/g, "$1")
+      .replace(/(^|[^\w])\*(?=\S)([\s\S]*?\S)\*(?!\w)/g, "$1$2")
       .replace(/(^|[^\w])_(?=\S)([\s\S]*?\S)_(?!\w)/g, "$1$2")
       .replace(/(~~|==)(?=\S)([\s\S]*?\S)\1/g, "$2")
       // Real HTML tags (`HTML_TAG`), and backslash escapes; anything else in angle brackets (`<GFAP>`) stays.

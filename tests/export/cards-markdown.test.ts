@@ -170,9 +170,40 @@ describe("cardMarkdown and rewriteImages", () => {
     expect(written).toEqual(["img/plot.png -> plot.png", "sub/plot.png -> plot-2.png"]);
     expect(out.warnings).toEqual(['"c": the image "gone.png" was not found; its link is kept', '"c": the embed "Other" is not an image; its link is kept']);
   });
+
+  test("embeds in fenced code blocks and inline code are left as they are", async () => {
+    const copied: string[] = [];
+    const { access: a } = access({ "img/plot.png": new Uint8Array([1]) });
+    const md = "`![[img/plot.png]]` and ``x ![](img/plot.png) y``\n\n```md\n![[img/plot.png]]\n```\n\n~~~\n![a](img/plot.png)\n~~~\n\n![[img/plot.png]]";
+    const out = await rewriteImages(md, {
+      label: '"c"',
+      resolve: (link) => a.resolveLink(link, "Figs/Fig.lnkfig.md"),
+      copy: async (file) => {
+        copied.push(file.path);
+        return "d/plot.png";
+      },
+    });
+    expect(out.markdown).toBe(md.replace(/!\[\[img\/plot\.png\]\]$/, "![](<d/plot.png>)"));
+    expect(copied).toEqual(["img/plot.png"]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  test("an unclosed code fence runs to the end: nothing after it is rewritten", async () => {
+    const md = "![[a.png]]\n```\n![[b.png]]";
+    const out = await rewriteImages(md, { label: '"c"', resolve: (link) => ({ path: link, extension: "png" }), copy: async (file) => `d/${file.path}` });
+    expect(out.markdown).toBe("![](<d/a.png>)\n```\n![[b.png]]");
+  });
 });
 
 describe("export: cards as Markdown", () => {
+  test("a cards file whose first card starts with `---` begins with a blank line, so it is not read as front matter", async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "---\ntitle: x\n---\nBody" });
+    tie(doc, c, doc.pages[0]);
+    const { vault } = await exportCards(doc);
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe("\n---\ntitle: x\n---\nBody\n");
+  });
+
   test("a page with two cards writes `<figure> - <page> cards.md` with both, in row order, separated by `\\n\\n---\\n\\n`", async () => {
     const doc = pages();
     const p1 = doc.pages[0];

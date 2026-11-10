@@ -1,5 +1,6 @@
 import { createApi, LOADING_WAIT_MS, type OpenFigure } from "../src/api";
 import { registerBuiltinCommands } from "../src/commands/builtin";
+import { FormatError, NotFigureError } from "../src/format/errors";
 import { loadDocument } from "../src/format/load";
 import { emptyParsed, serializeFigureFile } from "../src/format/serialize";
 import { builtinCapKinds, builtinRoutes } from "../src/connectors/builtin";
@@ -527,6 +528,24 @@ describe("export", () => {
     await read;
     await exported;
     expect(order).toEqual(["read", "export"]);
+  });
+
+  test("a path that is not a figure, or not a file, is refused as a CommandError starting api.export:", async () => {
+    for (const failure of [new NotFigureError(), new FormatError("bad JSON"), new CommandError('there is no file "x.md"')]) {
+      const api = createApi({
+        app: {} as never,
+        registries: createRegistries(),
+        files: { read: async () => "", process: async () => {} },
+        normalizePath,
+        openFigure: () => null,
+        exportFigure: async () => {
+          throw failure;
+        },
+      });
+      const outcome = api.export("x.md", { format: "png" });
+      await expect(outcome).rejects.toBeInstanceOf(CommandError);
+      await expect(outcome).rejects.toThrow(`api.export: ${failure.message}`);
+    }
   });
 
   test("a request without a format is refused, and without a host that exports, export rejects", async () => {

@@ -14,6 +14,7 @@ import {
 import { FILE_SUFFIX } from "./constants";
 import { requestOptionsProblem } from "./export/export-options";
 import type { ExportOutcome, ExportRequest } from "./export/export-run";
+import { FormatError, NotFigureError } from "./format/errors";
 import { newFigureText } from "./format/new-figure";
 import type { BlockIdResult } from "./links/note-block-id";
 import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
@@ -232,7 +233,9 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       if (problem) throw new CommandError(problem);
       const exportFigure = host.exportFigure;
       if (!exportFigure) throw new CommandError("api.export: figures cannot be exported here");
-      return queued(figurePath, (path) => exportFigure(path, request));
+      return queued(figurePath, (path) => exportFigure(path, request)).catch((error: unknown) => {
+        throw exportRefusal(error);
+      });
     },
 
     async createFigure(figurePath, options = {}) {
@@ -269,4 +272,15 @@ export function createApi(host: ApiHost): LinkFiguresApi {
       return queued(figurePath, async (path, view) => structuredClone(view ? view.store.doc : await readHeadlessFigure(registries, files, path)));
     },
   };
+}
+
+/**
+ * What `api.export` rejects with for `error`: a refusal (the path is not a figure file, cannot be read as one, or names
+ * no file) is a `CommandError` whose message starts `api.export:`, as every other refusal of the export is. Any other
+ * error (a failed write) is passed on as it is.
+ */
+function exportRefusal(error: unknown): unknown {
+  const refusal = error instanceof NotFigureError || error instanceof FormatError || error instanceof CommandError;
+  if (!refusal || error.message.startsWith("api.export:")) return error;
+  return new CommandError(`api.export: ${error.message}`);
 }

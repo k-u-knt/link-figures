@@ -1,5 +1,5 @@
 import { Platform } from "obsidian";
-import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
+import { LIVE_LINKS, MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { visualBounds } from "../model/arrange";
 import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, unionRect, type PlacePoint, type Pt, type Rect } from "../model/geometry";
@@ -50,6 +50,16 @@ export function isAddingToSelection(ev: { shiftKey: boolean; metaKey: boolean; c
 export function isEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+
+/**
+ * Whether a press on `target` is the target's own, not the stage's: a node's link badge, or a link in what a node
+ * renders whose links are live (`LIVE_LINKS`, a card's text), which opens on its click. Capturing the pointer would
+ * send that click to the stage.
+ */
+export function isOwnClick(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a`) !== null;
 }
 
 /** What a press turns into once it has travelled far enough. A `move` that has nothing to move becomes a marquee: see `begin`. */
@@ -286,7 +296,7 @@ export class PointerController {
     if (!ev.isPrimary || ev.button !== 0 || isControlClick(ev) || this.view.isPanGesture(ev)) return;
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     const target = ev.target as Element | null;
-    if (isEditable(target) || target?.closest?.(".lf-badge")) return;
+    if (isEditable(target) || isOwnClick(target)) return;
 
     // An armed tool takes the press: it is placed where the press is, on any page and over any node, and selects nothing
     // itself. The stage does not take the focus, and the mousedown that follows must not move it either (hence
@@ -889,7 +899,7 @@ export class PointerController {
    * entered level itself is told.
    */
   private onDoubleClick(ev: MouseEvent): void {
-    if (this.view.readOnly || isEditable(ev.target)) return;
+    if (this.view.readOnly || isEditable(ev.target) || isOwnClick(ev.target)) return;
     // A double-click finishes crop mode.
     if (this.cropSession.active) {
       this.cropSession.finish();

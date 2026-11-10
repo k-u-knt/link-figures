@@ -2,6 +2,7 @@ import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf 
 import { createApi, type LinkFiguresApi } from "./api";
 import { readHeadlessFigure, type FigureFiles } from "./commands/headless";
 import { afterLinkUpdates } from "./links/link-updates";
+import { followRenames, type CardRenameHost, type OpenFigureLinks } from "./links/card-renames";
 import { displayAdjustment } from "./adjust/display";
 import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
@@ -19,7 +20,7 @@ import { BlockIdQueue, writableEditor, type NoteHost } from "./links/note-block-
 import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
-import { VIEW_TYPE } from "./constants";
+import { FILE_SUFFIX, VIEW_TYPE } from "./constants";
 import { viewExportTarget } from "./export/export-modal";
 import { closeBackgroundTab, exportFigure, exportInBackground, takeBackgroundLeaf, type BackgroundFigure, type ExportOutcome, type ExportRequest, type TabWorkspace } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
@@ -160,6 +161,14 @@ export default class LinkFiguresPlugin extends Plugin {
     }
     registerDevCommands(this);
     this.registerView(VIEW_TYPE, (leaf) => new LinkFiguresView(leaf, this));
+    // Links in a card's own text are in no Links section for Obsidian to rewrite: the plugin follows each rename into
+    // every figure, after Obsidian's link update for it (see `followRenames`).
+    const followRename = followRenames(this.app, this.cardRenameHost());
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (file instanceof TFile) void followRename(file.path, oldPath);
+      }),
+    );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf?.view instanceof LinkFiguresView) this.viewActivity.set(leaf.view, ++this.activityCount);
@@ -284,6 +293,33 @@ export default class LinkFiguresPlugin extends Plugin {
       nextIndex,
       // A note may hold links too: after Obsidian's link updates under way, as a figure file's writes are.
       process: (path, edit) => afterLinkUpdates(this.app, async () => void (await vault.process(this.vaultFile(path), edit))),
+    };
+  }
+
+  /** Figures, open and closed, as following a rename into their cards' links reads and writes them (`followRenames`). */
+  private cardRenameHost(): CardRenameHost {
+    const { vault, metadataCache } = this.app;
+    return {
+      registries: this.registries,
+      figurePaths: () => vault.getMarkdownFiles().filter((f) => f.path.endsWith(FILE_SUFFIX) || hasFigureMarker(this.app, f)).map((f) => f.path),
+      openFigure: (path) => {
+        const views = this.app.workspace
+          .getLeavesOfType(VIEW_TYPE)
+          .flatMap((leaf) => (leaf.view instanceof LinkFiguresView && leaf.view.file?.path === path && leaf.view.hasDocument() ? [leaf.view] : []));
+        // One held over damage is not written, by its view or here.
+        if (views.some((view) => view.readOnly)) return "held";
+        if (views.length === 0) return null;
+        const open: OpenFigureLinks = { renameLinks: (rename) => views.forEach((view) => view.renameLinks(rename)) };
+        return open;
+      },
+      read: (path) => vault.cachedRead(this.vaultFile(path)),
+      // Run inside the link-update queue already: `figureFiles.process` would queue after itself.
+      process: (path, edit) => this.figureWrites.track(path, vault.process(this.vaultFile(path), edit).then(() => undefined)),
+      linktext: (newPath, figurePath) => {
+        const file = vault.getFileByPath(newPath);
+        return file ? metadataCache.fileToLinktext(file, figurePath) : newPath;
+      },
+      resolve: (link, fromPath) => metadataCache.getFirstLinkpathDest(link, fromPath)?.path ?? null,
     };
   }
 

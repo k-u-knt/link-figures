@@ -28,7 +28,11 @@ export interface RenderContext {
   /** The document as it is now: what a node drawn from other nodes (a connector from the items its ends are attached to) reads them from. */
   doc(): Document;
   resolved(id: NodeId): Resolved | undefined;
-  openLink(linktext: string, evt: MouseEvent): void;
+  /**
+   * Opens `linktext` from the figure's place in the vault: in a new tab when `newLeaf` says so, else as the event asks
+   * (a modifier key opens a new tab).
+   */
+  openLink(linktext: string, evt: MouseEvent, newLeaf?: "tab"): void;
   component: Component;
   /**
    * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their
@@ -37,9 +41,25 @@ export interface RenderContext {
   unreadable?: ReadonlySet<NodeId>;
 }
 
+/**
+ * A file renamed from `oldPath`, as a figure's links are to follow it: `resolve` gives the vault path a link target
+ * (as a node writes it) led to before the rename, or null, and `linktext` is what a link to the renamed file is written
+ * as now, from the figure's place in the vault (Obsidian's link text for it, in the user's link format).
+ */
+export interface LinkRename {
+  oldPath: string;
+  linktext: string;
+  resolve(target: string): string | null;
+}
+
 export interface NodeRenderer {
   update(node: Node): void;
   unmount(): void;
+  /**
+   * A file a link leads to was renamed (`NodeType.renameLinks`): what the renderer holds of the node that the model
+   * does not (an open editor's text, typed and not yet committed) follows it too.
+   */
+  renameLinks?(rename: LinkRename): void;
   /**
    * Resolves once what the node shows now has finished drawing (an image loaded or failed, a note's markdown rendered or
    * failed to), so the stage can be snapshotted. Never rejects. Without it, the node is drawn as soon as it is mounted.
@@ -320,6 +340,18 @@ export interface NodeType<N extends Node = Node> {
    * absent) for a node that shows no link (a text card). A file panel gives itself.
    */
   linkTarget?(node: N): LinkTarget | null;
+  /**
+   * The link Open source opens for the node, from the figure's place in the vault (a text card's first link or embed);
+   * null when it has none. Without it, the node's own link (`linkField`, see `linkOf`) is opened.
+   */
+  sourceLink?(node: N): { file: string; subpath: string } | null;
+  /**
+   * For a type whose nodes hold links in their own fields, which Obsidian's link updater cannot see (a text card's
+   * `[[…]]` in its text; a link in the Links section, `linkField`, is Obsidian's to rewrite): the node with each link
+   * that led to `rename.oldPath` written as `rename.linktext` instead, or the node itself when none does. Not an edit:
+   * the plugin applies it to the document, its history and closed figure files alike (see `links/card-renames.ts`).
+   */
+  renameLinks?(node: N, rename: LinkRename): N;
   /**
    * For a type a plugin registers (not one this plugin builds in): validates one of its nodes as a figure file holds it,
    * and gives the node back, completed with what is missing. `raw` has the base fields checked (`id`, `type`, `page`, a

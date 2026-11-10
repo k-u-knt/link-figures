@@ -470,13 +470,16 @@ function placeText(ctx: CommandContext, at: PlacePoint): void {
 }
 
 /**
- * The link of the one item selected, if that is what is selected and it has one: a file panel's, a note card's (any
- * type that keeps a link, see `linkOf`).
+ * The link of the one item selected, if that is what is selected and it has one: what its type says Open source opens
+ * (`sourceLink`: a text card's first link), else its own link (a file panel's, a note card's: any type that keeps a
+ * link, see `linkOf`).
  */
 function selectedLink(ctx: CommandContext): { file: string; subpath: string } | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
-  const link = node && linkOf(node);
+  if (!node) return undefined;
+  const type = nodeTypeFor(ctx.registries, node, unreadableIn(ctx));
+  const link = type?.sourceLink ? type.sourceLink(node) : linkOf(node);
   return link && link.file !== "" ? link : undefined;
 }
 

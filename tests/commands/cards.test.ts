@@ -476,3 +476,53 @@ describe("open-source", () => {
     ]);
   });
 });
+
+describe("card.convert", () => {
+  test('`card.convert` turns a note card into text, and undo restores it byte-identically', async () => {
+    const doc = figure(false, (d) => {
+      const note = { ...cardNodeDefaults(d.pages[0], -300, 0), id: "nc", name: "Legend card", file: "Notes/Legend", subpath: "#Fig 2" } as Node;
+      delete (note as { text?: string }).text;
+      const gone = { ...cardNodeDefaults(d.pages[0], -300, 200), id: "gone", file: "Old/Gone" } as Node;
+      delete (gone as { text?: string }).text;
+      return [note, gone];
+    });
+    const r = registries();
+    // A figure as 0.4.0 wrote it: the note cards' links in the Links section.
+    const saved = serializeFigureFile(doc, emptyParsed());
+    expect(saved).toContain("- nc: ![[Notes/Legend#Fig 2]] ^nc");
+    const loaded = loadDocument(saved, r);
+    let t = 0;
+    const store = createFigureStore(loaded.doc, r, () => (t += 10_000));
+    // Obsidian's link text for the notes it finds (here the base name); a missing note keeps its link verbatim.
+    const linktext = (file: string) => (file === "Notes/Legend" ? "Legend" : file);
+    const ctx = (): CommandContext => ({ app: {} as never, registries: r, view: null, store, selection: [], page: undefined, linktext });
+    const call = (id: string, args: Record<string, unknown>) => runCall(store, ctx(), prepareCall(r, { id, args }));
+    const before = serializeFigureFile(store.doc, loaded.parsed);
+    expect(before).toBe(saved);
+
+    expect(await call("card.convert", { id: "nc" })).toEqual({ id: "nc" });
+    const converted = store.doc.nodes.find((n) => n.id === "nc") as Node & { text?: string; file?: string; subpath?: string };
+    expect(converted).toMatchObject({ type: "card", name: "Legend card", text: "![[Legend#Fig 2]]" });
+    expect(converted.file).toBeUndefined();
+    expect(converted.subpath).toBeUndefined();
+    const after = serializeFigureFile(store.doc, loaded.parsed);
+    expect(after).not.toContain("- nc:");
+    expect(after).toContain('"text": "![[Legend#Fig 2]]"');
+
+    await call("card.convert", { id: "gone" });
+    expect((store.doc.nodes.find((n) => n.id === "gone") as { text?: string }).text).toBe("![[Old/Gone]]");
+
+    // Each a step of its own; undone, the figure is as 0.4.0 wrote it, byte for byte.
+    expect(store.undo()).toBe(true);
+    expect(store.undo()).toBe(true);
+    expect(serializeFigureFile(store.doc, loaded.parsed)).toBe(saved);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  test('`card.convert` on a text card is refused: `card.convert: "<id>" is not a note card`', async () => {
+    const { call } = setup(figure(false, (d) => [{ ...cardNodeDefaults(d.pages[0], -300, 0), id: "tc", text: "Legend" }, shapeNodeDefaults(d.pages[0], { id: "sh", x: 10, y: 10, width: 50, height: 50 }, [])]));
+    await expect(call("card.convert", { id: "tc" })).rejects.toThrow(new CommandError('card.convert: "tc" is not a note card'));
+    await expect(call("card.convert", { id: "sh" })).rejects.toThrow(new CommandError('card.convert: "sh" is not a note card'));
+    await expect(call("card.convert", { id: "nope" })).rejects.toThrow(new CommandError('card.convert: there is no node "nope"'));
+  });
+});

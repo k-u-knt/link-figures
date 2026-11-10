@@ -5,6 +5,7 @@ import type { FileRef, VaultAccess } from "../links/types";
 import { mmToPx, pageOriginsPx } from "../model/geometry";
 import type { CardNode, Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { Registries } from "../registry";
+import { applyEdits, cardLinks, codeRanges, linksAsText, type TextEdit } from "../model/card-links";
 import { exportDir, exportPathFor, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
 /** Two cards whose tops are this close (mm) are one row; within a row they go left to right. */
@@ -77,18 +78,75 @@ export async function readNoteSection(access: VaultAccess, file: string, subpath
 }
 
 /**
- * A card's Markdown as it is exported: a text card's text, or a note card's section (`deps.readNote`). `sourcePath` is
- * the note a note card's links resolve from (null for a text card: the figure's). A note card whose note or section
- * cannot be found gives no Markdown, and a warning; an empty card gives none, silently.
+ * `markdown` with each embed of a note section in it (`![[note]]`, `![[note#heading]]`, `![[note#^block]]`, outside
+ * code) replaced by that section's Markdown (`readNote`, which gives null for what is not a note section that can be
+ * found: an image, a missing note; such an embed is kept as it is). One level deep: an embed inside an embedded section
+ * is left as it is, so there is no recursion and no cycle. With `resolve`, the other embeds a section holds (images)
+ * are written with their full vault path, so they resolve from anywhere, not only from their note. `notes` are the
+ * notes read.
+ */
+export async function expandEmbeds(
+  markdown: string,
+  readNote: (file: string, subpath: string) => Promise<NoteSection | null>,
+  resolve?: (link: string, fromPath: string) => FileRef | null,
+): Promise<{ markdown: string; warnings: string[]; notes: string[] }> {
+  const edits: TextEdit[] = [];
+  const notes: string[] = [];
+  for (const link of cardLinks(markdown)) {
+    if (!link.embed || link.target === "") continue;
+    const section = await readNote(link.target, link.subpath);
+    if (!section) continue;
+    if (!notes.includes(section.path)) notes.push(section.path);
+    edits.push({ start: link.start, end: link.end, insert: resolve ? rebaseEmbeds(section.markdown, section.path, resolve) : section.markdown });
+  }
+  return { markdown: applyEdits(markdown, edits), warnings: [], notes };
+}
+
+/**
+ * `markdown`, read from the note at `fromPath`, with each embed of a file that is not a note (outside code) written with
+ * the file's full vault path, keeping its alias or size and alt text. Embeds that find nothing, notes, and links with a
+ * scheme are left as they are.
+ */
+function rebaseEmbeds(markdown: string, fromPath: string, resolve: (link: string, fromPath: string) => FileRef | null): string {
+  const code = codeRanges(markdown);
+  const edits: TextEdit[] = [];
+  for (const m of markdown.matchAll(EMBED)) {
+    if (code.some(([a, b]) => m.index >= a && m.index < b)) continue;
+    if (m[1] !== undefined) {
+      const bar = m[1].indexOf("|");
+      const { file, subpath } = splitLinktext((bar === -1 ? m[1] : m[1].slice(0, bar)).trim());
+      const target = file === "" ? null : resolve(file, fromPath);
+      if (!target || target.extension.toLowerCase() === "md" || target.path === file) continue;
+      edits.push({ start: m.index, end: m.index + m[0].length, insert: `![[${target.path}${subpath}${bar === -1 ? "" : m[1].slice(bar)}]]` });
+    } else {
+      const dest = m[3].startsWith("<") ? m[3].slice(1, -1) : m[3];
+      if (URL_LINK.test(dest)) continue;
+      const target = resolve(splitLinktext(decoded(dest)).file, fromPath);
+      if (!target || target.extension.toLowerCase() === "md") continue;
+      edits.push({ start: m.index, end: m.index + m[0].length, insert: `![${m[2]}](<${target.path}>)` });
+    }
+  }
+  return applyEdits(markdown, edits);
+}
+
+/**
+ * A card's Markdown as it is exported: a text card's text, its note embeds expanded one level (`expandEmbeds`) and its
+ * wikilinks written as the text they show (`linksAsText`); or a note card's section (`deps.readNote`), as it is.
+ * `sourcePath` is the note a note card's links resolve from (null for a text card: the figure's, its sections' images
+ * written with full paths by `deps.resolve`). `notes` are the notes read. A note card whose note or section cannot be
+ * found gives no Markdown, and a warning; an empty card gives none, silently.
  */
 export async function cardMarkdown(
   card: CardNode,
-  deps: { readNote(file: string, subpath: string): Promise<NoteSection | null> },
-): Promise<{ markdown: string | null; sourcePath: string | null; warnings: string[] }> {
+  deps: { readNote(file: string, subpath: string): Promise<NoteSection | null>; resolve?(link: string, fromPath: string): FileRef | null },
+): Promise<{ markdown: string | null; sourcePath: string | null; warnings: string[]; notes?: string[] }> {
   const link = linkOf(card);
   if (!link) {
     const text = (card.text ?? "").trim();
-    return { markdown: text === "" ? null : text, sourcePath: null, warnings: [] };
+    if (text === "") return { markdown: null, sourcePath: null, warnings: [] };
+    const expanded = await expandEmbeds(text, (file, subpath) => deps.readNote(file, subpath), deps.resolve);
+    const markdown = linksAsText(expanded.markdown).trim();
+    return { markdown: markdown === "" ? null : markdown, sourcePath: null, warnings: expanded.warnings, ...(expanded.notes.length > 0 ? { notes: expanded.notes } : {}) };
   }
   const section = link.file === "" ? null : await deps.readNote(link.file, link.subpath);
   if (!section) {
@@ -104,33 +162,7 @@ const URL_LINK = /^[a-z][a-z0-9+.-]*:/i;
 /** A wikilink alias that is an image size (`300`, `300x200`), not alt text. */
 const SIZE_ALIAS = /^\d+(x\d+)?$/;
 
-/**
- * Where `markdown` holds code, as [start, end) offsets: fenced blocks (``` or ~~~, from the opening fence line to the
- * closing one, or to the end when it is never closed) and inline code spans (a run of backticks to the next run of the
- * same length) outside them. What is in them is text, not Markdown.
- */
-export function codeRanges(markdown: string): [number, number][] {
-  const ranges: [number, number][] = [];
-  const line = /[^\n]*(\n|$)/g;
-  let open: { start: number; char: string; length: number } | null = null;
-  for (let m = line.exec(markdown); m && m[0] !== ""; m = line.exec(markdown)) {
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(m[0]);
-    if (!open) {
-      if (fence) open = { start: m.index, char: fence[1][0], length: fence[1].length };
-    } else if (fence && fence[1][0] === open.char && fence[1].length >= open.length && /^ {0,3}[`~]+\s*$/.test(m[0])) {
-      ranges.push([open.start, m.index + m[0].length]);
-      open = null;
-    }
-  }
-  if (open) ranges.push([open.start, markdown.length]);
-  const inFence = (at: number) => ranges.some(([a, b]) => at >= a && at < b);
-  const spans: [number, number][] = [];
-  // An inline code span ends within its paragraph: a blank line closes it (a stray backtick pairs with nothing later).
-  for (const m of markdown.matchAll(/(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g)) {
-    if (!inFence(m.index)) spans.push([m.index, m.index + m[0].length]);
-  }
-  return [...ranges, ...spans].sort((a, b) => a[0] - b[0]);
-}
+export { codeRanges };
 
 function decoded(link: string): string {
   try {
@@ -228,6 +260,8 @@ export interface CardText {
   markdown: string;
   /** The vault path its links resolve from: its note, or the figure for a text card. */
   sourcePath: string;
+  /** The notes a text card's embeds were read from: sources, never written over. */
+  notes?: string[];
 }
 
 /** What `cardTextSource` reads cards with. */
@@ -251,9 +285,10 @@ export function cardTextSource(ctx: CardTextContext, warnings: string[]): (page:
     let text = byCard.get(card.id);
     if (!text) {
       const readNote = (file: string, subpath: string) => (ctx.access ? readNoteSection(ctx.access, file, subpath, ctx.figurePath) : Promise.resolve(null));
-      text = cardMarkdown(card, { readNote }).then((out) => {
+      const resolve = (link: string, fromPath: string) => ctx.access?.resolveLink(link, fromPath) ?? null;
+      text = cardMarkdown(card, { readNote, resolve }).then((out) => {
         warnings.push(...out.warnings);
-        return out.markdown === null ? null : { card, markdown: out.markdown, sourcePath: out.sourcePath ?? ctx.figurePath };
+        return out.markdown === null ? null : { card, markdown: out.markdown, sourcePath: out.sourcePath ?? ctx.figurePath, ...(out.notes ? { notes: out.notes } : {}) };
       });
       byCard.set(card.id, text);
     }
@@ -297,7 +332,7 @@ export async function writeCardFiles(
   }
   const names = uniqueFileNames(withCards.map(({ page }) => cardsFileName(run.baseName, page)));
   // The notes the cards were read from are sources too, whatever their name.
-  const read = new Set(withCards.flatMap(({ texts }) => texts.map((t) => t.sourcePath)));
+  const read = new Set(withCards.flatMap(({ texts }) => texts.flatMap((t) => [t.sourcePath, ...(t.notes ?? [])])));
   const refused = (path: string, cardsFile: boolean) => {
     if (!deps.isProtected(path, cardsFile) && !read.has(path)) return false;
     warnings.push(`Refused to overwrite ${path}: it is a source of this figure`);

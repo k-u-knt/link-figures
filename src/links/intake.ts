@@ -5,6 +5,7 @@ import { prepareCall, runInOneCommit } from "../commands/headless";
 import { CARD_PAPER_GAP_MM } from "../model/card-space";
 import { fileNodeDefaults } from "../model/defaults";
 import { CARD_SIZE_MM } from "../nodes/card-node";
+import { embedText } from "../model/card-links";
 import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
@@ -25,7 +26,8 @@ type Size = { width: number; height: number };
 
 /**
  * Where new nodes go: a page, and a position on it in that page's pixels. `offPaper`: the drop landed off every page's
- * paper, where a note (its content) becomes a note card, placed against the page whose paper is nearest, at that point.
+ * paper, where a note (its content) becomes a text card holding its embed (`![[<linktext><subpath>]]`), placed against
+ * the page whose paper is nearest, at that point.
  */
 export type IntakeTarget = PlacePoint & { offPaper?: PlacePoint };
 
@@ -248,7 +250,7 @@ export class Intake {
 
   /**
    * The page under a world point (else the page nearest the middle of the stage) and the point in that page's own
-   * pixels; off every paper, also the point on the page whose paper is nearest (`offPaper`), for a note card.
+   * pixels; off every paper, also the point on the page whose paper is nearest (`offPaper`), for a card.
    */
   private placeAt(world: Pt): IntakeTarget {
     const doc = this.view.store.doc;
@@ -471,7 +473,8 @@ export class Intake {
     const { registries } = view.plugin;
     // The width is the default (a share of the page's); the height follows the picture.
     const width = fileNodeDefaults(page, { file: "", subpath: "", show: "image" }, []).width;
-    // Off every paper, a note's content goes on a note card beside the nearest page (cards are never artwork).
+    const context = view.commandContext();
+    // Off every paper, a note's content goes on a card beside the nearest page (cards are never artwork).
     const cardAt = at.offPaper && store.doc.pages.some((p) => p.id === at.offPaper?.page.id) ? at.offPaper : undefined;
     // Cards of one drop go one below the other, a gap apart, so none covers the next.
     let cards = 0;
@@ -482,8 +485,8 @@ export class Intake {
             id: "card.create",
             args: {
               page: cardAt.page.id,
-              file: item.file,
-              ...(item.subpath !== "" ? { subpath: item.subpath } : {}),
+              // A text card holding the note's embed, written as the figure writes links to it: one kind of card, edited one way.
+              text: embedText(item.file, item.subpath, (file) => context.linktext?.(file) ?? file),
               x: roundPx(cardAt.x),
               y: roundPx(cardAt.y + cards++ * cardStep),
             },
@@ -505,7 +508,7 @@ export class Intake {
     store.endMerge();
     let results: unknown[];
     try {
-      results = runInOneCommit(store, view.commandContext(), calls, "insert");
+      results = runInOneCommit(store, context, calls, "insert");
     } finally {
       store.endMerge();
     }

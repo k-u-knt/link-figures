@@ -8,7 +8,7 @@ import { fileNodeDefaults } from "../model/defaults";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
 import { viewNodeType } from "../nodes/placeholder-node";
-import { nodeTypeFor, type ImageState, type NodeRenderer, type RenderContext } from "../registry/node-type";
+import { nodeTypeFor, type ImageState, type LinkRename, type NodeRenderer, type RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
@@ -117,7 +117,7 @@ export class NodeHost {
       },
       doc: () => view.store.doc,
       resolved: (id) => view.resolvedCache.get(id),
-      openLink: (linktext, evt) => view.openLink(linktext, Keymap.isModEvent(evt)),
+      openLink: (linktext, evt, newLeaf) => view.openLink(linktext, newLeaf ?? Keymap.isModEvent(evt)),
       component: view,
       // A getter: the view's set is its store's, and a new document comes with a new store.
       get unreadable() {
@@ -207,6 +207,11 @@ export class NodeHost {
       if (entry) this.updateEntry(entry, node);
     }
     if (stale.length > 0) void this.resolve(stale);
+  }
+
+  /** A file a link leads to was renamed: each renderer that holds text the model does not yet (an open editor) follows it. */
+  renameLinks(rename: LinkRename): void {
+    for (const { renderer } of this.entries.values()) renderer.renameLinks?.(rename);
   }
 
   /** The `.lf-node` element of a node (or whatever its node type mounted), for hit-testing and for rasterising it. */

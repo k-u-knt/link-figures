@@ -14,7 +14,8 @@ vi.mock("obsidian", async () => {
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile, Modal: class {}, Notice: class {}, Setting: class {}, Component: class {}, MarkdownRenderer: {}, setIcon: () => {} };
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
-const { cardsForPage, cardMarkdown, rewriteImages, imageCopier, readNoteSection } = await import("../../src/export/cards-markdown");
+const { cardsForPage, cardMarkdown, cardTextSource, expandEmbeds, rewriteImages, imageCopier, readNoteSection } = await import("../../src/export/cards-markdown");
+const { markdownToPlainText } = await import("../../src/export/markdown-text");
 const { runExport, exportInBackground } = await import("../../src/export/export-run");
 const { isFigureSource } = await import("../../src/export/write");
 const { createApi } = await import("../../src/api");
@@ -341,5 +342,47 @@ describe("export: cards as Markdown", () => {
     r.exporters.register(spy);
     const api = createApi({ app: {} as never, registries: r, files: {} as never, normalizePath: (p) => p, openFigure: () => null, exportFigure: async () => ({ files: [], warnings: [] }) });
     await expect(api.export("F.lnkfig.md", { format: "spy", options: { cards: "html" } })).rejects.toThrow('api.export: option "cards" must be "markdown"');
+  });
+});
+
+describe("links and embeds in a text card", () => {
+  test("`![[note#h]]` in a text card exports the section, one level deep", async () => {
+    const doc = pages();
+    const files = {
+      "Notes/Legend.md": "# Legend\n\n## Fig 1\n\nPanel **A** ![[img/plot.png]] and ![[Inner]]\n\n## Fig 2\n\nOther\n",
+      "Notes/Inner.md": "Inner text ![[Notes/Legend#Fig 1]]",
+      "img/plot.png": new Uint8Array([1]),
+    };
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "Figure 1.\n\n![[Legend#Fig 1]]\n\n`![[Legend]]` stays" });
+    tie(doc, c, doc.pages[0]);
+    const { vault, out } = await exportCards(doc, { files });
+    // The section in place of its embed; its image copied (resolved from the note); the embed inside it kept, not expanded.
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe(
+      "Figure 1.\n\n## Fig 1\n\nPanel **A** ![](<Fig - Page 1 cards/plot.png>) and ![[Inner]]\n\n`![[Legend]]` stays\n",
+    );
+    expect(out.warnings).toEqual(['"c": the embed "Inner" is not an image; its link is kept']);
+    // The expansion alone: one level, and a missing section keeps its embed.
+    const { access: a } = access(files);
+    const readNote = (file: string, subpath: string) => readNoteSection(a, file, subpath, "Figs/Fig.lnkfig.md");
+    const once = await expandEmbeds("![[Inner]] and ![[Legend#Fig 9]]", readNote);
+    expect(once.markdown).toBe("Inner text ![[Notes/Legend#Fig 1]] and ![[Legend#Fig 9]]");
+  });
+
+  test("`[[link|shown]]` exports `shown`", async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "See [[Notes/Legend#Fig 1|shown]], [[Notes/Legend#Fig 2]] and `[[code]]`" });
+    tie(doc, c, doc.pages[0]);
+    const { vault } = await exportCards(doc);
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe("See shown, Notes/Legend > Fig 2 and `[[code]]`\n");
+  });
+
+  test("the notes text of an embed is its plain text", async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "Legend:\n\n![[Notes/Legend#Fig 1]]" });
+    tie(doc, c, doc.pages[0]);
+    const { access: a } = access();
+    const texts = cardTextSource({ doc, registries: registries(), figurePath: "Figs/Fig.lnkfig.md", access: a }, []);
+    const [only] = await texts("pg-1");
+    expect(markdownToPlainText(only.markdown)).toBe("Legend:\n\nFig 1\n\nPanel A: cortex.");
   });
 });

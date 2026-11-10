@@ -128,6 +128,12 @@ export interface CommandContext {
   unreadable?: ReadonlySet<NodeId>;
   /** Adds `ids` (copies of unreadable nodes) to `unreadable`, so the calls after this one treat them alike. */
   markUnreadable?(ids: NodeId[]): void;
+  /**
+   * The link text the figure writes in text for a link to `file` (a node's link: a path or a name): Obsidian's link
+   * text for the file it finds from the figure's place in the vault, in the user's link format, or `file` itself when
+   * it finds none. Absent (a context made without a vault), `file` as it is.
+   */
+  linktext?(file: string): string;
 }
 
 /**

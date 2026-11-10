@@ -1,6 +1,7 @@
 import { current } from "immer";
 import type { App } from "obsidian";
 import { loadDocument } from "../format/load";
+import { vaultLinktext } from "../links/linktext";
 import type { ParsedFigureFile } from "../format/parse";
 import { serializeFigureFile } from "../format/serialize";
 import { createFigureStore } from "../model/normalise";
@@ -231,6 +232,7 @@ export async function withHeadlessFigure<T>(
       page: undefined,
       unreadable,
       markUnreadable: (ids) => ids.forEach((id) => unreadable.add(id)),
+      linktext: (file) => vaultLinktext(app, file, path),
       ...(options.pageLimitMm !== undefined ? { pageLimitMm: options.pageLimitMm } : {}),
     };
     result = apply(ctx, store);

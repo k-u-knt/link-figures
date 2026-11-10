@@ -3,7 +3,8 @@ import type { CardNode, NodeId } from "../model/types";
 import { CARD_SIZE_MM, cardContentError, cardNodeDefaults } from "../nodes/card-node";
 import { roundPx } from "../view/pointer-math";
 import { editor } from "./builtin";
-import { CommandError, type Command, type CommandContext } from "../registry/command";
+import { CommandError, unreadableIn, type Command, type CommandContext } from "../registry/command";
+import { embedText } from "../model/card-links";
 import { addNode, checkMinSize, creationPage, newNodeId, topOf } from "./drawing";
 
 export type CardCreateArgs = {
@@ -46,6 +47,31 @@ export function createCard(ctx: CommandContext, args: CardCreateArgs): { id: Nod
     if (args.subpath !== undefined) card.subpath = args.subpath;
   } else card.text = text;
   return addNode(ctx, command, card);
+}
+
+/**
+ * Turns the note card `id` into a text card holding the embed of its link, `![[<linktext><subpath>]]` (`embedText`, the
+ * link text from `ctx.linktext`: a missing note keeps its stored link verbatim), so it shows the same section and can
+ * be written around. Its other fields stay. One undo step, which restores the note card exactly. Refused for anything
+ * but a note card (a card with a link that its plugin could read).
+ */
+export function convertCard(ctx: CommandContext, args: { id: string }): { id: NodeId } {
+  const command = "card.convert";
+  const node = ctx.store.doc.nodes.find((n) => n.id === args.id);
+  if (!node) throw new CommandError(`${command}: there is no node "${args.id}"`);
+  const card = node as CardNode;
+  if (node.type !== "card" || unreadableIn(ctx)?.has(node.id) || typeof card.file !== "string" || card.file === "") {
+    throw new CommandError(`${command}: "${args.id}" is not a note card`);
+  }
+  const text = embedText(card.file, card.subpath ?? "", (file) => ctx.linktext?.(file) ?? file);
+  ctx.store.commit(command, (draft) => {
+    const target = draft.nodes.find((n) => n.id === node.id) as CardNode | undefined;
+    if (!target) return;
+    delete target.file;
+    delete target.subpath;
+    target.text = text;
+  });
+  return { id: node.id };
 }
 
 /**
@@ -106,6 +132,16 @@ export function cardCommands(): Command[] {
       },
       applies: () => true,
       run: (ctx, args) => createCard(ctx, args as CardCreateArgs),
+    },
+    {
+      id: "card.convert",
+      name: "Convert to text",
+      icon: "type",
+      group: "edit",
+      hidden: true,
+      params: { id: { type: "string", required: true } },
+      applies: () => true,
+      run: (ctx, args) => convertCard(ctx, args as { id: string }),
     },
   ];
 }

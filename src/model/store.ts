@@ -194,6 +194,39 @@ export class DocumentStore {
   }
 
   /**
+   * Rewrites nodes everywhere, not as an edit: `rewrite` is given each node of the document and each node that undo or
+   * redo would bring back or change, and gives it back changed (a new object) or as it is. For a change made outside the
+   * figure that its history must follow, such as a link in a node's own text renamed with its file. History keeps its
+   * steps: the node values its patches carry are rewritten, and a patch of one field of a node (`["nodes", i, key]`) takes
+   * that field from the node it applies to, rewritten, which history is replayed to find. The document itself is swapped
+   * in with `replace` (`keepHistory`), which tells the subscribers; nothing happens when no node of it changes. True when
+   * the document changed.
+   */
+  rewriteNodes(rewrite: (node: Node) => Node): boolean {
+    let state = this.current;
+    for (let i = this.undoStack.length - 1; i >= 0; i--) {
+      const entry = this.undoStack[i];
+      const back = rewritePatches(entry.inversePatches, state, rewrite);
+      entry.inversePatches = back.patches;
+      entry.patches = rewritePatches(entry.patches, back.state, rewrite).patches;
+      state = back.state;
+    }
+    state = this.current;
+    for (let i = this.redoStack.length - 1; i >= 0; i--) {
+      const entry = this.redoStack[i];
+      const forward = rewritePatches(entry.patches, state, rewrite);
+      entry.patches = forward.patches;
+      entry.inversePatches = rewritePatches(entry.inversePatches, forward.state, rewrite).patches;
+      state = forward.state;
+    }
+    const doc = this.current;
+    const nodes = doc.nodes.map(rewrite);
+    if (nodes.every((n, i) => n === doc.nodes[i])) return false;
+    this.replace({ ...doc, nodes }, "links", { keepHistory: true });
+    return true;
+  }
+
+  /**
    * Runs every normaliser on `draft`, as each commit does after its recipe; `before` is the document as it was before
    * the edit (see `Normaliser`). For a recipe that edits in several steps (a batch of commands in one commit), so that
    * each step sees a consistent document and is normalised against the step before it.
@@ -346,6 +379,51 @@ function renameInValue(value: unknown, renames: ReadonlyMap<string, string>): un
   const file = link ? renames.get(link.file) : undefined;
   return file === undefined ? value : { ...node, file };
 }
+
+/**
+ * `patches` applied one by one from `state`, each with the node values it carries rewritten (`DocumentStore.rewriteNodes`):
+ * a node or a list of nodes at `["nodes"]` or `["nodes", i]`, and a field at `["nodes", i, key]`, which is rewritten as
+ * part of the node at `i` it is applied to. Gives the rewritten patches and the state after them (the original
+ * patches applied, which a rewrite of what nodes hold does not change the shape of).
+ */
+function rewritePatches(patches: Patch[], state: Document, rewrite: (node: Node) => Node): { patches: Patch[]; state: Document } {
+  const out: Patch[] = [];
+  let changed = false;
+  for (const patch of patches) {
+    let next = patch;
+    if (patch.path[0] === "nodes" && "value" in patch && patch.path.length <= 3) {
+      let value: unknown = patch.value;
+      if (patch.path.length === 1 && Array.isArray(value)) {
+        const nodes = value as Node[];
+        const rewritten = nodes.map((n) => (isNodeValue(n) ? rewrite(n) : n));
+        if (rewritten.some((n, i) => n !== nodes[i])) value = rewritten;
+      } else if (patch.path.length === 2 && isNodeValue(value)) {
+        value = rewrite(value);
+      } else if (patch.path.length === 3 && typeof patch.path[2] === "string") {
+        const key = patch.path[2];
+        const node = state.nodes[Number(patch.path[1])];
+        if (node) {
+          const whole = { ...node, [key]: patch.value } as Node;
+          const rewritten = rewrite(whole);
+          if (rewritten !== whole) {
+            const field = (rewritten as unknown as Record<string, unknown>)[key];
+            if (!deepEqual(field, patch.value)) value = field;
+          }
+        }
+      }
+      if (value !== patch.value) {
+        next = { ...patch, value };
+        changed = true;
+      }
+    }
+    out.push(next);
+    state = applyPatches(state, [patch]);
+  }
+  return { patches: changed ? out : patches, state };
+}
+
+const isNodeValue = (value: unknown): value is Node =>
+  typeof value === "object" && value !== null && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string";
 
 /** The ids of the nodes that are in only one of the lists, or are in both and differ. */
 function differingNodeIds(before: readonly Node[], after: readonly Node[]): Set<NodeId> {

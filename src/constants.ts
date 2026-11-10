@@ -6,6 +6,8 @@ export const FRONTMATTER_KEY = "link-figures";
 export const FORMAT_VERSION = 1;
 export const FILE_SUFFIX = ".lnkfig.md";
 export const FENCE_LANG = "lnkfig";
+/** The class of a node's element whose links (`a`) take their own clicks, not the stage (a card's text: see `isOwnClick`). */
+export const LIVE_LINKS = "lf-live-links";
 
 export const MM_TO_PX = 96 / 25.4;
 export const PAGE_GAP_MM = 20;

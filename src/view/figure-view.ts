@@ -17,6 +17,8 @@ import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
 import { afterLinkUpdates, hasLinkUpdateQueue } from "../links/link-updates";
 import { renamedLinkFiles } from "../links/resolver";
 import type { Resolved } from "../links/types";
+import { renameLinksInStore } from "../links/card-renames";
+import { vaultLinktext } from "../links/linktext";
 import { LinkWatcher } from "../links/watcher";
 import type LinkFiguresPlugin from "../main";
 import { createDocument } from "../model/defaults";
@@ -25,7 +27,7 @@ import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, Node as FigureNode, NodeId, Page, PageId } from "../model/types";
 import type { Command, CommandContext, DragTargets, MenuPlace, ToolPreview, UndoStep } from "../registry/command";
-import type { ImageState, NodeType } from "../registry/node-type";
+import type { ImageState, LinkRename, NodeType } from "../registry/node-type";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { settlesWithin } from "../util/event-loop";
 import { showContextMenu } from "./context-menu";
@@ -712,6 +714,21 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (nodes.some((n, i) => n !== doc.nodes[i])) this.store.replace({ ...doc, nodes }, "links", { keepHistory: true });
   }
 
+  /**
+   * A file was renamed that links the nodes hold in their own fields may lead to (a text card's `[[…]]`, which no Links
+   * section holds for Obsidian to rewrite), as the plugin follows it after Obsidian's link update
+   * (`links/card-renames.ts`): the document and its undo history are rewritten in place, not as an undo step, an open
+   * card editor's text too (what was typed stays), and the figure is saved.
+   */
+  renameLinks(rename: LinkRename): void {
+    if (!this.loaded || this.readOnly) return;
+    const changed = renameLinksInStore(this.store, this.plugin.registries, rename);
+    this.nodeHost.renameLinks(rename);
+    if (!changed) return;
+    this.unsaved = true;
+    this.requestSave();
+  }
+
   /** The figure file was modified. Whoever wrote it, if it was not this view, its Links section may have been rewritten. */
   private async onExternalModify(): Promise<void> {
     const file = this.file;
@@ -883,6 +900,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       page: this.focusPage(),
       unreadable: this.unreadableNodes,
       markUnreadable: (ids) => this.markUnreadable(ids),
+      linktext: (file) => vaultLinktext(this.app, file, this.file?.path ?? ""),
     };
   }
 

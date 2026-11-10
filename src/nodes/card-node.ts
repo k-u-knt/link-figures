@@ -3,8 +3,9 @@ import { newId } from "../model/defaults";
 import { mmToPx, type Rect } from "../model/geometry";
 import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
-import type { NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
-import { renderCard, type CardBody } from "../view/card-render";
+import { firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
+import type { LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { openCardLink, renderCard, type CardBody } from "../view/card-render";
 
 /** The size of a new card, in mm. */
 export const CARD_SIZE_MM = { width: 60, height: 40 };
@@ -75,6 +76,8 @@ class CardNodeRenderer implements NodeRenderer {
     // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
+    // A link in what the card shows opens in a new tab beside the figure (the pointer controller leaves its press alone).
+    for (const type of ["click", "auxclick"] as const) this.body.addEventListener(type, (ev) => void openCardLink(ev, this.ctx));
     this.update(node);
   }
 
@@ -103,6 +106,22 @@ class CardNodeRenderer implements NodeRenderer {
 
   drawn(): Promise<void> {
     return this.shown?.drawn ?? Promise.resolve();
+  }
+
+  /**
+   * A linked file was renamed while the card is being edited: the editor's text, typed and not yet committed, takes the
+   * new links, and so does the text editing began with, so a commit writes only what was typed. The caret stays where
+   * it was in the text. (The model is renamed by the plugin, see `cardNodeType.renameLinks`.)
+   */
+  renameLinks(rename: LinkRename): void {
+    const area = this.editor;
+    if (!area) return;
+    this.before = renameInCardText(this.before, rename.resolve, rename.oldPath, rename.linktext);
+    const edits = renameEdits(area.value, rename.resolve, rename.oldPath, rename.linktext);
+    if (edits.length === 0) return;
+    const { selectionStart, selectionEnd, selectionDirection } = area;
+    area.value = applyEdits(area.value, edits);
+    area.setSelectionRange(mapOffset(selectionStart, edits), mapOffset(selectionEnd, edits), selectionDirection ?? undefined);
   }
 
   /** Draws the body from the node and what was resolved for it, unless it already shows that. */
@@ -188,6 +207,20 @@ export const cardNodeType: NodeType<CardNode> = {
 
   /** A note card shows its linked section's content, resolved as a content panel's is; a text card has no link. */
   linkTarget: (node: CardNode) => (node.file === undefined ? null : { file: node.file, subpath: node.subpath ?? "", show: "content" }),
+
+  /** Open source: a note card's link; a text card's first link or embed, outside code (none: nothing to open). */
+  sourceLink(node: CardNode) {
+    if (node.file !== undefined) return { file: node.file, subpath: node.subpath ?? "" };
+    const link = firstLink(node.text ?? "");
+    return link ? { file: link.target, subpath: link.subpath } : null;
+  },
+
+  /** A text card's `[[…]]` and `![[…]]` that led to the renamed file (a note card's link is in the Links section, Obsidian's to rewrite). */
+  renameLinks(node: CardNode, rename: LinkRename): CardNode {
+    if (typeof node.text !== "string") return node;
+    const text = renameInCardText(node.text, rename.resolve, rename.oldPath, rename.linktext);
+    return text === node.text ? node : { ...node, text };
+  },
 
   bounds: boxOf,
 

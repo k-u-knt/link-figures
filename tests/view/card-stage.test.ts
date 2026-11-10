@@ -218,7 +218,8 @@ function setup(armed: string | null = null) {
   };
   const node = <T extends Node = Node>(id: string) => store.doc.nodes.find((n) => n.id === id) as T;
   const connectors = () => store.doc.nodes.filter((n): n is ConnectorNode => n.type === "connector");
-  return { r, store, view, labels, drag, click, node, connectors, fire, controller: pointerController, settled: () => Promise.all(pending) };
+  const call = (id: string, args: Record<string, unknown>) => runCall(store, view.commandContext(), prepareCall(r, { id, args }));
+  return { r, store, view, labels, drag, click, node, connectors, fire, call, controller: pointerController, settled: () => Promise.all(pending) };
 }
 
 /** A card mounted in a host element, drawn again on every change of the store as the node host draws it. */
@@ -234,6 +235,7 @@ function mountCard(s: ReturnType<typeof setup>, id: string, resolved: (id: strin
     openLink: vi.fn(),
     component: s.view,
   };
+  (s as unknown as { lastCtx: typeof ctx }).lastCtx = ctx;
   const renderer = cardNodeType.mount(s.node<CardNode>(id), host, ctx as never);
   s.store.subscribe(() => {
     const now = s.node(id);
@@ -410,11 +412,14 @@ describe("the Card tool", () => {
 });
 
 describe("drops", () => {
-  function dropSetup(onPaper: boolean, files?: { path: string }[]) {
+  function dropSetup(onPaper: boolean, files?: { path: string }[], link?: { type: "link"; linktext: string }) {
     const s = setup();
     const handlers = new Map<string, (ev: any) => void>();
-    const access = new FakeAccess({ files: { "Notes/a.md": "# A\nText", "Notes/b.md": "# B\nText", "fig.lnkfig.md": "" } });
-    const draggable = files ? { type: "files", files } : { type: "file", file: { path: "Notes/a.md" } };
+    const access = new FakeAccess({ files: { "Notes/a.md": "# A\nText", "Notes/b.md": "# B\nText", "fig.lnkfig.md": "" }, headings: { "Notes/a.md": { Legend: { start: 0, end: null } } } });
+    const draggable = link ?? (files ? { type: "files", files } : { type: "file", file: { path: "Notes/a.md" } });
+    // The view's link text: Obsidian's shortest form, the base name.
+    const context = s.view.commandContext;
+    s.view.commandContext = () => ({ ...context(), linktext: (file: string) => file.slice(file.lastIndexOf("/") + 1) });
     s.view.app = { dragManager: { draggable } };
     Object.assign(s.view.plugin, { settings: { dropFromNote: "direct" }, editorDrag: { source: null, embed: null }, access, decoders: {} });
     s.view.stageEl = { focus: () => {} };
@@ -425,13 +430,14 @@ describe("drops", () => {
     return s;
   }
 
-  test("dropping a note link off every paper makes a note card; on paper, still a content panel", async () => {
+  test("a note dropped off the paper makes a text card `![[<linktext>#h]]`; on paper, still a content panel", async () => {
     const off = dropSetup(false);
     await vi.waitFor(() => expect(off.store.doc.nodes).toHaveLength(4));
     const card = off.store.doc.nodes[3] as CardNode;
     expect(card.type).toBe("card");
-    expect(card.file).toBe("Notes/a");
-    expect(card.text).toBeUndefined();
+    expect(card.file).toBeUndefined();
+    // The figure's link text for the note (here its base name, as Obsidian's shortest form writes it).
+    expect(card.text).toBe("![[a]]");
     const box = nodeWorldRect(off.store.doc, card);
     expect([box.x, box.y]).toEqual([-700, 300]);
     expect(off.view.selection.ids).toEqual([card.id]);
@@ -441,6 +447,11 @@ describe("drops", () => {
     await vi.waitFor(() => expect(two.store.doc.nodes).toHaveLength(5));
     const [first, second] = two.store.doc.nodes.slice(3) as CardNode[];
     expect(second.y).toBeCloseTo(first.y + first.height + GAP, 1);
+
+    // A heading's link keeps its subpath.
+    const heading = dropSetup(false, undefined, { type: "link", linktext: "Notes/a#Legend" });
+    await vi.waitFor(() => expect(heading.store.doc.nodes).toHaveLength(4));
+    expect((heading.store.doc.nodes[3] as CardNode).text).toBe("![[a#Legend]]");
 
     const on = dropSetup(true);
     await vi.waitFor(() => expect(on.store.doc.nodes).toHaveLength(4));
@@ -524,6 +535,49 @@ describe("the connector tool and pages", () => {
     });
     nodeHost.applyChange(s.store.doc, new Set(), true);
     expect(el.querySelector("path")!.getAttribute("d")).not.toBe(before);
+  });
+});
+
+describe("links in a card", () => {
+  test("a click on a rendered link opens a new tab and does not select the card", async () => {
+    const s = setup();
+    render.mockImplementationOnce(async (_app, _markdown, el) => {
+      el.innerHTML = 'See <a class="internal-link" data-href="Notes/a#Legend" href="Notes/a#Legend">a</a>.';
+    });
+    const { el } = mountCard(s, "C");
+    const link = el.querySelector("a")!;
+    expect(link).not.toBeNull();
+    // The press on the link is the link's: the stage neither selects the card nor captures the pointer.
+    const card = nodeWorldRect(s.store.doc, s.node("C"));
+    s.fire("pointerdown", { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, clientX: card.x + 5, clientY: card.y + 5, target: link, preventDefault: vi.fn() });
+    s.fire("pointerup", { pointerId: 1, isPrimary: true, button: 0, clientX: card.x + 5, clientY: card.y + 5, target: link });
+    expect(s.view.selection.ids).toEqual([]);
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    const ctx = (s as unknown as { lastCtx: { openLink: ReturnType<typeof vi.fn> } }).lastCtx;
+    expect(ctx.openLink).toHaveBeenCalledWith("Notes/a#Legend", click, "tab");
+    // A middle-click does the same.
+    const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    link.dispatchEvent(middle);
+    expect(ctx.openLink).toHaveBeenLastCalledWith("Notes/a#Legend", middle, "tab");
+    // A double-click on the link starts no edit.
+    s.fire("dblclick", { clientX: card.x + 5, clientY: card.y + 5, target: link });
+    expect(el.querySelector("textarea")).toBeNull();
+  });
+
+  test("Open source opens the first link; it is disabled with none", async () => {
+    const s = setup();
+    await s.call("node.update", { id: "C", patch: { text: "`[[Not this]]` see [[Notes/b#^blk|b]] and ![[Notes/a#Legend]]" } });
+    const openLink = vi.fn();
+    s.view.openLink = openLink;
+    const ctx = (selection: string[]): CommandContext => ({ ...s.view.commandContext(), selection });
+    const entry = (selection: string[]) => menuModel(s.r, ctx(selection), "item").groups.flat().find((e) => e.id === "open-source");
+    expect(entry(["C"])).toMatchObject({ disabled: false });
+    s.r.commands.get("open-source")!.run(ctx(["C"]), undefined as never);
+    expect(openLink).toHaveBeenCalledWith("Notes/b#^blk", "tab");
+    await s.call("node.update", { id: "C", patch: { text: "No link, `[[only code]]`" } });
+    expect(entry(["C"])).toMatchObject({ disabled: true });
   });
 });
 

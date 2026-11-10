@@ -10,6 +10,9 @@ import type { Field } from "../registry/fields";
 import type { InspectorContext } from "../registry/node-type";
 import type { Registries } from "../registry";
 import { viewNodeType } from "../nodes/placeholder-node";
+import { builtinRampGeometries, builtinRampPresets, paintOfRamp, rampKindName, rampOf } from "../paint/ramp";
+import { RampGeometryRegistry, RampPresetRegistry, type ColorRamp } from "../registry/ramp";
+import { RampSlider, type RampSliderState } from "./ramp-slider";
 import type { LinkFiguresView } from "./figure-view";
 import { CUSTOM_PRESET, nodeBaseFields, pageFields, readValue, writeValue } from "./page-fields";
 import { roundPx } from "./pointer-math";
@@ -71,7 +74,7 @@ function setControlValue(control: Control, field: Field, value: unknown): void {
  * end a run of writes that merge into one undo step (a histogram handle's drag). The inspector passes its node types' context.
  */
 export interface FieldEnv {
-  registries?: Pick<Registries, "paints">;
+  registries?: Pick<Registries, "paints"> & Partial<Pick<Registries, "rampGeometries" | "rampPresets">>;
   /** Ends the undo step a gesture's writes have been merging into: the next write is a step of its own. */
   endMerge?(): void;
 }
@@ -82,7 +85,17 @@ type Read = (key: string) => unknown;
  * merge into the edit before it, then "continue" (see `UndoStep`), and `FieldEnv.endMerge` when it ends. Without it a
  * write merges with the writes of the same field just before it, as the store merges commits.
  */
-type Write = (key: string, value: unknown, step?: UndoStep) => void;
+type Write = (key: string, value: unknown, step?: UndoStep, scope?: WriteScope) => void;
+
+/**
+ * How far a write reaches when several nodes are selected. `samePaintType`: a whole paint written as an edit of the
+ * paint the first node has (the colour slider's), which goes only to the nodes whose paint at that key is of the same
+ * type, as a paint's own field (`fill.color`) does. Without it a paint written whole (a choice in the paint select)
+ * goes to every selected node.
+ */
+export interface WriteScope {
+  samePaintType?: boolean;
+}
 
 /**
  * A field made of other fields (`paint`, `stops`), drawn into its holder. Which controls it has depends on its value
@@ -107,44 +120,130 @@ function syncComposite(holder: HTMLElement): void {
   else composite.sync();
 }
 
+/** The paint select's entry for every paint whose type has a ramp (solid, linear, radial…): one "Colour". */
+const COLOUR_OPTION = "@colour";
+
+/** The ramp geometries and presets the field uses: the registries', or the built-in ones where it is given none or an empty one. */
+function rampRegistries(env: FieldEnv): Pick<Registries, "rampGeometries" | "rampPresets"> {
+  const given = env.registries;
+  let rampGeometries = given?.rampGeometries;
+  if (!rampGeometries || rampGeometries.all().length === 0) {
+    rampGeometries = new RampGeometryRegistry();
+    for (const g of builtinRampGeometries) rampGeometries.register(g);
+  }
+  let rampPresets = given?.rampPresets;
+  if (!rampPresets || rampPresets.all().length === 0) {
+    rampPresets = new RampPresetRegistry();
+    for (const p of builtinRampPresets) rampPresets.register(p);
+  }
+  return { rampGeometries, rampPresets };
+}
+
 /**
- * A `paint` field: a select of the registered paint types, then the chosen type's own fields, their keys under the
- * field's (`stroke.paint.color`). Choosing a type writes that type's `defaults()` as the whole paint. A paint whose type
- * is not registered is listed as it is, with no fields, and stays as it is until another type is chosen.
+ * A `paint` field. Its select lists "Colour" for every paint type with a ramp (`PaintType.ramp`), where the first of
+ * them stands, then each other registered type (None, Pattern…); beside it a label names what the paint is ("Solid",
+ * "Linear gradient": its type's name), drawn again in the same sync as every write. Under "Colour" sits the colour
+ * slider (`RampSlider`), which writes the whole paint the ramp makes (`paintOfRamp`), then the fields of the ramp's
+ * geometry (Angle; Centre x, Centre y, Radius), under the field's key (`fill.angle`). Another type shows its own
+ * fields there. Choosing an entry writes its type's `defaults()` (for "Colour", the first ramp type's) as the whole
+ * paint. A paint whose type is not registered is listed as it is, with no fields, and stays until another is chosen.
  */
 function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Write, env: FieldEnv): Composite {
+  const paints = () => env.registries?.paints;
+  const ramps = rampRegistries(env);
   const paintOf = (): Paint | undefined => {
     const value = read(field.key);
     return isRecord(value) && typeof value.type === "string" ? (value as Paint) : undefined;
   };
+  const rampNow = (): ColorRamp | undefined => {
+    const paint = paintOf();
+    const registries = paints();
+    return paint && registries ? rampOf(paint, { paints: registries }) : undefined;
+  };
+  /** The select's value for the paint now: "Colour" for a ramp paint, else its type. */
+  const entryOf = (): string => {
+    const paint = paintOf();
+    if (!paint) return "";
+    return paints()?.get(paint.type)?.ramp ? COLOUR_OPTION : paint.type;
+  };
   const subFields = (): Field[] => {
     const paint = paintOf();
-    const type = paint ? env.registries?.paints.get(paint.type) : undefined;
-    return paint && type ? type.fields(paint).map((f) => ({ ...f, key: `${field.key}.${f.key}` })) : [];
+    if (!paint) return [];
+    const ramp = rampNow();
+    const own = ramp
+      ? ramp.stops.length >= 2
+        ? (ramps.rampGeometries.get(ramp.geometry.kind)?.fields() ?? [])
+        : []
+      : (paints()?.get(paint.type)?.fields(paint) ?? []);
+    return own.map((f) => ({ ...f, key: `${field.key}.${f.key}` }));
   };
+  const kindName = (): string => {
+    const paint = paintOf();
+    const registries = paints();
+    return paint && registries ? rampKindName(paint, { paints: registries }) : "";
+  };
+  /** The selected stop, kept while the field is drawn again (a solid that gains a stop gets its geometry fields). */
+  const sliderState: RampSliderState = { selected: 0, refocus: false };
+  let slider: RampSlider | null = null;
+  let kind: HTMLElement | null = null;
+
+  const writeRamp = (ramp: ColorRamp, step?: UndoStep): void => {
+    write(field.key, paintOfRamp(ramp, paintOf(), ramps.rampGeometries), step, { samePaintType: true });
+    syncComposite(holder);
+  };
+
   const composite: Composite = {
-    shape: () => `${paintOf()?.type ?? ""}|${subFields().map((f) => `${f.kind}:${f.key}`).join(",")}`,
+    shape: () => `${entryOf()}|${subFields().map((f) => `${f.kind}:${f.key}`).join(",")}`,
     drawn: "",
     draw() {
       composite.drawn = composite.shape();
       holder.empty();
+      slider = null;
+      const head = holder.createDiv({ cls: "lf-paint-head" });
+      const select = head.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type`, "aria-label": `${field.label}: kind of paint` } });
+      kind = head.createSpan({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite" } });
+      const types = paints()?.all() ?? [];
+      let colourListed = false;
+      for (const type of types) {
+        if (!type.ramp) select.createEl("option", { value: type.id, text: type.name });
+        else if (!colourListed) {
+          select.createEl("option", { value: COLOUR_OPTION, text: "Colour" });
+          colourListed = true;
+        }
+      }
       const current = paintOf()?.type;
-      const select = holder.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type` } });
-      const types = env.registries?.paints.all() ?? [];
-      for (const type of types) select.createEl("option", { value: type.id, text: type.name });
       if (current !== undefined && !types.some((t) => t.id === current)) select.createEl("option", { value: current, text: `${current} (not available)` });
-      select.value = current ?? "";
+      select.value = entryOf();
       select.addEventListener("change", () => {
-        const type = env.registries?.paints.get(select.value);
-        if (type && type.id !== paintOf()?.type) write(field.key, type.defaults());
+        const chosen = select.value;
+        if (chosen !== entryOf()) {
+          const type = chosen === COLOUR_OPTION ? types.find((t) => t.ramp) : paints()?.get(chosen);
+          if (type) write(field.key, type.defaults());
+        }
         syncComposite(holder);
-        select.value = paintOf()?.type ?? "";
+        select.value = entryOf();
       });
+      if (rampNow()) {
+        const sliderHolder = holder.createDiv({ cls: "lf-ramp-holder" });
+        slider = new RampSlider(sliderHolder, {
+          key: field.key,
+          label: field.label,
+          read: rampNow,
+          write: writeRamp,
+          endMerge: () => env.endMerge?.(),
+          geometries: () => ramps.rampGeometries.all(),
+          presets: () => ramps.rampPresets.all(),
+          renderFields: (container, fields, r, w) => renderFields(container, fields, r, w, env),
+          syncFields: (container, fields, r) => syncFields(container, fields, r, env),
+        }, sliderState);
+      }
       renderFields(holder, subFields(), read, write, env);
     },
     sync() {
       const select = holder.querySelector<HTMLSelectElement>(`[data-key="${field.key}.type"]`);
-      if (select) select.value = paintOf()?.type ?? "";
+      if (select) select.value = entryOf();
+      kind?.setText(kindName());
+      slider?.sync();
       syncFields(holder, subFields(), read, env);
     },
   };
@@ -524,7 +623,7 @@ interface Section {
   signature: string;
   fields: Field[];
   read(key: string): unknown;
-  write(key: string, value: unknown, step?: UndoStep): void;
+  write(key: string, value: unknown, step?: UndoStep, scope?: WriteScope): void;
 }
 
 /**
@@ -711,7 +810,7 @@ export class Inspector {
         const value = node ? readValue(node, key) : undefined;
         return mm.has(key) && typeof value === "number" ? pxToMm(value) : value;
       },
-      write: (key, value, step) => {
+      write: (key, value, step, scope) => {
         const route = type?.fieldRoute?.(key);
         if (route) {
           // One call of the type's command per selected node of the type (or the first only), in one commit, as `node.update` writes are.
@@ -730,8 +829,9 @@ export class Inspector {
         const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
         // A locked node is written too: asking for it in the inspector is explicit.
         const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;
-        // A paint's own field (`frame.paint.color`) belongs to the first node's paint type, and is not written onto a paint of another.
-        const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`));
+        // A paint's own field (`frame.paint.angle`), and the colour slider's whole paint (`scope.samePaintType`), belong
+        // to the first node's paint type, and are not written onto a paint of another.
+        const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`)) ?? (scope?.samePaintType && paintKeys.includes(key) ? key : undefined);
         const doc = this.view.store.doc;
         const firstNow = doc.nodes.find((n) => n.id === first.id);
         const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;

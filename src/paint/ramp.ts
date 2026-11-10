@@ -72,13 +72,20 @@ export function paintOfRamp(ramp: ColorRamp, previous: Paint | undefined, geomet
 }
 
 /** A colour as straight sRGB bytes, when it is `#rgb` or `#rrggbb`. */
-function rgbOf(color: string): [number, number, number] | null {
+export function rgbOf(color: string): [number, number, number] | null {
   const text = color.trim();
   const long = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(text);
   if (long) return [parseInt(long[1], 16), parseInt(long[2], 16), parseInt(long[3], 16)];
   const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(text);
   if (short) return [parseInt(short[1] + short[1], 16), parseInt(short[2] + short[2], 16), parseInt(short[3] + short[3], 16)];
   return null;
+}
+
+/** A stop's colour as CSS, its opacity included (`rgba()`); a colour that cannot be read is given as it is. */
+export function stopCss(stop: Stop): string {
+  const rgb = rgbOf(stop.color);
+  const opacity = clamp01(num(stop.opacity, 1));
+  return rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${opacity})` : stop.color;
 }
 
 const hex = (rgb: number[]): string => `#${rgb.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, "0")).join("")}`;

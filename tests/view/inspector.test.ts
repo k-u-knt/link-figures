@@ -16,7 +16,8 @@ import { fileNodeType } from "../../src/nodes/file-node";
 import { drawingCommands } from "../../src/commands/drawing";
 import { createRegistries } from "../../src/registry";
 import type { NodeType } from "../../src/registry/node-type";
-import { clampToField, colorInputValue, formatNumber, Inspector } from "../../src/view/inspector";
+import { clampToField, colorInputValue, formatNumber, Inspector, renderFields } from "../../src/view/inspector";
+import { readValue, writeValue } from "../../src/view/page-fields";
 import { pageInFocus } from "../../src/view/viewport";
 import { SelectionState } from "../../src/view/selection";
 import { FakeEl } from "./fake-dom";
@@ -658,85 +659,87 @@ describe("paint fields", () => {
     return s;
   }
 
-  test("a paint field is a select of the paint types, then the chosen type's own fields, read through dotted keys", () => {
+  test("a paint field is a select of None, Colour and Pattern, then the colour slider's selected stop", () => {
     const { el } = framed();
     expect(keysOf(el)).toEqual([
       "x", "y", "width", "height", "rotation", "opacity", "name", "locked",
-      "frame.paint", "frame.paint.type", "frame.paint.color", "frame.paint.opacity", "frame.width",
+      "frame.paint", "frame.paint.type", "frame.paint.stop.color", "frame.paint.stop.opacity", "frame.width",
     ]);
     const select = el.control("frame.paint.type");
-    expect(optionsOf(select)).toEqual(["none", "solid", "linear", "radial", "pattern"]);
-    expect(select.value).toBe("solid");
-    expect(el.control("frame.paint.color").value).toBe("#ff0000");
-    expect(el.control("frame.paint.opacity").value).toBe("0.5");
+    expect(optionsOf(select)).toEqual(["none", "@colour", "pattern"]);
+    expect(select.value).toBe("@colour");
+    expect(el.find((e) => e.hasClass("lf-paint-kind"))!.text).toBe("Solid");
+    expect(el.control("frame.paint.stop.color").value).toBe("#ff0000");
+    expect(el.control("frame.paint.stop.opacity").value).toBe("0.5");
     expect(el.control("frame.width").value).toBe("1");
   });
 
-  test("a dotted field writes into the nested value and leaves the rest of it alone", () => {
+  test("the slider writes the whole paint at the paint's key, and a dotted field leaves the rest of its value alone", () => {
     const { el, store, labels } = framed();
     const seen = labels();
     el.typeInto("frame.width", "2.5");
-    el.control("frame.paint.color").value = "#00ff00";
-    el.control("frame.paint.color").fire("input");
+    el.control("frame.paint.stop.color").value = "#00ff00";
+    el.control("frame.paint.stop.color").fire("input");
     expect(frameOf(store)).toEqual({ paint: { type: "solid", color: "#00ff00", opacity: 0.5 }, width: 2.5, dash: "solid" });
-    expect(seen).toEqual(["inspect:frame.width", "inspect:frame.paint.color"]);
+    expect(seen).toEqual(["inspect:frame.width", "inspect:frame.paint"]);
   });
 
-  test("switching the type writes that type's defaults as one undo step, and its fields replace the old type's", () => {
+  test("switching the type writes that type's defaults as one undo step, and its fields replace the slider", () => {
     const { el, store, labels } = framed();
     const seen = labels();
     const select = el.control("frame.paint.type");
-    select.value = "linear";
+    select.value = "pattern";
     select.fire("change");
-    expect(frameOf(store).paint).toEqual(linearDefaults());
+    expect(frameOf(store).paint).toEqual(builtinPaintTypes.find((t) => t.id === "pattern")!.defaults());
     expect(seen).toEqual(["inspect:frame.paint"]);
-    expect(el.control("frame.paint.type").value).toBe("linear");
+    expect(el.control("frame.paint.type").value).toBe("pattern");
     expect(keysOf(el).filter((k) => k.startsWith("frame.paint."))).toEqual([
-      "frame.paint.type", "frame.paint.angle", "frame.paint.stops",
-      "frame.paint.stops.0.offset", "frame.paint.stops.0.color", "frame.paint.stops.0.opacity",
-      "frame.paint.stops.1.offset", "frame.paint.stops.1.color", "frame.paint.stops.1.opacity",
+      "frame.paint.type", "frame.paint.pattern", "frame.paint.fg", "frame.paint.bg", "frame.paint.scale", "frame.paint.angle",
     ]);
     store.undo();
     expect(frameOf(store).paint).toEqual(solidFrame().paint);
-    expect(el.control("frame.paint.type").value).toBe("solid");
-    expect(el.querySelector('[data-key="frame.paint.angle"]')).toBeNull();
+    expect(el.control("frame.paint.type").value).toBe("@colour");
+    expect(el.querySelector('[data-key="frame.paint.pattern"]')).toBeNull();
   });
 
-  test("a gradient's stops are a list: a stop is added, edited and removed, and the last two cannot be removed", () => {
-    const { el, store } = framed();
+  test("a gradient shows its geometry's fields under the slider, which write through dotted keys", () => {
+    const { el, store, labels } = framed();
     store.commit("paint", (d) => { (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
-    const removeButtons = () => el.findAll((e) => e.hasClass("lf-stop-remove"));
-    expect(removeButtons().map((b) => b.disabled)).toEqual([true, true]);
-
-    el.find((e) => e.hasClass("lf-stop-add"))!.fire("click");
-    expect(frameOf(store).paint.stops).toEqual([
-      { offset: 0, color: "#000000" },
-      { offset: 0.5, color: "#ffffff" },
-      { offset: 1, color: "#ffffff" },
+    const seen = labels();
+    expect(keysOf(el).filter((k) => k.startsWith("frame.paint."))).toEqual([
+      "frame.paint.type", "frame.paint.stop.color", "frame.paint.stop.opacity", "frame.paint.stop.offset", "frame.paint.angle",
     ]);
-    expect(removeButtons().map((b) => b.disabled)).toEqual([false, false, false]);
-
-    el.typeInto("frame.paint.stops.1.offset", "0.25");
-    el.control("frame.paint.stops.1.color").value = "#ff0000";
-    el.control("frame.paint.stops.1.color").fire("input");
-    el.typeInto("frame.paint.stops.1.opacity", "0.5");
-    expect((frameOf(store).paint.stops as unknown[])[1]).toEqual({ offset: 0.25, color: "#ff0000", opacity: 0.5 });
-
-    removeButtons()[0].fire("click");
-    expect(frameOf(store).paint.stops).toEqual([
-      { offset: 0.25, color: "#ff0000", opacity: 0.5 },
-      { offset: 1, color: "#ffffff" },
-    ]);
-    expect(el.control("frame.paint.stops.0.offset").value).toBe("0.25");
-    expect(el.querySelector('[data-key="frame.paint.stops.2.offset"]')).toBeNull();
+    expect(el.find((e) => e.hasClass("lf-paint-kind"))!.text).toBe("Linear gradient");
+    el.typeInto("frame.paint.angle", "45");
+    expect(frameOf(store).paint).toEqual({ ...linearDefaults(), angle: 45 });
+    expect(seen).toEqual(["inspect:frame.paint.angle"]);
   });
 
   test("a stop's offset and opacity are kept within 0 to 1", () => {
     const { el, store } = framed();
     store.commit("paint", (d) => { (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
-    el.typeInto("frame.paint.stops.0.offset", "-2");
-    el.typeInto("frame.paint.stops.0.opacity", "3");
+    el.typeInto("frame.paint.stop.offset", "-2");
+    el.typeInto("frame.paint.stop.opacity", "3");
     expect((frameOf(store).paint.stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000", opacity: 1 });
+  });
+
+  test("a stops field, which a plugin's paint may still use, is a list: a stop is added, edited and removed, and the last two cannot be removed", () => {
+    let value: unknown = [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }];
+    const el = new FakeEl("div");
+    const read = (key: string) => readValue({ stops: value } as never, key);
+    const write = (key: string, v: unknown) => {
+      const holder = { stops: structuredClone(value) } as Record<string, unknown>;
+      writeValue(holder, key, v);
+      value = holder.stops;
+    };
+    renderFields(el as never, [{ kind: "stops", key: "stops", label: "Stops" }], read, write);
+    const removeButtons = () => el.findAll((e) => e.hasClass("lf-stop-remove"));
+    expect(removeButtons().map((b) => b.disabled)).toEqual([true, true]);
+    el.find((e) => e.hasClass("lf-stop-add"))!.fire("click");
+    expect(value).toEqual([{ offset: 0, color: "#000000" }, { offset: 0.5, color: "#ffffff" }, { offset: 1, color: "#ffffff" }]);
+    expect(removeButtons().map((b) => b.disabled)).toEqual([false, false, false]);
+    removeButtons()[0].fire("click");
+    expect(value).toEqual([{ offset: 0.5, color: "#ffffff" }, { offset: 1, color: "#ffffff" }]);
   });
 
   test("a paint type that is not registered is shown as it is, with no fields, and nothing is written", () => {
@@ -746,27 +749,31 @@ describe("paint fields", () => {
     const seen = labels();
     selection.set(["p-img"]);
     const select = el.control("frame.paint.type");
-    expect(optionsOf(select)).toEqual(["none", "solid", "linear", "radial", "pattern", "x.future"]);
+    expect(optionsOf(select)).toEqual(["none", "@colour", "pattern", "x.future"]);
     expect(select.value).toBe("x.future");
     expect(keysOf(el).filter((k) => k.startsWith("frame.paint."))).toEqual(["frame.paint.type"]);
     expect(seen).toEqual([]);
     expect(frameOf(store).paint).toEqual({ type: "x.future", amount: 3 });
   });
 
-  test("with several nodes selected, a paint's own field is not written onto a paint of another type", () => {
+  test("with several nodes selected, the slider's edit is not written onto a paint of another type", () => {
     const { el, store, selection } = setup((d) => {
       addNode(d, { id: "p-a", frame: solidFrame() } as Partial<FileNode>);
       addNode(d, { id: "p-b", frame: { ...solidFrame(), paint: linearDefaults() } } as Partial<FileNode>);
-      addNode(d, { id: "p-c", frame: solidFrame() } as Partial<FileNode>);
+      addNode(d, { id: "p-c", frame: { ...solidFrame(), paint: { type: "solid", color: "#0000ff" } } } as Partial<FileNode>);
     });
     selection.set(["p-a", "p-b", "p-c"]);
-    el.typeInto("frame.paint.opacity", "0.25");
-    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint.opacity)).toEqual([0.25, undefined, 0.25]);
+    el.typeInto("frame.paint.stop.opacity", "0.25");
+    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint)).toEqual([
+      { type: "solid", color: "#ff0000", opacity: 0.25 },
+      linearDefaults(),
+      { type: "solid", color: "#ff0000", opacity: 0.25 },
+    ]);
     // Choosing a type is for all of them, each with its own copy.
-    el.control("frame.paint.type").value = "radial";
+    el.control("frame.paint.type").value = "pattern";
     el.control("frame.paint.type").fire("change");
     const paints = store.doc.nodes.map((n) => (n as FileNode).frame!.paint);
-    expect(paints.map((p) => p.type)).toEqual(["radial", "radial", "radial"]);
+    expect(paints.map((p) => p.type)).toEqual(["pattern", "pattern", "pattern"]);
     expect(paints[0]).not.toBe(paints[1]);
   });
 

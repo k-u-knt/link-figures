@@ -134,7 +134,7 @@
   margin-bottom: 0;
 }
 
-/* One gradient stop: its offset, colour and opacity rows, and its remove button. */
+/* One gradient stop of a `stops` field: its offset, colour and opacity rows, and its remove button. */
 .lf-stop {
   display: flex;
   flex-direction: column;
@@ -150,6 +150,143 @@
 
 .lf-stop-add {
   align-self: flex-start;
+  font-size: var(--font-ui-smaller);
+}
+
+/* A paint's select and, beside it, what the paint is ("Solid", "Linear gradient"). */
+.lf-paint-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.lf-paint-kind {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* The colour slider: Reverse, the geometry toggle and the presets above; the bar and its handles; the selected stop's row. */
+.lf-ramp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.lf-ramp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.lf-ramp-head button {
+  font-size: var(--font-ui-smaller);
+  padding: 0 var(--size-4-2);
+}
+
+.lf-ramp-geometry {
+  display: flex;
+  flex: 1;
+  gap: 0;
+}
+
+.lf-ramp-geometry-option.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.lf-ramp-track {
+  position: relative;
+  padding-bottom: 16px;
+  touch-action: none;
+  user-select: none;
+}
+
+/* The bar draws the ramp over a checkerboard, so that a stop's opacity shows. */
+.lf-ramp-bar {
+  height: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: #ffffff;
+  background-image: linear-gradient(45deg, #cccccc 25%, transparent 25%, transparent 75%, #cccccc 75%),
+    linear-gradient(45deg, #cccccc 25%, transparent 25%, transparent 75%, #cccccc 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 4px 4px;
+  cursor: copy;
+  overflow: hidden;
+}
+
+.lf-ramp-fill {
+  width: 100%;
+  height: 100%;
+}
+
+.lf-ramp-handles {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+}
+
+/* A stop's handle: a swatch of its colour (over the checkerboard) under the bar, centred on its offset. */
+.lf-ramp-handle {
+  position: absolute;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border: 2px solid var(--background-primary);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--text-muted);
+  background-color: #ffffff;
+  background-image: linear-gradient(var(--lf-stop-color), var(--lf-stop-color)),
+    linear-gradient(45deg, #cccccc 25%, transparent 25%, transparent 75%, #cccccc 75%);
+  background-size: 100% 100%, 6px 6px;
+  cursor: ew-resize;
+}
+
+.lf-ramp-handle.lf-ramp-handle-selected {
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+}
+
+.lf-ramp-handle:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* A handle pulled off the slider: its release removes the stop. */
+.lf-ramp-handle.lf-ramp-handle-off {
+  opacity: 0.4;
+}
+
+.lf-ramp-stop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+}
+
+.lf-ramp-stop-buttons {
+  display: flex;
+  justify-content: space-between;
+}
+
+.lf-ramp-presets {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: var(--layer-menu);
+  display: flex;
+  flex-direction: column;
+  padding: var(--size-4-1);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.lf-ramp-preset {
+  justify-content: flex-start;
   font-size: var(--font-ui-smaller);
 }
 

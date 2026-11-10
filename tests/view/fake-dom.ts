@@ -23,12 +23,14 @@ export class FakeEl {
   value = "";
   checked = false;
   disabled = false;
+  parent: FakeEl | null = null;
   private readonly listeners = new Map<string, ((ev?: any) => void)[]>();
 
   constructor(readonly tag: string, readonly ownerDocument: FakeDocument = { activeElement: null }) {}
 
   createEl(tag: string, info: ElInfo = {}): FakeEl {
     const el = new FakeEl(tag, this.ownerDocument);
+    el.parent = this;
     if (info.cls) el.cls = Array.isArray(info.cls) ? info.cls : [info.cls];
     if (info.text !== undefined) el.text = info.text;
     if (info.type !== undefined) el.type = info.type;
@@ -108,6 +110,15 @@ export class FakeEl {
   }
   setAttribute(name: string, value: string): void {
     this.attrs[name] = value;
+  }
+
+  setText(text: string): void {
+    this.text = text;
+  }
+
+  remove(): void {
+    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
+    this.parent = null;
   }
 
   toggleClass(name: string, on: boolean): void {

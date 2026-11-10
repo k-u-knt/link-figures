@@ -6,6 +6,7 @@ import type { ChangeEvent } from "../../src/model/store";
 import type { Document, FileNode } from "../../src/model/types";
 import type { Command, CommandContext } from "../../src/registry/command";
 import { LinkFiguresView } from "../../src/view/figure-view";
+import { missingNodeIds } from "../../src/links/invalidation";
 import { TFile } from "obsidian";
 
 // The view's base class and everything it draws with are stubs: what is tested is how the view takes up a changed file.
@@ -81,7 +82,9 @@ function setup(initial: Document = figure()) {
   const view = new LinkFiguresView({ app } as never, plugin as never);
   const internals = view as unknown as Record<string, unknown>;
 
-  const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn(), invalidate: vi.fn(async () => {}), unresolvedLinkers: () => [], flushAll: vi.fn(async () => {}), unmountAll: vi.fn() };
+  const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn(), invalidate: vi.fn(async () => {}), unresolvedLinkers: () => [],
+    // As the real one: the file nodes found missing (a note card's resolution counts too; see note-card-edit.test).
+    missingIds: () => missingNodeIds(view.store.doc.nodes, view.resolvedCache), flushAll: vi.fn(async () => {}), unmountAll: vi.fn() };
   const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn(), finishCrop: vi.fn() };
   const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
   const toolbar = { render: vi.fn() };

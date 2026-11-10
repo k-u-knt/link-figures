@@ -377,6 +377,27 @@ describe("Review Focus", () => {
     expect(s.el("N").textContent).toContain("Note not found");
   });
 
+  test("2c: a deleted note created again: its cards are among the missing a new file may mend, and come back live", async () => {
+    const s = await setup();
+    const text = s.vaultFiles["Notes/a.md"];
+    const file = s.tfiles.get("Notes/a.md")!;
+    s.tfiles.delete("Notes/a.md");
+    delete s.vaultFiles["Notes/a.md"];
+    await s.nodeHost.invalidate(["N", "M"]);
+    expect(s.el("N").textContent).toContain("Note not found");
+    // What the watcher asks for when a file appears.
+    expect(s.nodeHost.missingIds()).toEqual(["N", "M"]);
+    // Created again (a new file object, as Obsidian makes).
+    s.tfiles.set("Notes/a.md", { ...file });
+    s.vaultFiles["Notes/a.md"] = text;
+    await s.nodeHost.invalidate(s.nodeHost.missingIds());
+    expect(s.nodeHost.missingIds()).toEqual([]);
+    expect(s.el("N").textContent).not.toContain("Note not found");
+    expect(s.embedOf("N").unloaded).toBe(false);
+    expect(s.embedOf("N").file).toBe(s.tfiles.get("Notes/a.md"));
+    expect(s.el("N").querySelector(".lf-card-label")?.classList.contains("is-missing")).toBe(false);
+  });
+
   test("2b: in a read-only view, a renamed note's card redraws its label and keeps its live embed", async () => {
     const s = await setup();
     s.view.readOnly = true;

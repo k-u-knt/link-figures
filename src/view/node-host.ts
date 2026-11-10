@@ -3,6 +3,7 @@ import type { Plane } from "../links/decoders/tiff-convert";
 import { DecodeLimitError } from "../links/decoders/budget";
 import { isVectorFile } from "../links/intake-classify";
 import { linkedFiles } from "../links/linked-files";
+import { missingNodeIds } from "../links/invalidation";
 import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import { fileNodeDefaults } from "../model/defaults";
@@ -220,6 +221,15 @@ export class NodeHost {
       this.trackLinked(node);
     }
     await this.resolve(toResolve);
+  }
+
+  /**
+   * The nodes of the view's document that resolve a link (of any type that has one: a file panel, a note card) and found
+   * no file for it (see `missingNodeIds`): a file that appears (created, or created again after a delete) may mend them.
+   */
+  missingIds(): NodeId[] {
+    const doc = this.view.store.doc;
+    return missingNodeIds(doc.nodes, this.view.resolvedCache, (node) => this.asFile(node, doc) !== null);
   }
 
   /**

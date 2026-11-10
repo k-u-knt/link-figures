@@ -13,7 +13,7 @@ import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
 import type { Plane } from "../links/decoders/tiff-convert";
-import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
+import { InvalidationIndex } from "../links/invalidation";
 import { afterLinkUpdates, hasLinkUpdateQueue } from "../links/link-updates";
 import { renamedLinkFiles } from "../links/resolver";
 import type { Resolved } from "../links/types";
@@ -195,7 +195,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       (ids) => {
         void this.nodeHost.invalidate(ids);
       },
-      () => [...missingNodeIds(this.store.doc.nodes, this.resolvedCache), ...this.nodeHost.unresolvedLinkers()],
+      () => [...this.nodeHost.missingIds(), ...this.nodeHost.unresolvedLinkers()],
     );
   }
 

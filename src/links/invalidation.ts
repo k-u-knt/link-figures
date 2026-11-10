@@ -74,14 +74,15 @@ export class InvalidationIndex {
 }
 
 /**
- * The file nodes, in document order, whose link led nowhere because there was no file, or no image in the note, to follow
- * it to: a file that appears may mend them. A node that is not resolved yet is not missing, and one that failed on a
- * heading or on decoding is not helped by a new file.
+ * The nodes that resolve a link (`resolves`: file panels by default; the view also counts note cards, see
+ * `NodeHost.missingIds`), in document order, whose link led nowhere because there was no file, or no image in the note,
+ * to follow it to: a file that appears may mend them. A node that is not resolved yet is not missing, and one that
+ * failed on a heading or on decoding is not helped by a new file.
  */
-export function missingNodeIds(nodes: readonly Node[], resolved: ReadonlyMap<NodeId, Resolved>): NodeId[] {
+export function missingNodeIds(nodes: readonly Node[], resolved: ReadonlyMap<NodeId, Resolved>, resolves: (node: Node) => boolean = (node) => node.type === "file"): NodeId[] {
   return nodes
     .filter((node) => {
-      const result = node.type === "file" ? resolved.get(node.id) : undefined;
+      const result = resolves(node) ? resolved.get(node.id) : undefined;
       return result?.kind === "missing" && (result.reason === "file" || result.reason === "no-image");
     })
     .map((node) => node.id);

@@ -2,11 +2,23 @@
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import { createPage } from "../../src/model/defaults";
 import type { CardNode } from "../../src/model/types";
-import { attachLinkSuggest, headingLinktext, linkQueryAt } from "../../src/view/card-link-suggest";
+import { attachLinkSuggest, linkQueryAt } from "../../src/view/card-link-suggest";
 
 // `obsidian` ships only typings. Its fuzzy search is stood in for by a subsequence match whose score is better (higher)
 // the tighter the match, as Obsidian's is.
+const notices = vi.hoisted(() => [] as string[]);
+// Obsidian's own heading sanitising for links, as obsidian.d.ts documents it: only `: # | ^ \\`, line breaks and the
+// doubled `%%`, `[[`, `]]` go. A spy, so a test can see it is what the suggester uses.
+const stripHeadingForLink = vi.hoisted(() =>
+  vi.fn((heading: string) => heading.replace(/%%|\[\[|\]\]|[:#|^\\\r\n]/g, " ").replace(/\s+/g, " ").trim()),
+);
 vi.mock("obsidian", () => ({
+  stripHeadingForLink,
+  Notice: class {
+    constructor(message: string) {
+      notices.push(message);
+    }
+  },
   prepareFuzzySearch: (query: string) => (text: string) => {
     const q = query.toLowerCase().replace(/\s+/g, "");
     const t = text.toLowerCase();
@@ -30,6 +42,8 @@ const file = (path: string, mtime = 0): FakeFile => {
   return { path, name, basename: name.slice(0, dot), extension: name.slice(dot + 1), stat: { mtime } };
 };
 const files = [file("Projects/analysis.md", 3), file("anatomy.md", 2), file("zebra.md", 1), file("plots/analysis plot.png", 0)];
+/** A figure file, whose cache and text are those of the note (blocks in it, two with ids). */
+const FIGURE = file("figs/plate.lnkfig.md", -1);
 
 /** The note `Projects/analysis.md`: lines 0-18, with the sections and list items its cache gives. */
 const NOTE = [
@@ -42,6 +56,7 @@ const NOTE_CACHE = {
   headings: [
     { heading: "Methods", level: 2, position: at(3) },
     { heading: "Results: mice", level: 2, position: at(3) },
+    { heading: "50% done", level: 2, position: at(3) },
   ],
   sections: [
     { type: "yaml", position: at(0, 2) },
@@ -56,19 +71,21 @@ const NOTE_CACHE = {
   blocks: { item2: { id: "item2", position: at(7) }, code1: { id: "code1", position: at(18) } },
 };
 
-function fakeApp(lastOpen: string[] = []) {
+const hasNote = (f: FakeFile) => f.path === "Projects/analysis.md" || f === FIGURE;
+function fakeApp(lastOpen: string[] = [], extra: FakeFile[] = []) {
+  const all = [...files, ...extra];
   return {
     vault: {
-      getMarkdownFiles: () => files.filter((f) => f.extension === "md"),
-      getFiles: () => files,
-      cachedRead: async (f: FakeFile) => (f.path === "Projects/analysis.md" ? NOTE : ""),
+      getMarkdownFiles: () => all.filter((f) => f.extension === "md"),
+      getFiles: () => all,
+      cachedRead: async (f: FakeFile) => (hasNote(f) ? NOTE : ""),
     },
     workspace: { getLastOpenFiles: () => lastOpen },
     metadataCache: {
       getFirstLinkpathDest: (linkpath: string) =>
-        files.find((f) => f.basename === linkpath || f.path === linkpath || f.path === `${linkpath}.md` || f.name === linkpath) ?? null,
-      fileToLinktext: (f: FakeFile) => (f.extension === "md" ? f.basename : f.name),
-      getFileCache: (f: FakeFile) => (f.path === "Projects/analysis.md" ? NOTE_CACHE : {}),
+        all.find((f) => f.basename === linkpath || f.path === linkpath || f.path === `${linkpath}.md` || f.name === linkpath) ?? null,
+      fileToLinktext: vi.fn((f: FakeFile) => (f.extension === "md" ? f.basename : f.name)),
+      getFileCache: (f: FakeFile) => (hasNote(f) ? NOTE_CACHE : {}),
     },
   };
 }
@@ -161,12 +178,17 @@ describe("link suggestions in a card's editor", () => {
     const area = textarea();
     attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
     typeInto(area, "[[analysis#");
-    expect(titles()).toEqual(["Methods", "Results: mice"]);
+    expect(titles()).toEqual(["Methods", "Results: mice", "50% done"]);
     typeInto(area, "[[analysis#res");
     expect(titles()).toEqual(["Results: mice"]);
     key(area, "Enter");
-    // As Obsidian writes a heading into a link: the characters a link cannot hold become spaces.
+    // As Obsidian writes a heading into a link (`stripHeadingForLink`): the characters a link cannot hold become spaces.
     expect(area.value).toBe("[[analysis#Results mice]]");
+    // A lone `%` stays, as Obsidian's own function leaves it.
+    typeInto(area, "[[analysis#50");
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis#50% done]]");
+    expect(stripHeadingForLink).toHaveBeenCalledWith("50% done");
 
     // A note that is not there has nothing to list; neither has an alias being typed.
     typeInto(area, "[[nothing#");
@@ -231,9 +253,141 @@ describe("link suggestions in a card's editor", () => {
     expect(titles()).toEqual(["zebra", "analysis plot.png", "analysis", "anatomy"]);
   });
 
-  test("a heading is written into a link as Obsidian's `stripHeadingForLink` documents it", () => {
-    // The example in obsidian.d.ts: stripHeadingForLink('foo:#|^\\\r\n%%[[]]bar') is 'foo bar'.
-    expect(headingLinktext("foo:#|^\\\r\n%%[[]]bar")).toBe("foo bar");
+  test("a figure file offers only the blocks that already have ids; no id is ever written into it", async () => {
+    const area = textarea();
+    const blockId = vi.fn(async () => ({ id: "fig-ab12", subpath: "#^fig-ab12" }));
+    attachLinkSuggest(area, fakeApp([], [FIGURE]) as never, "fig.lnkfig.md", { blockId });
+    typeInto(area, "[[plate.lnkfig^");
+    await settle();
+    expect(titles()).toEqual(["second item", "print(1)"]);
+    key(area, "Enter");
+    expect(area.value).toBe("[[plate.lnkfig#^item2]]");
+    expect(blockId).not.toHaveBeenCalled();
+  });
+
+  test("a failed id write shows a Notice and leaves the text", async () => {
+    notices.length = 0;
+    const area = textarea();
+    const blockId = vi.fn(async () => {
+      throw new Error("the note has changed; try again");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md", { blockId });
+    typeInto(area, "[[analysis^first");
+    await settle();
+    key(area, "Enter");
+    await settle();
+    expect(notices).toEqual(['Link Figures: could not add a block id to "Projects/analysis.md": the note has changed; try again']);
+    expect(area.value).toBe("[[analysis^first");
+  });
+
+  test("only the best matches are turned into links: link text is made for at most the first 100", () => {
+    const many = Array.from({ length: 150 }, (_, i) => file(`bulk/n${String(i).padStart(3, "0")}.md`, i));
+    const app = fakeApp([], many);
+    const area = textarea();
+    attachLinkSuggest(area, app as never, "fig.lnkfig.md");
+    typeInto(area, "[[n0");
+    expect(titles()).toHaveLength(100);
+    expect(app.metadataCache.fileToLinktext.mock.calls.length).toBeLessThanOrEqual(100);
+  });
+
+  test("accepting inside a link keeps an `|alias` or `#heading` after the caret", () => {
+    const area = textarea();
+    attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
+    typeInto(area, "[[ana|shown]] x", 5);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis|shown]] x");
+    expect(area.selectionStart).toBe("[[analysis|shown]]".length);
+    typeInto(area, "[[anaxx#Methods]]", 5);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis#Methods]]");
+    typeInto(area, "[[analysis#Me|x]]", 13);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis#Methods|x]]");
+    // An alias suggestion where an alias is already written keeps the one written.
+    typeInto(area, "[[stu|keep]]", 5);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis|keep]]");
+  });
+
+  test("the link goes in through the editor's own undo (`insertText`), over the replaced range", () => {
+    const area = textarea();
+    attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
+    const calls: [string, string, number, number][] = [];
+    const exec = vi.fn((command: string, _ui: boolean, text: string) => {
+      calls.push([command, text, area.selectionStart, area.selectionEnd]);
+      area.setRangeText(text, area.selectionStart, area.selectionEnd, "end");
+      return true;
+    });
+    (document as unknown as { execCommand: unknown }).execCommand = exec;
+    try {
+      typeInto(area, "See [[ana]] x", 9);
+      key(area, "Enter");
+      expect(calls).toEqual([["insertText", "analysis", 6, 9]]);
+      expect(area.value).toBe("See [[analysis]] x");
+      expect(area.selectionStart).toBe("See [[analysis]]".length);
+      // When the command does nothing (returns false), the text is written directly.
+      exec.mockImplementation(() => false);
+      typeInto(area, "[[zeb");
+      key(area, "Enter");
+      expect(area.value).toBe("[[zebra]]");
+    } finally {
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+    }
+  });
+
+  describe("where the list is", () => {
+    /** The textarea at (100, 50) on screen, 400 by 200 px before the canvas's `zoom`; its caret 30 px in and 20 px down. */
+    function zoomed(zoom: number) {
+      const area = textarea();
+      Object.defineProperty(area, "offsetWidth", { configurable: true, get: () => 400 });
+      Object.defineProperty(area, "clientWidth", { configurable: true, get: () => 380 });
+      area.getBoundingClientRect = () => ({ left: 100, top: 50, width: 400 * zoom, height: 200 * zoom, right: 100 + 400 * zoom, bottom: 50 + 200 * zoom, x: 100, y: 50, toJSON() {} }) as DOMRect;
+      return area;
+    }
+    let mirrorWidths: string[] = [];
+    beforeEach(() => {
+      mirrorWidths = [];
+      const proto = HTMLSpanElement.prototype;
+      Object.defineProperty(proto, "offsetLeft", { configurable: true, get(this: HTMLElement) { mirrorWidths.push(this.parentElement?.style.width ?? ""); return 30; } });
+      Object.defineProperty(proto, "offsetTop", { configurable: true, get: () => 20 });
+      Object.defineProperty(proto, "offsetHeight", { configurable: true, get: () => 16 });
+    });
+    afterEach(() => {
+      const proto = HTMLSpanElement.prototype as unknown as Record<string, unknown>;
+      delete proto.offsetLeft;
+      delete proto.offsetTop;
+      delete proto.offsetHeight;
+    });
+
+    test.each([2, 0.5])("at the caret when the canvas is zoomed to %s", (zoom) => {
+      const area = zoomed(zoom);
+      attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
+      typeInto(area, "[[ana");
+      expect(list()!.style.left).toBe(`${100 + 30 * zoom}px`);
+      expect(list()!.style.top).toBe(`${50 + (20 + 16) * zoom}px`);
+      // The text is laid out at the textarea's own width (unscaled, inside its borders).
+      expect(mirrorWidths.at(-1)).toBe("380px");
+    });
+
+    test("it follows the textarea's scroll and a resize, and closes on a wheel over the canvas", () => {
+      const area = zoomed(1);
+      attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
+      typeInto(area, "[[ana");
+      expect(list()!.style.top).toBe("86px");
+      area.scrollTop = 10;
+      Object.defineProperty(area, "scrollTop", { configurable: true, get: () => 10 });
+      area.dispatchEvent(new Event("scroll"));
+      expect(list()!.style.top).toBe("76px");
+      area.getBoundingClientRect = () => ({ left: 200, top: 50, width: 400, height: 200 }) as DOMRect;
+      window.dispatchEvent(new Event("resize"));
+      expect(list()!.style.left).toBe("230px");
+      // A wheel over the list scrolls the list; one anywhere else (the canvas zooming or panning) closes it.
+      list()!.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+      expect(list()).not.toBeNull();
+      document.body.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+      expect(list()).toBeNull();
+    });
   });
 
   test("the card editor writes a new block id through the plugin's API", async () => {

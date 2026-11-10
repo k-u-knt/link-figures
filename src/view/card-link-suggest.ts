@@ -1,4 +1,5 @@
-import { prepareFuzzySearch, type App, type TFile } from "obsidian";
+import { Notice, prepareFuzzySearch, stripHeadingForLink, type App, type TFile } from "obsidian";
+import { FILE_SUFFIX } from "../constants";
 import { blockAt, existingBlockId, idPlacement, type Block } from "../links/block-id";
 import type { NoteCache } from "../links/note-block-id";
 import { codeRanges } from "../model/card-links";
@@ -83,14 +84,6 @@ interface Suggestion {
 /** At most this many entries are listed, as Obsidian's suggesters limit theirs. */
 const LIMIT = 100;
 
-/**
- * A heading as it is written into a link: the characters a link cannot hold (`# | ^ : % [ ] \` and line breaks) become
- * spaces, and runs of spaces one. It agrees with the example obsidian.d.ts gives for `stripHeadingForLink`.
- */
-export function headingLinktext(heading: string): string {
-  return heading.replace(/[#|^:%[\]\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
 /** The aliases in a note's front matter (`aliases` or `alias`, a list or one string), as `parseFrontMatterAliases` reads them. */
 function aliasesOf(frontmatter: unknown): string[] {
   if (!frontmatter || typeof frontmatter !== "object") return [];
@@ -127,21 +120,23 @@ function fileSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery):
     return [...opened, ...rest].slice(0, LIMIT).map(describe);
   }
   const search = prepareFuzzySearch(q.query.trim());
-  const scored: { file: TFile; score: number; suggestion: Suggestion }[] = [];
+  // Scored first; link text is made only for the entries listed (`fileToLinktext` is not free on a large vault).
+  const scored: { file: TFile; score: number; alias: string | null }[] = [];
   for (const f of files) {
     const score = bestScore(search, [titleOf(f), f.extension === "md" ? f.path.slice(0, -3) : f.path]);
-    if (score !== null) scored.push({ file: f, score, suggestion: describe(f) });
+    if (score !== null) scored.push({ file: f, score, alias: null });
     if (f.extension !== "md") continue;
     // A note found by an alias is linked with the alias shown: `[[<linktext>|<alias>]]`.
     for (const alias of aliasesOf(app.metadataCache.getFileCache(f)?.frontmatter)) {
       const r = search(alias);
-      if (!r) continue;
-      const linktext = app.metadataCache.fileToLinktext(f, sourcePath);
-      scored.push({ file: f, score: r.score, suggestion: { title: alias, note: f.path.slice(0, -3), insert: `${linktext}|${alias}` } });
+      if (r) scored.push({ file: f, score: r.score, alias });
     }
   }
   scored.sort((a, b) => b.score - a.score || recent(a.file, b.file));
-  return scored.slice(0, LIMIT).map((s) => s.suggestion);
+  return scored.slice(0, LIMIT).map(({ file: f, alias }) => {
+    if (alias === null) return describe(f);
+    return { title: alias, note: f.path.slice(0, -3), insert: `${app.metadataCache.fileToLinktext(f, sourcePath)}|${alias}` };
+  });
 }
 
 /** One line of a block as its preview shows it: without quote and list markers, a fence line, or an id at its end. */
@@ -183,11 +178,21 @@ async function blockSuggestions(app: LinkSuggestApp, file: TFile, linktext: stri
   const cache = app.metadataCache.getFileCache(file) as NoteCache | null;
   if (!cache) return [];
   const lines = (await app.vault.cachedRead(file)).split(/\r?\n/);
+  // A figure's text is the plugin's: an id is never written into it, so only its blocks that have one are offered.
+  const writer = file.path.endsWith(FILE_SUFFIX) ? undefined : blockId;
+  const giveId = async (line: number): Promise<string> => {
+    try {
+      return (await writer!(file.path, line)).subpath;
+    } catch (error) {
+      new Notice(`Link Figures: could not add a block id to "${file.path}": ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  };
   const entries = noteBlocks(cache)
-    .filter(({ id }) => id !== null || blockId !== undefined)
+    .filter(({ id }) => id !== null || writer !== undefined)
     .map(({ block, id }) => {
       const title = preview(lines, block.start, block.end);
-      const insert = id !== null ? `${linktext}#^${id}` : async () => `${linktext}${(await blockId!(file.path, block.start)).subpath}`;
+      const insert = id !== null ? `${linktext}#^${id}` : async () => `${linktext}${await giveId(block.start)}`;
       return { texts: id ? [title, id] : [title], suggestion: { title, note: id ? `^${id}` : undefined, insert } as Suggestion };
     });
   if (q.query.trim() === "") return entries.slice(0, LIMIT).map((e) => e.suggestion);
@@ -206,7 +211,7 @@ function sectionSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuer
   if (!file) return [];
   const linktext = app.metadataCache.fileToLinktext(file, sourcePath);
   if (q.kind === "block") return blockSuggestions(app, file, linktext, q, blockId);
-  const entries = (app.metadataCache.getFileCache(file)?.headings ?? []).map((h) => ({ text: h.heading, suggestion: { title: h.heading, insert: `${linktext}#${headingLinktext(h.heading)}` } }));
+  const entries = (app.metadataCache.getFileCache(file)?.headings ?? []).map((h) => ({ text: h.heading, suggestion: { title: h.heading, insert: `${linktext}#${stripHeadingForLink(h.heading)}` } }));
   if (q.query.trim() === "") return entries.slice(0, LIMIT).map((e) => e.suggestion);
   const search = prepareFuzzySearch(q.query.trim());
   return entries
@@ -228,30 +233,39 @@ export function linkSuggestions(app: LinkSuggestApp, sourcePath: string, q: Link
 
 /** Text styles that decide where the characters of a textarea fall, copied onto the mirror that finds the caret. */
 const MIRRORED = [
-  "boxSizing", "width", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "paddingTop", "paddingRight",
-  "paddingBottom", "paddingLeft", "fontFamily", "fontSize", "fontStyle", "fontWeight", "fontVariant", "letterSpacing", "lineHeight",
-  "textTransform", "textIndent", "tabSize", "wordSpacing",
+  "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontFamily", "fontSize", "fontStyle", "fontWeight", "fontVariant",
+  "letterSpacing", "lineHeight", "textTransform", "textIndent", "tabSize", "wordSpacing",
 ] as const;
 
-/** Where the caret of `area` is on screen (the bottom left of its line), by laying the text out again in a hidden mirror. */
+/**
+ * Where the caret of `area` is on screen (its line's top and bottom, and its left), by laying the text out again in a
+ * hidden mirror. The mirror has the textarea's own width inside its borders (`clientWidth`) and no borders, so the text
+ * wraps as it does there. The textarea may be drawn scaled (the canvas's zoom is a CSS scale on the viewport): the
+ * offsets, measured unscaled, are scaled by its drawn width over its own (`rect.width / offsetWidth`).
+ */
 function caretPoint(area: HTMLTextAreaElement): { x: number; bottom: number; top: number } {
   const doc = area.ownerDocument;
   const view = doc.defaultView;
   const rect = area.getBoundingClientRect();
+  const scale = area.offsetWidth > 0 && rect.width > 0 ? rect.width / area.offsetWidth : 1;
   const mirror = doc.createElement("div");
   const style = view?.getComputedStyle(area);
   if (style) for (const p of MIRRORED) mirror.style[p] = style[p];
-  Object.assign(mirror.style, { position: "absolute", visibility: "hidden", top: "0", left: "-9999px", whiteSpace: "pre-wrap", overflowWrap: "break-word", overflow: "hidden" });
+  Object.assign(mirror.style, {
+    position: "absolute", visibility: "hidden", top: "0", left: "-9999px", boxSizing: "border-box", border: "0",
+    width: `${area.clientWidth}px`, whiteSpace: "pre-wrap", overflowWrap: "break-word", overflow: "hidden",
+  });
   mirror.textContent = area.value.slice(0, area.selectionEnd);
   const mark = doc.createElement("span");
-  mark.textContent = "​";
+  mark.textContent = "\u200b";
   mirror.appendChild(mark);
   doc.body.appendChild(mirror);
+  const left = mark.offsetLeft;
   const lineHeight = mark.offsetHeight || parseFloat(style?.lineHeight ?? "") || 16;
-  const x = rect.left + mark.offsetLeft - area.scrollLeft;
-  const top = rect.top + mark.offsetTop - area.scrollTop;
+  const x = rect.left + (area.clientLeft + left - area.scrollLeft) * scale;
+  const top = rect.top + (area.clientTop + mark.offsetTop - area.scrollTop) * scale;
   mirror.remove();
-  return { x, top, bottom: top + lineHeight };
+  return { x, top, bottom: top + lineHeight * scale };
 }
 
 /**
@@ -288,14 +302,28 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     });
   };
 
-  /** Writes `insert` in place of what was typed after `[[` (from `from` to `to`), closed with `]]`, the caret after it. */
-  const write = (from: number, to: number, insert: string) => {
+  /**
+   * Writes `insert` in place of what was typed after `[[` (from `from` to the caret `to`), with the caret after the
+   * link's `]]`. When the caret is inside a link already closed, the rest of the part being typed (the target, or the
+   * `#subpath`) is replaced too, and an `|alias` or `#subpath` after it is kept, as is the `]]`; an alias suggestion
+   * then keeps the alias written. Otherwise `]]` is added. The text goes in as the user's typing would
+   * (`insertText`), so the textarea's own undo takes it back; written directly when that command does nothing.
+   */
+  const write = (q: LinkQuery, insert: string) => {
     const text = textarea.value;
-    // A `]]` already closing this link (typed, or the rest of a link being edited) is kept, not doubled.
-    const after = /^[^[\]\n]*\]\]/.exec(text.slice(to));
-    const end = after ? to + after[0].length : to;
-    const caret = from + insert.length + 2;
-    textarea.value = `${text.slice(0, from)}${insert}]]${text.slice(end)}`;
+    const rest = text.slice(q.to);
+    const part = (q.kind === "file" ? /^[^[\]|#\n]*/ : /^[^[\]|\n]*/).exec(rest)![0];
+    const next = rest.slice(part.length);
+    const closed = /^(\]\]|[|#][^[\]\n]*\]\])/.test(next) && !(q.kind !== "file" && next.startsWith("#"));
+    let inserted = insert;
+    if (closed && next.startsWith("|") && inserted.includes("|")) inserted = inserted.slice(0, inserted.indexOf("|"));
+    if (!closed) inserted += "]]";
+    const end = closed ? q.to + part.length : q.to;
+    textarea.setSelectionRange(q.from, end);
+    const exec = (doc as Document & { execCommand?: (command: string, ui?: boolean, value?: string) => boolean }).execCommand;
+    const done = typeof exec === "function" && exec.call(doc, "insertText", false, inserted) && textarea.value === text.slice(0, q.from) + inserted + text.slice(end);
+    if (!done) textarea.value = text.slice(0, q.from) + inserted + text.slice(end);
+    const caret = textarea.value.indexOf("]]", q.from + inserted.length - 2) + 2;
     textarea.setSelectionRange(caret, caret);
   };
 
@@ -304,14 +332,15 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     const s = items[i];
     if (!q || !s) return;
     close();
-    if (typeof s.insert === "string") return write(q.from, q.to, s.insert);
+    if (typeof s.insert === "string") return write(q, s.insert);
     // A block with no id: one is written into the note first. The link goes in once it is, if what was typed is
     // still there as it was (the edit may have ended, or the text changed, meanwhile).
     const typed = textarea.value.slice(q.from, q.to);
     s.insert().then(
       (insert) => {
-        if (!detached && textarea.isConnected && textarea.value.slice(q.from, q.to) === typed) write(q.from, q.to, insert);
+        if (!detached && textarea.isConnected && textarea.value.slice(q.from, q.to) === typed) write(q, insert);
       },
+      // Told to the user with a Notice where the id was to be written (`blockSuggestions`).
       (error: unknown) => console.error("Link Figures: could not give the block an id", error),
     );
   };
@@ -413,7 +442,20 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     close();
   };
   textarea.addEventListener("blur", onBlur);
+  // The list stays at the caret: as the textarea scrolls, and the window is resized.
+  const onScroll = () => place();
+  textarea.addEventListener("scroll", onScroll);
+  const win = doc.defaultView;
+  win?.addEventListener("resize", onScroll);
+  // A wheel anywhere but over the list (the canvas zooming or panning) moves the textarea away: the list closes.
+  const onWheel = (ev: WheelEvent) => {
+    if (container && !(ev.target && container.contains(ev.target as Node))) onBlur();
+  };
+  doc.addEventListener("wheel", onWheel, { capture: true });
   return () => {
+    textarea.removeEventListener("scroll", onScroll);
+    win?.removeEventListener("resize", onScroll);
+    doc.removeEventListener("wheel", onWheel, { capture: true });
     detached = true;
     seq++;
     close();

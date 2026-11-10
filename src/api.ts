@@ -16,7 +16,7 @@ import { requestOptionsProblem } from "./export/export-options";
 import type { ExportOutcome, ExportRequest } from "./export/export-run";
 import { FormatError, NotFigureError } from "./format/errors";
 import { newFigureText } from "./format/new-figure";
-import type { BlockIdResult } from "./links/note-block-id";
+import { refuseFigure, type BlockIdResult } from "./links/note-block-id";
 import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
 import type { DocumentStore } from "./model/store";
 import type { Document, Paint } from "./model/types";
@@ -221,7 +221,9 @@ export function createApi(host: ApiHost): LinkFiguresApi {
 
     async blockId(notePath, line) {
       if (!host.noteBlockId) throw new Error("blockId: notes cannot be written here");
-      return host.noteBlockId(host.normalizePath(notePath), line);
+      const path = host.normalizePath(notePath);
+      refuseFigure(path);
+      return host.noteBlockId(path, line);
     },
 
     async export(figurePath, request) {

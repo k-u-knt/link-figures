@@ -1,3 +1,5 @@
+import { FILE_SUFFIX } from "../constants";
+import { CommandError } from "../registry/command";
 import {
   blockAt,
   blockIdInsertion,
@@ -75,6 +77,14 @@ export type NoteCache = BlocksCache & {
 /** How long to wait for the metadata cache to index an open note that has just been saved. */
 export const REINDEX_TIMEOUT_MS = 2000;
 
+/**
+ * A figure file (`.lnkfig.md`) is never given a block id: its text is the plugin's, written by the figure, and an id
+ * written into it would not survive the figure's next save. Throws a `CommandError` naming `note.block-id`.
+ */
+export function refuseFigure(path: string): void {
+  if (path.endsWith(FILE_SUFFIX)) throw new CommandError(`note.block-id: "${path}" is a figure, not a note`);
+}
+
 const result = (id: string): BlockIdResult => ({ id, subpath: `#^${id}` });
 
 /**
@@ -111,6 +121,7 @@ async function findOrWriteBlockId(host: NoteHost, notePath: string, line: number
   if (!Number.isInteger(line) || line < 0) throw new Error(`blockId: "line" must be a whole number from 0, not ${String(line)}`);
   const path = host.resolve(notePath);
   if (path === null) throw new Error(`blockId: there is no note "${notePath}"`);
+  refuseFigure(path);
 
   /** The block at `line` by the cache as it is now, checked against `text`; and the cache's id for it, if any. */
   const locate = (text: string): { block: Block; cache: NoteCache; cached: string | null } => {

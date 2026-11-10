@@ -1,3 +1,4 @@
+import { CommandError } from "../../src/registry/command";
 import { BlockIdQueue, noteBlockId, REINDEX_TIMEOUT_MS, writableEditor, type NoteHost } from "../../src/links/note-block-id";
 import { parseNote } from "../../src/links/note-drop";
 
@@ -102,6 +103,17 @@ function setup(options: { open?: boolean; editorText?: string; reindexTo?: Cache
 }
 
 describe("noteBlockId", () => {
+  test("a figure file is refused, never written", async () => {
+    const s = setup();
+    s.files.set("Figs/plate.lnkfig.md", TEXT);
+    await expect(noteBlockId(s.host, "Figs/plate.lnkfig", 2, "fig", s.random)).rejects.toThrow(
+      new CommandError('note.block-id: "Figs/plate.lnkfig.md" is a figure, not a note'),
+    );
+    await expect(noteBlockId(s.host, "Figs/plate.lnkfig", 2, "fig", s.random)).rejects.toBeInstanceOf(CommandError);
+    expect(s.process).not.toHaveBeenCalled();
+    expect(s.files.get("Figs/plate.lnkfig.md")).toBe(TEXT);
+  });
+
   test("a block without an id gets a new one, written into the file when the note is not open", async () => {
     const s = setup();
     const result = await noteBlockId(s.host, "Notes/a.md", 2, "fig", s.random);

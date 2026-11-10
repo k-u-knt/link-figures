@@ -473,6 +473,13 @@ describe("blockId", () => {
     expect(noteBlockId).toHaveBeenCalledWith("Notes/a.md", 3);
   });
 
+  test("refuses a figure file without asking the host", async () => {
+    const noteBlockId = vi.fn(async () => ({ id: "fig-ab12", subpath: "#^fig-ab12" }));
+    const api = createApi({ app: {} as never, registries: createRegistries(), files: {} as never, normalizePath, openFigure: () => null, noteBlockId });
+    await expect(api.blockId("/Figs//plate.lnkfig.md", 3)).rejects.toThrow(new CommandError('note.block-id: "Figs/plate.lnkfig.md" is a figure, not a note'));
+    expect(noteBlockId).not.toHaveBeenCalled();
+  });
+
   test("rejects when the host cannot write notes", async () => {
     const api = createApi({ app: {} as never, registries: createRegistries(), files: {} as never, normalizePath, openFigure: () => null });
     await expect(api.blockId("Notes/a.md", 3)).rejects.toThrow(/blockId/);

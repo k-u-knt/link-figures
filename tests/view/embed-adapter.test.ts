@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { noteFile, openEmbed } from "../../src/view/embed-adapter";
+import { noteFile, openEmbed, sourceOffset } from "../../src/view/embed-adapter";
 import { fakeEmbedRegistry, type FakeEmbed } from "../support/fake-embed";
 
 const file = { path: "Notes/a.md", extension: "md", basename: "a" };
@@ -162,5 +162,80 @@ describe("noteFile", () => {
     expect(noteFile(app as never, "Notes/a.md")).toBe(file);
     expect(noteFile(app as never, "Notes/b.md")).toBeNull();
     expect(noteFile({} as never, "Notes/a.md")).toBeNull();
+  });
+});
+
+describe("sourceOffset: where in the Markdown a place in its rendering is", () => {
+  test("plain text maps one to one; markup the rendering hides is stepped over", () => {
+    expect(sourceOffset("Second leg", "Second legend line here.")).toBe(10);
+    expect(sourceOffset("Legend", "## Legend")).toBe(9);
+    expect(sourceOffset("a bold w", "a **bold** word")).toBe(12);
+    expect(sourceOffset("see Note and", "see [[Notes/Note|Note]] and more")).toBe("see [[Notes/Note|Note]] and".length);
+    expect(sourceOffset("", "- [ ] task")).toBe(0);
+    expect(sourceOffset("ta", "- [ ] task")).toBe(8);
+  });
+
+  test("a soft line break rendered as a space, or as nothing, still lines up", () => {
+    expect(sourceOffset("one two", "one\ntwo")).toBe(7);
+    expect(sourceOffset("onetw", "one\ntwo")).toBe(6);
+  });
+
+  test("text the source does not have stops at the last character that matched", () => {
+    expect(sourceOffset("Note body", "> [!note]\n> body")).toBeLessThanOrEqual("> [!note]\n> body".length);
+  });
+});
+
+describe("edit at a point: the caret goes where the rendered note was clicked", () => {
+  /** A fake embed rendering two paragraphs of `text` as Obsidian's reading view does, with its sections. */
+  function rendered() {
+    const { registry, embeds } = fakeEmbedRegistry();
+    const live = openEmbed({ embedRegistry: registry } as never, file as never, "#Legend", container(), "f")!;
+    const embed = embeds[0] as FakeEmbed & Record<string, unknown>;
+    embed.text = "\nLegend body line.\n\nSecond **legend** line here.\n";
+    embed.previewEl.textContent = "";
+    const first = embed.previewEl.appendChild(document.createElement("p"));
+    first.textContent = "Legend body line.";
+    const second = embed.previewEl.appendChild(document.createElement("p"));
+    second.append("Second ", Object.assign(document.createElement("strong"), { textContent: "legend" }), " line here.");
+    embed.previewMode = {
+      renderer: {
+        sections: [
+          { el: first, start: { offset: 1 }, end: { offset: 18 } },
+          { el: second, start: { offset: 20 }, end: { offset: 48 } },
+        ],
+      },
+    };
+    const cursor: number[] = [];
+    // The editor Obsidian opens, with the members of its Editor that are used.
+    const showEditor = embed.showEditor.bind(embed);
+    embed.showEditor = (at?: unknown) => {
+      showEditor(at);
+      (embed.editMode as Record<string, unknown>).editor = { offsetToPos: (o: number) => ({ offset: o }), setCursor: (p: { offset: number }) => cursor.push(p.offset) };
+    };
+    return { live, embed, second, cursor };
+  }
+
+  test("the clicked character's place in the section's Markdown, set once the editor is up; the embed is not given the point", async () => {
+    const { live, embed, second, cursor } = rendered();
+    // The click lands in "legend" (inside the bold), after "leg".
+    const strong = second.querySelector("strong")!.firstChild!;
+    (document as unknown as { caretRangeFromPoint: unknown }).caretRangeFromPoint = (x: number, y: number) => {
+      expect([x, y]).toEqual([50, 60]);
+      const range = document.createRange();
+      range.setStart(strong, 3);
+      return range;
+    };
+    live.edit({ x: 50, y: 60 });
+    expect(embed.editorCalls).toEqual([undefined]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cursor).toEqual([20 + "Second **leg".length]);
+  });
+
+  test("a point that is not in a section of the rendering goes to the embed as before", () => {
+    const { live, embed, cursor } = rendered();
+    (document as unknown as { caretRangeFromPoint: unknown }).caretRangeFromPoint = () => null;
+    live.edit({ x: 5, y: 6 });
+    expect(embed.editorCalls).toEqual([{ x: 5, y: 6 }]);
+    expect(cursor).toEqual([]);
   });
 });

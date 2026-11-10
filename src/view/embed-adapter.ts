@@ -12,6 +12,16 @@ import type { App, TFile } from "obsidian";
  * `register` callbacks run when it goes. Typing saves through a debounced `requestSave`, whose `run()` saves now;
  * `savePromise` is a write under way. A heading or block subpath edits only that section (checked in Obsidian: the
  * embed splits the note into `before`, `heading`, its text and `after`, and writes them back together).
+ *
+ * Where the caret goes: `showEditor(evt)` places it with CodeMirror's `posAtCoords` at the click, in the editor's own
+ * layout, which is not the rendered view's: Live Preview gives each blank line between paragraphs a whole line where the
+ * reading view has a paragraph margin, and draws headings taller, so the editor's text sits lower than the rendered text
+ * did, more so further down (two lines, 46px, by the third paragraph), and the caret landed lines above the click.
+ * Instead, the clicked character is found in the rendering (`caretRangeFromPoint`), in its section of the reading view
+ * (`previewMode.renderer.sections`: each block's element and its offsets in the embed's `text`, which is what the
+ * editor holds), and traced back into the Markdown (`sourceOffset`); the editor is opened without the point, the caret
+ * put there (`editMode.editor`), and the editor scrolled so the clicked line stays where it was clicked, as far as it
+ * can. Any of that missing, the point goes to `showEditor` as before.
  */
 export interface LiveEmbed {
   /** Opens the editor, with the caret at `at` (client px) when given. Nothing when `canEdit` says no. */
@@ -50,6 +60,141 @@ interface MarkdownEmbed {
   loadFile(): Promise<void>;
   showEditor(at?: { x: number; y: number }): void;
   showPreview(save?: boolean): void;
+}
+
+/** A block of the reading view: its element, and where its Markdown is in the embed's `text`. */
+interface PreviewSection {
+  el?: unknown;
+  start?: { offset?: unknown };
+  end?: { offset?: unknown };
+}
+
+/** The members of the open editor (`editMode`) and of Obsidian's `Editor` that place the caret. */
+interface CaretEditor {
+  editor?: { offsetToPos?(offset: number): unknown; setCursor?(pos: unknown): void };
+  cm?: { coordsAtPos?(pos: number): { top: number; bottom: number } | null; scrollDOM?: HTMLElement };
+  iframeEl?: HTMLIFrameElement | null;
+}
+
+/**
+ * Where in `source` (Markdown) the end of `rendered` (the text its rendering shows up to a point) is: each rendered
+ * character is matched with the next equal one in the source, stepping over what the rendering does not show (`**`,
+ * `[[target|`, `## `, a list's `- [ ] `). Whitespace matches whitespace (a soft line break renders as a space), and a
+ * rendered character the source does not have is skipped.
+ */
+export function sourceOffset(rendered: string, source: string): number {
+  let at = 0;
+  const space = /\s/;
+  for (const ch of rendered) {
+    const blank = space.test(ch);
+    let j = at;
+    while (j < source.length && (blank ? !space.test(source[j]) : source[j] !== ch)) j++;
+    if (j >= source.length) continue;
+    at = j + 1;
+  }
+  return at;
+}
+
+/** The text node and offset under the client point (`at`) in `doc`, if the browser can say. */
+function caretAt(doc: Document, at: { x: number; y: number }): { node: Node; offset: number } | null {
+  const d = doc as Document & { caretRangeFromPoint?(x: number, y: number): Range | null; caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null };
+  if (typeof d.caretRangeFromPoint === "function") {
+    const range = d.caretRangeFromPoint(at.x, at.y);
+    return range ? { node: range.startContainer, offset: range.startOffset } : null;
+  }
+  if (typeof d.caretPositionFromPoint === "function") {
+    const pos = d.caretPositionFromPoint(at.x, at.y);
+    return pos ? { node: pos.offsetNode, offset: pos.offset } : null;
+  }
+  return null;
+}
+
+/**
+ * The offset in `embed.text` (what its editor holds) of the character shown at the client point `at` in its rendered
+ * view; null when that cannot be told (no section of the rendering there, or the reading view's internals not as
+ * expected).
+ */
+function textOffsetAt(embed: MarkdownEmbed, at: { x: number; y: number }): number | null {
+  const preview = (embed as { previewEl?: unknown }).previewEl;
+  const sections = (embed as { previewMode?: { renderer?: { sections?: unknown } } }).previewMode?.renderer?.sections;
+  const text = (embed as { text?: unknown }).text;
+  if (!(preview instanceof Node) || !Array.isArray(sections) || typeof text !== "string") return null;
+  const hit = caretAt(preview.ownerDocument ?? document, at);
+  if (!hit || !preview.contains(hit.node)) return null;
+  for (const section of sections as PreviewSection[]) {
+    const el = section.el;
+    const start = section.start?.offset;
+    const end = section.end?.offset;
+    if (!(el instanceof Node) || !el.contains(hit.node) || typeof start !== "number" || typeof end !== "number") continue;
+    const range = el.ownerDocument!.createRange();
+    range.setStart(el, 0);
+    range.setEnd(hit.node, hit.offset);
+    return start + Math.min(sourceOffset(range.toString(), text.slice(start, end)), end - start);
+  }
+  return null;
+}
+
+/** How long (ms) the clicked line is held at the click's height while the editor settles (it resizes, and restores its scroll). */
+const HOLD_LINE_MS = 400;
+
+/**
+ * Puts the open editor's caret at `offset` of its text, once the editor is up (Obsidian places its own caret a tick
+ * after `showEditor`, in the editor's window), and scrolls it so that line is at `at.y` (client px), the height at
+ * which the rendered text was clicked, as far as the editor scrolls. The editor restores its own scroll as it settles
+ * (on its first resizes), so the line is held there, frame by frame, for `HOLD_LINE_MS`, or until the user scrolls,
+ * types or presses in it.
+ */
+function placeCaret(embed: MarkdownEmbed, offset: number, at: { x: number; y: number }): void {
+  const open = embed.editMode as (MarkdownEmbed["editMode"] & CaretEditor) | null | undefined;
+  const editor = open?.editor;
+  if (typeof editor?.offsetToPos !== "function" || typeof editor.setCursor !== "function") return;
+  const win = (open?.iframeEl?.ownerDocument?.defaultView ?? globalThis) as Pick<Window, "setTimeout" | "requestAnimationFrame">;
+  /** Scrolls the caret's line to the click's height; false when it cannot be measured. */
+  const hold = (): boolean => {
+    const cm = open?.cm;
+    const frame = open?.iframeEl;
+    const coords = cm?.coordsAtPos?.(offset);
+    const scroller = cm?.scrollDOM;
+    if (!coords || !scroller || !frame) return false;
+    // The iframe is drawn at the stage's zoom: its px are `scale` screen px.
+    const box = frame.getBoundingClientRect();
+    const scale = frame.clientWidth > 0 ? box.width / frame.clientWidth : 1;
+    const lineY = box.y + ((coords.top + coords.bottom) / 2) * scale;
+    const by = (lineY - at.y) / scale;
+    if (Math.abs(by) >= 1) scroller.scrollTop += by;
+    return true;
+  };
+  win.setTimeout(() => {
+    if (embed.editMode !== open) return;
+    try {
+      editor.setCursor!(editor.offsetToPos!(offset));
+      if (!hold()) return;
+    } catch {
+      // The caret stays where Obsidian put it.
+      return;
+    }
+    const target = open?.cm?.scrollDOM;
+    let stopped = false;
+    const stop = (): void => {
+      stopped = true;
+    };
+    const events = ["wheel", "keydown", "pointerdown"] as const;
+    for (const type of events) target?.addEventListener(type, stop, { capture: true, once: true });
+    const until = Date.now() + HOLD_LINE_MS;
+    const frame = (): void => {
+      if (stopped || embed.editMode !== open || Date.now() > until) {
+        for (const type of events) target?.removeEventListener(type, stop, { capture: true });
+        return;
+      }
+      try {
+        hold();
+      } catch {
+        stopped = true;
+      }
+      win.requestAnimationFrame(frame);
+    };
+    win.requestAnimationFrame(frame);
+  }, 0);
 }
 
 type EmbedCreator = (ctx: { app: App; linktext: string; sourcePath: string; containerEl: HTMLElement; depth: number }, file: TFile, subpath: string) => unknown;
@@ -132,8 +277,16 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
   const live: LiveEmbed = {
     edit(at) {
       if (unloaded || embed.editMode || !canEdit()) return;
-      // A copy: the embed converts the point into the iframe's in place.
-      embed.showEditor(at ? { x: at.x, y: at.y } : undefined);
+      // The clicked character's place in the note, read from the rendering before it is hidden (see the top of the file).
+      let offset: number | null = null;
+      try {
+        offset = at ? textOffsetAt(embed, at) : null;
+      } catch {
+        offset = null;
+      }
+      // Else the point, a copy: the embed converts it into the iframe's in place.
+      embed.showEditor(at && offset === null ? { x: at.x, y: at.y } : undefined);
+      if (at && offset !== null) placeCaret(embed, offset, at);
       // Read afresh: `showEditor` made it (or did not, for an embed that is not editable).
       const editor = embed.editMode as MarkdownEmbed["editMode"];
       if (!editor) return;

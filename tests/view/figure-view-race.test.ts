@@ -195,6 +195,8 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
     duringModify: null as null | ((f: FakeFile) => void),
     /** While set, `process` never finishes. */
     stuck: false,
+    /** While set, `create` fails (a backup cannot be written). */
+    createFails: false,
   };
   const vault = {
     on: (name: string, cb: (f: unknown) => void) => {
@@ -207,6 +209,11 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
       return texts.get(f.path)!;
     }),
     cachedRead: vi.fn(async (f: FakeFile) => texts.get(f.path)!),
+    create: vi.fn(async (path: string, text: string) => {
+      if (hooks.createFails || texts.has(path)) throw new Error(`cannot create "${path}"`);
+      texts.set(path, text);
+      writes.push({ by: "create", path, text });
+    }),
     modify: vi.fn(async (f: FakeFile, text: string) => {
       texts.set(f.path, text);
       writes.push({ by: "view", path: f.path, text });
@@ -321,7 +328,7 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
    * the view takes as it does from `vault.on("rename")`); waits for `prompt` (the "Update links" dialog); then splices
    * the new links in at the offsets it collected, into the text the file has then, checking nothing.
    */
-  const renameNote = (from: string, to: string, prompt: Promise<void>): Promise<unknown> => {
+  const renameNote = (from: string, to: string, prompt: Promise<void | "do not update">): Promise<unknown> => {
     const job = async () => {
       const name = from.replace(/\.md$/, "");
       const refs = [...disk.text.matchAll(/\[\[([^\]|#]*)([^\]]*)\]\]/g)]
@@ -331,8 +338,7 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
       const note = Object.assign(new TFile(), { path: to, name: to.split("/").pop() });
       (view as unknown as { onVaultRename(f: unknown, old: string): void } | null)?.onVaultRename(note, from);
       fileManager.inProgressUpdates = null;
-      await prompt;
-      if (refs.length === 0) return;
+      if ((await prompt) === "do not update" || refs.length === 0) return;
       await vault.process(file, (text) => {
         let out = text;
         for (const r of [...refs].sort((a, b) => b.start - a.start)) out = out.slice(0, r.start) + r.text + out.slice(r.end);
@@ -669,13 +675,71 @@ describe("a rename's link update in Obsidian, and the view's own save", () => {
     await renaming;
     await vi.advanceTimersByTimeAsync(3000);
 
-    // The splice did damage the file (the model is right), and the view wrote its figure back over it.
-    expect(t.writes.some((w) => !parses(w.text))).toBe(true);
+    // The splice did damage the file (the model is right), and the view wrote its figure back over it, after backing
+    // the damaged text up beside the figure.
+    const damaged = t.writes.findIndex((w) => !parses(w.text));
+    expect(damaged).toBeGreaterThanOrEqual(0);
+    const backup = t.writes.findIndex((w) => w.by === "create");
+    const repaired = t.writes.findIndex((w, i) => i > damaged && w.by === "view" && w.path === PATH);
+    expect(backup).toBeGreaterThan(damaged);
+    expect(repaired).toBeGreaterThan(backup);
+    expect(t.writes[backup].path).toMatch(/^Notes\/M2i OpenN \(damaged \d{4}-\d\d-\d\d \d\d-\d\d-\d\d\)\.md$/);
+    expect(t.writes[backup].text).toBe(t.writes[damaged].text);
     expect(parses(t.disk.text)).toBe(true);
     expect(ids(t.disk.text)).toEqual(["c-1"]);
     expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
     expect(t.view.hasDocument()).toBe(true);
-    expect(notices.some((n) => n.includes("repaired"))).toBe(true);
+    expect(notices.some((n) => n.includes("repaired") && n.includes(t.writes[backup].path))).toBe(true);
+  });
+
+  test("a damaged file that cannot be backed up is never overwritten: it is shown as it is", async () => {
+    const t = setup(twoNoteCards(), { linkQueue: false });
+    await t.opened();
+    t.hooks.createFails = true;
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    await vi.advanceTimersByTimeAsync(300);
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    await vi.advanceTimersByTimeAsync(3000);
+    answer();
+    await vi.advanceTimersByTimeAsync(1000);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(3000);
+    const damaged = t.writes.findIndex((w) => !parses(w.text));
+    expect(damaged).toBeGreaterThanOrEqual(0);
+    expect(t.writes.slice(damaged + 1)).toEqual([]);
+    expect(parses(t.disk.text)).toBe(false);
+    expect(t.view.hasDocument()).toBe(false);
+    expect(notices.some((n) => n.includes("could not be backed up"))).toBe(true);
+  });
+
+  test('"Do not update" closes the window: a damaged file that comes later is left alone', async () => {
+    const t = setup(twoNoteCards());
+    await t.opened();
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", Promise.resolve("do not update" as const));
+    await vi.advanceTimersByTimeAsync(500);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(500);
+    const broken = t.disk.text.replace("\"pages\"", "\"pages\",,");
+    expect(parses(broken)).toBe(false);
+    t.externalWrite(broken);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(t.disk.text).toBe(broken);
+    expect(t.writes.filter((w) => w.by !== "external")).toEqual([]);
+    expect(t.view.hasDocument()).toBe(false);
+  });
+
+  test("a relink the user made before the link update landed is kept, not taken from the file", async () => {
+    const t = setup(twoNoteCards());
+    await t.opened();
+    // c-0 relinked by the user (unsaved), then the note renamed: the file's c-0 gets the renamed old link.
+    await t.api.run(PATH, "node.update", { id: "c-0", patch: { file: "Notes/Other" } });
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", Promise.resolve());
+    await vi.advanceTimersByTimeAsync(500);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(linkOf(t.disk.text, "c-0")).toBe("Notes/Other");
+    expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
   });
 
   test("a link update that lands while the view has an unsaved edit keeps the edit and takes the new links", async () => {

@@ -56,3 +56,31 @@ describe("afterLinkUpdates", () => {
     await expect(afterLinkUpdates({} as never, async () => "plain")).resolves.toBe("plain");
   });
 });
+
+describe("afterLinkUpdates with alwaysQueue", () => {
+  test("a write asked for inside a link update's own job is queued after that job (the view's save)", async () => {
+    const fm = fileManager();
+    const app = { fileManager: fm } as never;
+    const order: string[] = [];
+    let save!: Promise<unknown>;
+    await fm.updateQueue.queue(async () => {
+      fm.inProgressUpdates = [];
+      save = afterLinkUpdates(app, async () => void order.push("save"), { alwaysQueue: true });
+      await Promise.resolve();
+      order.push("rename");
+      fm.inProgressUpdates = null;
+      await new Promise((r) => setTimeout(r, 5));
+      order.push("links applied");
+    });
+    await save;
+    expect(order).toEqual(["rename", "links applied", "save"]);
+  });
+
+  test("a queue that gives back no promise still gives a promise", async () => {
+    let job: (() => Promise<unknown>) | undefined;
+    const app = { fileManager: { inProgressUpdates: null, updateQueue: { queue: (j: () => Promise<unknown>) => void (job = j) } } } as never;
+    const write = afterLinkUpdates(app, async () => "x");
+    expect(write).toBeInstanceOf(Promise);
+    await job!();
+  });
+});

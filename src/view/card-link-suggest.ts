@@ -1,4 +1,6 @@
 import { prepareFuzzySearch, type App, type TFile } from "obsidian";
+import { blockAt, existingBlockId, idPlacement, type Block } from "../links/block-id";
+import type { NoteCache } from "../links/note-block-id";
 import { codeRanges } from "../model/card-links";
 
 /**
@@ -13,7 +15,19 @@ import { codeRanges } from "../model/card-links";
  */
 
 /** What the suggestions read from the app: the vault's files and the metadata cache. */
-export type LinkSuggestApp = { vault: Pick<App["vault"], "getMarkdownFiles" | "getFiles">; metadataCache: Pick<App["metadataCache"], "getFirstLinkpathDest" | "fileToLinktext" | "getFileCache"> };
+export type LinkSuggestApp = {
+  vault: Pick<App["vault"], "getMarkdownFiles" | "getFiles" | "cachedRead">;
+  metadataCache: Pick<App["metadataCache"], "getFirstLinkpathDest" | "fileToLinktext" | "getFileCache">;
+  workspace?: Pick<App["workspace"], "getLastOpenFiles">;
+};
+
+/** Writes (or finds) the block id at `line` of the note at `path`: the drop-from-note machinery, `api.blockId`. */
+export type BlockIdWriter = (path: string, line: number) => Promise<{ subpath: string }>;
+
+/** What `attachLinkSuggest` may be given beyond the app: `blockId` lets it offer blocks that have no id yet. */
+export interface LinkSuggestOptions {
+  blockId?: BlockIdWriter;
+}
 
 /**
  * The link being typed at the caret: `from` is just after its `[[`, `to` the caret. `kind` says what is listed: files
@@ -56,51 +70,143 @@ export function linkQueryAt(text: string, caret: number): LinkQuery | null {
   return { embed, from, to: caret, ...q, target: q.target.trim() };
 }
 
-/** One entry of the list: what it shows, and the link text (without `[[`/`]]`) it inserts. */
+/**
+ * One entry of the list: what it shows, and the link text (without `[[`/`]]`) it inserts, or, for a block that has no
+ * id yet, the function that writes one into the note and gives the link text then.
+ */
 interface Suggestion {
   title: string;
   note?: string;
-  insert: string;
+  insert: string | (() => Promise<string>);
 }
 
 /** At most this many entries are listed, as Obsidian's suggesters limit theirs. */
 const LIMIT = 100;
 
-/** A heading as Obsidian writes it into a link: the characters a link cannot hold (`# | ^ : % [ ] \`) become spaces. */
+/**
+ * A heading as it is written into a link: the characters a link cannot hold (`# | ^ : % [ ] \` and line breaks) become
+ * spaces, and runs of spaces one. It agrees with the example obsidian.d.ts gives for `stripHeadingForLink`.
+ */
 export function headingLinktext(heading: string): string {
   return heading.replace(/[#|^:%[\]\\]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function fileSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery): Suggestion[] {
-  const files: TFile[] = q.embed ? app.vault.getFiles() : app.vault.getMarkdownFiles();
-  const describe = (f: TFile): Suggestion => {
-    const slash = f.path.lastIndexOf("/");
-    return { title: f.extension === "md" ? f.basename : f.name, note: slash === -1 ? undefined : f.path.slice(0, slash), insert: app.metadataCache.fileToLinktext(f, sourcePath) };
-  };
-  const recent = (a: TFile, b: TFile) => (b.stat?.mtime ?? 0) - (a.stat?.mtime ?? 0);
-  if (q.query.trim() === "") return [...files].sort(recent).slice(0, LIMIT).map(describe);
-  const search = prepareFuzzySearch(q.query.trim());
-  const scored: { file: TFile; score: number }[] = [];
-  for (const f of files) {
-    const title = f.extension === "md" ? f.basename : f.name;
-    const path = f.extension === "md" ? f.path.slice(0, -3) : f.path;
-    const best = [search(title), search(path)].reduce<number | null>((s, r) => (r && (s === null || r.score > s) ? r.score : s), null);
-    if (best !== null) scored.push({ file: f, score: best });
-  }
-  scored.sort((a, b) => b.score - a.score || recent(a.file, b.file));
-  return scored.slice(0, LIMIT).map((s) => describe(s.file));
+/** The aliases in a note's front matter (`aliases` or `alias`, a list or one string), as `parseFrontMatterAliases` reads them. */
+function aliasesOf(frontmatter: unknown): string[] {
+  if (!frontmatter || typeof frontmatter !== "object") return [];
+  const fm = frontmatter as Record<string, unknown>;
+  const raw = fm.aliases ?? fm.alias;
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [];
+  return list.filter((a): a is string => typeof a === "string").map((a) => a.trim()).filter((a) => a !== "");
 }
 
-function sectionSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery): Suggestion[] {
+/** The best score `search` gives any of `texts`, or null when none matches. */
+function bestScore(search: (text: string) => { score: number } | null, texts: string[]): number | null {
+  let best: number | null = null;
+  for (const t of texts) {
+    const r = search(t);
+    if (r && (best === null || r.score > best)) best = r.score;
+  }
+  return best;
+}
+
+function fileSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery): Suggestion[] {
+  const files: TFile[] = q.embed ? app.vault.getFiles() : app.vault.getMarkdownFiles();
+  const titleOf = (f: TFile) => (f.extension === "md" ? f.basename : f.name);
+  const describe = (f: TFile): Suggestion => {
+    const slash = f.path.lastIndexOf("/");
+    return { title: titleOf(f), note: slash === -1 ? undefined : f.path.slice(0, slash), insert: app.metadataCache.fileToLinktext(f, sourcePath) };
+  };
+  const recent = (a: TFile, b: TFile) => (b.stat?.mtime ?? 0) - (a.stat?.mtime ?? 0);
+  if (q.query.trim() === "") {
+    // As Obsidian's: the files opened last first, in that order, then the rest by their last change.
+    const lastOpen = app.workspace?.getLastOpenFiles?.() ?? [];
+    const rank = new Map(lastOpen.map((path, i) => [path, i]));
+    const opened = files.filter((f) => rank.has(f.path)).sort((a, b) => rank.get(a.path)! - rank.get(b.path)!);
+    const rest = files.filter((f) => !rank.has(f.path)).sort(recent);
+    return [...opened, ...rest].slice(0, LIMIT).map(describe);
+  }
+  const search = prepareFuzzySearch(q.query.trim());
+  const scored: { file: TFile; score: number; suggestion: Suggestion }[] = [];
+  for (const f of files) {
+    const score = bestScore(search, [titleOf(f), f.extension === "md" ? f.path.slice(0, -3) : f.path]);
+    if (score !== null) scored.push({ file: f, score, suggestion: describe(f) });
+    if (f.extension !== "md") continue;
+    // A note found by an alias is linked with the alias shown: `[[<linktext>|<alias>]]`.
+    for (const alias of aliasesOf(app.metadataCache.getFileCache(f)?.frontmatter)) {
+      const r = search(alias);
+      if (!r) continue;
+      const linktext = app.metadataCache.fileToLinktext(f, sourcePath);
+      scored.push({ file: f, score: r.score, suggestion: { title: alias, note: f.path.slice(0, -3), insert: `${linktext}|${alias}` } });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score || recent(a.file, b.file));
+  return scored.slice(0, LIMIT).map((s) => s.suggestion);
+}
+
+/** One line of a block as its preview shows it: without quote and list markers, a fence line, or an id at its end. */
+function previewLine(line: string): string {
+  let l = line.replace(/^\s*(>\s?)+/, "");
+  if (/^\s*(`{3,}|~{3,})/.test(l)) return "";
+  l = l.replace(/^\s*([-*+]|\d+[.)])\s+(\[.\]\s+)?/, "");
+  return l.replace(/(^|\s)\^[A-Za-z0-9-]+\s*$/, "");
+}
+
+/** The one-line preview of lines `start`..`end` of `lines`. */
+function preview(lines: readonly string[], start: number, end: number): string {
+  const text = lines.slice(start, end + 1).map(previewLine).join(" ").replace(/\s+/g, " ").trim();
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
+/**
+ * The blocks of a note that can be linked by an id, in its order: paragraphs, each list item, quotes, callouts, tables,
+ * code and math (the sections `idPlacement` places an id for), with the id each has, if any.
+ */
+export function noteBlocks(cache: NoteCache): { block: Block; id: string | null }[] {
+  const out: { block: Block; id: string | null }[] = [];
+  for (const section of cache.sections ?? []) {
+    const starts =
+      section.type === "list"
+        ? (cache.listItems ?? []).map((i) => i.position.start.line).filter((l) => l >= section.position.start.line && l <= section.position.end.line)
+        : idPlacement(section.type) !== null
+          ? [section.position.start.line]
+          : [];
+    for (const line of starts) {
+      const block = blockAt(cache, line);
+      if (block && idPlacement(block.type) !== null) out.push({ block, id: existingBlockId(cache.blocks, block) });
+    }
+  }
+  return out;
+}
+
+async function blockSuggestions(app: LinkSuggestApp, file: TFile, linktext: string, q: LinkQuery, blockId: BlockIdWriter | undefined): Promise<Suggestion[]> {
+  const cache = app.metadataCache.getFileCache(file) as NoteCache | null;
+  if (!cache) return [];
+  const lines = (await app.vault.cachedRead(file)).split(/\r?\n/);
+  const entries = noteBlocks(cache)
+    .filter(({ id }) => id !== null || blockId !== undefined)
+    .map(({ block, id }) => {
+      const title = preview(lines, block.start, block.end);
+      const insert = id !== null ? `${linktext}#^${id}` : async () => `${linktext}${(await blockId!(file.path, block.start)).subpath}`;
+      return { texts: id ? [title, id] : [title], suggestion: { title, note: id ? `^${id}` : undefined, insert } as Suggestion };
+    });
+  if (q.query.trim() === "") return entries.slice(0, LIMIT).map((e) => e.suggestion);
+  const search = prepareFuzzySearch(q.query.trim());
+  return entries
+    .map((e) => ({ e, score: bestScore(search, e.texts) }))
+    .filter((x) => x.score !== null)
+    .sort((a, b) => b.score! - a.score!)
+    .slice(0, LIMIT)
+    .map((x) => x.e.suggestion);
+}
+
+function sectionSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery, blockId: BlockIdWriter | undefined): Suggestion[] | Promise<Suggestion[]> {
   if (q.target === "") return [];
   const file = app.metadataCache.getFirstLinkpathDest(q.target, sourcePath);
   if (!file) return [];
-  const cache = app.metadataCache.getFileCache(file);
   const linktext = app.metadataCache.fileToLinktext(file, sourcePath);
-  const entries: { text: string; suggestion: Suggestion }[] =
-    q.kind === "heading"
-      ? (cache?.headings ?? []).map((h) => ({ text: h.heading, suggestion: { title: h.heading, insert: `${linktext}#${headingLinktext(h.heading)}` } }))
-      : Object.keys(cache?.blocks ?? {}).map((id) => ({ text: id, suggestion: { title: `^${id}`, insert: `${linktext}#^${id}` } }));
+  if (q.kind === "block") return blockSuggestions(app, file, linktext, q, blockId);
+  const entries = (app.metadataCache.getFileCache(file)?.headings ?? []).map((h) => ({ text: h.heading, suggestion: { title: h.heading, insert: `${linktext}#${headingLinktext(h.heading)}` } }));
   if (q.query.trim() === "") return entries.slice(0, LIMIT).map((e) => e.suggestion);
   const search = prepareFuzzySearch(q.query.trim());
   return entries
@@ -111,10 +217,13 @@ function sectionSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuer
     .map((x) => x.e.suggestion);
 }
 
-/** What the list offers for `q`; nothing when the app has no vault to read (a test's or a headless context). */
-export function linkSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery): Suggestion[] {
+/**
+ * What the list offers for `q` (blocks after reading the note, so as a promise); nothing when the app has no vault to
+ * read (a test's or a headless context).
+ */
+export function linkSuggestions(app: LinkSuggestApp, sourcePath: string, q: LinkQuery, blockId?: BlockIdWriter): Suggestion[] | Promise<Suggestion[]> {
   if (!app?.vault || !app.metadataCache) return [];
-  return q.kind === "file" ? fileSuggestions(app, sourcePath, q) : sectionSuggestions(app, sourcePath, q);
+  return q.kind === "file" ? fileSuggestions(app, sourcePath, q) : sectionSuggestions(app, sourcePath, q, blockId);
 }
 
 /** Text styles that decide where the characters of a textarea fall, copied onto the mirror that finds the caret. */
@@ -151,14 +260,17 @@ function caretPoint(area: HTMLTextAreaElement): { x: number; bottom: number; top
  * body at the caret. While it is open, ArrowUp/ArrowDown move through it, Enter or Tab accept, Escape closes it, and a
  * click accepts; these keys go no further (call this before adding the editor's own key handlers, so its Escape is not
  * reached). Accepting writes the link text after `[[` and the closing `]]` (one already there is not doubled). The list
- * closes on a blur and when the caret leaves the link. Returns the function that detaches it all.
+ * closes on a blur and when the caret leaves the link. With `options.blockId`, a block that has no id is offered too:
+ * choosing it writes an id into the note through it (an undo in the card leaves that id in the note), then inserts the
+ * link. Returns the function that detaches it all.
  */
-export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | LinkSuggestApp, sourcePath: string): () => void {
+export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | LinkSuggestApp, sourcePath: string, options: LinkSuggestOptions = {}): () => void {
   const doc = textarea.ownerDocument;
   let container: HTMLElement | null = null;
   let items: Suggestion[] = [];
   let selected = 0;
   let query: LinkQuery | null = null;
+  let detached = false;
 
   const close = () => {
     container?.remove();
@@ -176,19 +288,32 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     });
   };
 
+  /** Writes `insert` in place of what was typed after `[[` (from `from` to `to`), closed with `]]`, the caret after it. */
+  const write = (from: number, to: number, insert: string) => {
+    const text = textarea.value;
+    // A `]]` already closing this link (typed, or the rest of a link being edited) is kept, not doubled.
+    const after = /^[^[\]\n]*\]\]/.exec(text.slice(to));
+    const end = after ? to + after[0].length : to;
+    const caret = from + insert.length + 2;
+    textarea.value = `${text.slice(0, from)}${insert}]]${text.slice(end)}`;
+    textarea.setSelectionRange(caret, caret);
+  };
+
   const accept = (i: number) => {
     const q = query;
     const s = items[i];
     if (!q || !s) return;
-    const text = textarea.value;
-    // A `]]` already closing this link (typed, or the rest of a link being edited) is kept, not doubled.
-    const after = /^[^[\]\n]*\]\]/.exec(text.slice(q.to));
-    const end = after ? q.to + after[0].length : q.to;
-    const value = `${text.slice(0, q.from)}${s.insert}]]${text.slice(end)}`;
-    const caret = q.from + s.insert.length + 2;
     close();
-    textarea.value = value;
-    textarea.setSelectionRange(caret, caret);
+    if (typeof s.insert === "string") return write(q.from, q.to, s.insert);
+    // A block with no id: one is written into the note first. The link goes in once it is, if what was typed is
+    // still there as it was (the edit may have ended, or the text changed, meanwhile).
+    const typed = textarea.value.slice(q.from, q.to);
+    s.insert().then(
+      (insert) => {
+        if (!detached && textarea.isConnected && textarea.value.slice(q.from, q.to) === typed) write(q.from, q.to, insert);
+      },
+      (error: unknown) => console.error("Link Figures: could not give the block an id", error),
+    );
   };
 
   const show = () => {
@@ -228,14 +353,25 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     container.style.top = `${below ? at.bottom : at.top - height}px`;
   };
 
+  /** Counts the updates, so a list read late (a note's blocks) is shown only when nothing was typed since. */
+  let seq = 0;
   const update = () => {
+    const ask = ++seq;
     const q = linkQueryAt(textarea.value, textarea.selectionStart);
-    const found = q && textarea.selectionStart === textarea.selectionEnd ? linkSuggestions(app as LinkSuggestApp, sourcePath, q) : [];
-    if (!q || found.length === 0) return close();
-    query = q;
-    items = found;
-    selected = 0;
-    show();
+    const found = q && textarea.selectionStart === textarea.selectionEnd ? linkSuggestions(app as LinkSuggestApp, sourcePath, q, options.blockId) : [];
+    const apply = (list: Suggestion[]) => {
+      if (ask !== seq || detached) return;
+      if (!q || list.length === 0) return close();
+      query = q;
+      items = list;
+      selected = 0;
+      show();
+    };
+    if (Array.isArray(found)) return apply(found);
+    found.then(apply, (error: unknown) => {
+      console.error("Link Figures: could not list the note's blocks", error);
+      if (ask === seq) close();
+    });
   };
 
   const onKey = (ev: KeyboardEvent) => {
@@ -271,13 +407,20 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
   textarea.addEventListener("click", update);
   textarea.addEventListener("keydown", onKey);
   textarea.addEventListener("keyup", onKeyUp);
-  textarea.addEventListener("blur", close);
+  // A blur closes the list, and drops any list still being read.
+  const onBlur = () => {
+    seq++;
+    close();
+  };
+  textarea.addEventListener("blur", onBlur);
   return () => {
+    detached = true;
+    seq++;
     close();
     textarea.removeEventListener("input", update);
     textarea.removeEventListener("click", update);
     textarea.removeEventListener("keydown", onKey);
     textarea.removeEventListener("keyup", onKeyUp);
-    textarea.removeEventListener("blur", close);
+    textarea.removeEventListener("blur", onBlur);
   };
 }

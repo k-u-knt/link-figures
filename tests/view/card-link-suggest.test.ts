@@ -2,7 +2,7 @@
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import { createPage } from "../../src/model/defaults";
 import type { CardNode } from "../../src/model/types";
-import { attachLinkSuggest, linkQueryAt } from "../../src/view/card-link-suggest";
+import { attachLinkSuggest, headingLinktext, linkQueryAt } from "../../src/view/card-link-suggest";
 
 // `obsidian` ships only typings. Its fuzzy search is stood in for by a subsequence match whose score is better (higher)
 // the tighter the match, as Obsidian's is.
@@ -31,29 +31,51 @@ const file = (path: string, mtime = 0): FakeFile => {
 };
 const files = [file("Projects/analysis.md", 3), file("anatomy.md", 2), file("zebra.md", 1), file("plots/analysis plot.png", 0)];
 
-function fakeApp() {
+/** The note `Projects/analysis.md`: lines 0-18, with the sections and list items its cache gives. */
+const NOTE = [
+  "---", "aliases: [Study A]", "---", "# Methods", "We measured mice.", "", "- first item", "- second item ^item2", "",
+  "> a quote", "", "| a | b |", "|---|---|", "| 1 | 2 |", "", "```py", "print(1)", "```", "^code1",
+].join("\n");
+const at = (start: number, end = start) => ({ start: { line: start }, end: { line: end } });
+const NOTE_CACHE = {
+  frontmatter: { aliases: ["Study A"] },
+  headings: [
+    { heading: "Methods", level: 2, position: at(3) },
+    { heading: "Results: mice", level: 2, position: at(3) },
+  ],
+  sections: [
+    { type: "yaml", position: at(0, 2) },
+    { type: "heading", position: at(3) },
+    { type: "paragraph", position: at(4) },
+    { type: "list", position: at(6, 7) },
+    { type: "blockquote", position: at(9) },
+    { type: "table", position: at(11, 13) },
+    { type: "code", position: at(15, 17), id: "code1" },
+  ],
+  listItems: [{ position: at(6) }, { position: at(7), id: "item2" }],
+  blocks: { item2: { id: "item2", position: at(7) }, code1: { id: "code1", position: at(18) } },
+};
+
+function fakeApp(lastOpen: string[] = []) {
   return {
     vault: {
       getMarkdownFiles: () => files.filter((f) => f.extension === "md"),
       getFiles: () => files,
+      cachedRead: async (f: FakeFile) => (f.path === "Projects/analysis.md" ? NOTE : ""),
     },
+    workspace: { getLastOpenFiles: () => lastOpen },
     metadataCache: {
       getFirstLinkpathDest: (linkpath: string) =>
         files.find((f) => f.basename === linkpath || f.path === linkpath || f.path === `${linkpath}.md` || f.name === linkpath) ?? null,
       fileToLinktext: (f: FakeFile) => (f.extension === "md" ? f.basename : f.name),
-      getFileCache: (f: FakeFile) =>
-        f.path === "Projects/analysis.md"
-          ? {
-              headings: [
-                { heading: "Methods", level: 2 },
-                { heading: "Results: mice", level: 2 },
-              ],
-              blocks: { abc123: { id: "abc123" }, fig2: { id: "fig2" } },
-            }
-          : {},
+      getFileCache: (f: FakeFile) => (f.path === "Projects/analysis.md" ? NOTE_CACHE : {}),
     },
   };
 }
+
+/** Lets the list's reads of a note (`cachedRead`) and a block id's write settle. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const notes = () => Array.from(document.querySelectorAll(".suggestion-container .suggestion-item")).map((e) => e.querySelector(".suggestion-note")?.textContent ?? null);
 
 /** Types `text` into `area` as if at the caret (which ends up at the end of what was typed), firing `input`. */
 function typeInto(area: HTMLTextAreaElement, text: string, caret = text.length) {
@@ -146,18 +168,93 @@ describe("link suggestions in a card's editor", () => {
     // As Obsidian writes a heading into a link: the characters a link cannot hold become spaces.
     expect(area.value).toBe("[[analysis#Results mice]]");
 
-    typeInto(area, "[[analysis^");
-    expect(titles()).toEqual(["^abc123", "^fig2"]);
-    typeInto(area, "[[analysis#^fi");
-    expect(titles()).toEqual(["^fig2"]);
-    key(area, "Enter");
-    expect(area.value).toBe("[[analysis#^fig2]]");
-
     // A note that is not there has nothing to list; neither has an alias being typed.
     typeInto(area, "[[nothing#");
     expect(list()).toBeNull();
     typeInto(area, "[[analysis|sh");
     expect(list()).toBeNull();
+  });
+
+  test("`^` lists every block of the note with a one-line preview; one without an id is given one", async () => {
+    const area = textarea();
+    const blockId = vi.fn(async (_path: string, _line: number) => ({ id: "fig-ab12", subpath: "#^fig-ab12" }));
+    attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md", { blockId });
+    typeInto(area, "[[analysis^");
+    await settle();
+    // Paragraphs, list items, quotes, tables and code, in the note's order; not the front matter or headings.
+    expect(titles()).toEqual(["We measured mice.", "first item", "second item", "a quote", "| a | b | |---|---| | 1 | 2 |", "print(1)"]);
+    // A block that has an id shows it.
+    expect(notes()).toEqual([null, null, "^item2", null, null, "^code1"]);
+
+    typeInto(area, "[[analysis#^second");
+    await settle();
+    expect(titles()).toEqual(["second item"]);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis#^item2]]");
+    expect(blockId).not.toHaveBeenCalled();
+
+    // No id yet: one is written into the note (the drop-from-note machinery), then the link is inserted.
+    typeInto(area, "See [[analysis^first");
+    await settle();
+    expect(titles()).toEqual(["first item"]);
+    key(area, "Enter");
+    expect(list()).toBeNull();
+    await settle();
+    expect(blockId).toHaveBeenCalledWith("Projects/analysis.md", 6);
+    expect(area.value).toBe("See [[analysis#^fig-ab12]]");
+    expect(area.selectionStart).toBe(area.value.length);
+
+    // Without a way to write ids (no block-id writer), only the blocks that have one are offered.
+    const other = textarea();
+    attachLinkSuggest(other, fakeApp() as never, "fig.lnkfig.md");
+    typeInto(other, "[[analysis^");
+    await settle();
+    expect(titles()).toEqual(["second item", "print(1)"]);
+  });
+
+  test("a note is found by its alias too, and inserted as `[[<linktext>|<alias>]]`", () => {
+    const area = textarea();
+    attachLinkSuggest(area, fakeApp() as never, "fig.lnkfig.md");
+    typeInto(area, "[[study");
+    expect(titles()).toEqual(["Study A"]);
+    expect(notes()).toEqual(["Projects/analysis"]);
+    key(area, "Enter");
+    expect(area.value).toBe("[[analysis|Study A]]");
+  });
+
+  test("an empty `[[` lists the recently opened notes first, then the rest by last change", () => {
+    const area = textarea();
+    attachLinkSuggest(area, fakeApp(["zebra.md", "gone.md", "plots/analysis plot.png"]) as never, "fig.lnkfig.md");
+    typeInto(area, "[[");
+    expect(titles()).toEqual(["zebra", "analysis", "anatomy"]);
+    typeInto(area, "![[");
+    expect(titles()).toEqual(["zebra", "analysis plot.png", "analysis", "anatomy"]);
+  });
+
+  test("a heading is written into a link as Obsidian's `stripHeadingForLink` documents it", () => {
+    // The example in obsidian.d.ts: stripHeadingForLink('foo:#|^\\\r\n%%[[]]bar') is 'foo bar'.
+    expect(headingLinktext("foo:#|^\\\r\n%%[[]]bar")).toBe("foo bar");
+  });
+
+  test("the card editor writes a new block id through the plugin's API", async () => {
+    const page = createPage("a4-portrait", []);
+    const card: CardNode = { ...cardNodeDefaults(page, 0, 0), id: "C", text: "" };
+    const blockId = vi.fn(async () => ({ id: "fig-zz00", subpath: "#^fig-zz00" }));
+    const component = { readOnly: false, runCommandById: vi.fn(), addChild() {}, removeChild() {}, plugin: { api: { blockId } } };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const ctx = { app: fakeApp(), figurePath: "fig.lnkfig.md", resolved: () => undefined, openLink: vi.fn(), component };
+    cardNodeType.mount(card, host, ctx as never);
+    const el = host.firstElementChild as HTMLElement;
+    el.dispatchEvent(new CustomEvent("lf-activate"));
+    const area = el.querySelector("textarea")!;
+    typeInto(area, "[[analysis^quote");
+    await settle();
+    expect(titles()).toEqual(["a quote"]);
+    key(area, "Enter");
+    await settle();
+    expect(blockId).toHaveBeenCalledWith("Projects/analysis.md", 9);
+    expect(area.value).toBe("[[analysis#^fig-zz00]]");
   });
 
   test("Escape closes the list and keeps the edit open", () => {

@@ -5,7 +5,7 @@ import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
 import { firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
 import type { LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
-import { attachLinkSuggest } from "../view/card-link-suggest";
+import { attachLinkSuggest, type BlockIdWriter } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
 
 /** The size of a new card, in mm. */
@@ -51,6 +51,8 @@ export function cardContentError(card: { text?: unknown; file?: unknown; subpath
 interface EditingView {
   readOnly: boolean;
   runCommandById(id: string, args?: Record<string, unknown>): void;
+  /** The plugin, whose API writes a block id into a note (`api.blockId`), for a link to a block that has none yet. */
+  plugin?: { api?: { blockId?: BlockIdWriter } };
 }
 
 /**
@@ -162,7 +164,9 @@ class CardNodeRenderer implements NodeRenderer {
     area.value = this.before;
     area.spellcheck = true;
     // Link suggestions first: while their list is open, its keys (Escape among them) are its own, not the edit's.
-    this.detachSuggest = attachLinkSuggest(area, this.ctx.app, this.ctx.figurePath);
+    const api = view.plugin?.api;
+    const blockId: BlockIdWriter | undefined = api?.blockId ? (path, line) => api.blockId!(path, line) : undefined;
+    this.detachSuggest = attachLinkSuggest(area, this.ctx.app, this.ctx.figurePath, { blockId });
     area.addEventListener("blur", () => this.endEdit(false));
     area.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape" || ev.isComposing) return;

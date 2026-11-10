@@ -89,7 +89,7 @@ type Gesture =
  * What a move drag keeps off the paper (see `NodeType.offPaper`, a card): each such item's box in world px when the drag
  * began (`start`) and where it was last let go to (`last`, clear of the papers), and the papers (`paperRectsWorld`).
  */
-type OffPaperDrag = { items: { start: Rect; last: Rect }[]; papers: Rect[] };
+export type OffPaperDrag = { items: { start: Rect; last: Rect }[]; papers: Rect[] };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
@@ -1521,7 +1521,7 @@ function pointOnPage(doc: Document, page: Page, world: Pt): PlacePoint {
  * towards where the drag was, so a rounding never takes an item into the gap. Each item's `last` becomes where the
  * offset puts it.
  */
-function keepOffPaper(drag: OffPaperDrag, moved: Pt, to: Pt): Pt {
+export function keepOffPaper(drag: OffPaperDrag, moved: Pt, to: Pt): Pt {
   const allowed = drag.items.map((item) => {
     const at = slideAlongPaper(item.last, offsetRect(item.start, to), drag.papers);
     return { item, at, x: at.x - item.start.x, y: at.y - item.start.y };

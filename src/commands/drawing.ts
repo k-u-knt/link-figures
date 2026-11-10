@@ -224,9 +224,14 @@ const BASE_FIELDS: ParamSpec = {
  * type's own by `checkField`); keys that neither knows are kept, as the file format keeps them. A locked node is changed
  * too: naming it is explicit.
  */
-function updateNode(ctx: CommandContext, args: { id: string; patch: Record<string, unknown> }): { id: NodeId } {
+function updateNode(ctx: CommandContext, args: { id: string; patch: Record<string, unknown>; replace?: unknown }): { id: NodeId } {
   const command = "node.update";
   const { patch } = args;
+  if (args.replace !== undefined && (!Array.isArray(args.replace) || !args.replace.every((k) => typeof k === "string"))) {
+    throw new CommandError(`${command}: "replace" must be a list of the patch's top-level keys`);
+  }
+  // The keys whose patch value replaces what is there whole (a paint whose keys the patch leaves out are to go).
+  const replace = new Set<string>((args.replace as string[] | undefined) ?? []);
   const node = ctx.store.doc.nodes.find((n) => n.id === args.id);
   if (!node) throw new CommandError(`${command}: there is no node "${args.id}"`);
   checkPlain(command, "patch", patch);
@@ -239,7 +244,7 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
   if (isGroup(ctx.store.doc, node.id, ctx.registries)) return updateGroup(ctx, node, patch);
   const before = node as unknown as Record<string, unknown>;
   let after: Record<string, unknown> = { ...before };
-  for (const [key, value] of Object.entries(patch)) after[key] = mergePatch(before[key], value);
+  for (const [key, value] of Object.entries(patch)) after[key] = replace.has(key) ? structuredClone(value) : mergePatch(before[key], value);
   const type = nodeTypeFor(ctx.registries, node, unreadableIn(ctx));
   const updateCtx = { registries: ctx.registries, doc: ctx.store.doc, unreadable: unreadableIn(ctx), patch };
   // A size the patch gives is kept to the least a node may have, as a resize by a handle keeps it; one that is not a
@@ -737,9 +742,9 @@ export function drawingCommands(): Command[] {
       icon: "pencil",
       group: "edit",
       hidden: true,
-      params: { id: { type: "string", required: true }, patch: { type: "object", required: true } },
+      params: { id: { type: "string", required: true }, patch: { type: "object", required: true }, replace: { type: "array" } },
       applies: always,
-      run: (ctx, args) => updateNode(ctx, args as { id: string; patch: Record<string, unknown> }),
+      run: (ctx, args) => updateNode(ctx, args as { id: string; patch: Record<string, unknown>; replace?: unknown }),
     },
     {
       id: "page.update",

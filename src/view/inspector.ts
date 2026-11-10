@@ -82,6 +82,10 @@ export interface FieldEnv {
    * then names its kind "Mixed": the slider shows the first item's paint, and its edit makes them all that paint.
    */
   mixed?(key: string): boolean;
+  /** Takes back the undo step a gesture's writes have been merging into, leaving none (a drag cancelled with Escape). */
+  cancelMerge?(): void;
+  /** Told of each composite field drawn, so that it is destroyed before the panel is emptied. */
+  track?(composite: { destroy?(): void }): void;
 }
 
 type Read = (key: string) => unknown;
@@ -101,7 +105,20 @@ interface Composite {
   drawn: string;
   draw(): void;
   sync(): void;
+  /** Lets go of what it holds outside its holder (a document listener): before its holder is emptied. */
+  destroy?(): void;
 }
+
+/**
+ * A value worked out for each item a write reaches, from what that item holds at the key: the colour slider's paint,
+ * made from the one ramp over each item's own paint (`paintOfRamp`), so that every item ends up with exactly it.
+ */
+export class PerTarget {
+  constructor(readonly of: (current: unknown) => unknown) {}
+}
+
+/** `value` for an item that holds `current` at the key (see `PerTarget`). */
+const valueFor = (value: unknown, current: unknown): unknown => (value instanceof PerTarget ? value.of(current) : value);
 
 const composites = new WeakMap<HTMLElement, Composite>();
 
@@ -183,8 +200,12 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   let slider: RampSlider | null = null;
   let kind: HTMLElement | null = null;
 
+  /** The ramp written to every item the write reaches, each over its own paint, so that all of them end up with one paint. */
   const writeRamp = (ramp: ColorRamp, step?: UndoStep): void => {
-    write(field.key, paintOfRamp(ramp, paintOf(), ramps.rampGeometries), step);
+    const registries = paints();
+    const over = (current: unknown): Paint =>
+      paintOfRamp(ramp, isRecord(current) && typeof current.type === "string" ? (current as Paint) : undefined, ramps.rampGeometries, registries);
+    write(field.key, new PerTarget(over), step);
     syncComposite(holder);
   };
 
@@ -193,8 +214,9 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
     drawn: "",
     draw() {
       composite.drawn = composite.shape();
-      holder.empty();
+      slider?.destroy();
       slider = null;
+      holder.empty();
       const head = holder.createDiv({ cls: "lf-paint-head" });
       const select = head.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type`, "aria-label": `${field.label}: kind of paint` } });
       kind = head.createSpan({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite" } });
@@ -227,6 +249,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
           read: rampNow,
           write: writeRamp,
           endMerge: () => env.endMerge?.(),
+          cancelMerge: () => env.cancelMerge?.(),
           geometries: () => ramps.rampGeometries.all(),
           presets: () => ramps.rampPresets.all(),
           renderFields: (container, fields, r, w) => renderFields(container, fields, r, w, env),
@@ -241,6 +264,10 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
       kind?.setText(kindName());
       slider?.sync();
       syncFields(holder, subFields(), read, env);
+    },
+    destroy() {
+      slider?.destroy();
+      slider = null;
     },
   };
   return composite;
@@ -502,6 +529,7 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
       const holder = row.createDiv({ cls: "lf-field-control", attr: { "data-key": field.key } });
       const composite = makeComposite(holder, field, read, write, env);
       composites.set(holder, composite);
+      env.track?.(composite);
       composite.draw();
       continue;
     }
@@ -658,7 +686,7 @@ export class Inspector {
       this.endGesture();
       this.pending = false;
       this.signature = "";
-      this.el.empty();
+      this.emptyPanel();
       return;
     }
     // The stage moved to another page while a field here was being typed into: rebuilding the panel would take the field, and what was typed, away.
@@ -675,7 +703,7 @@ export class Inspector {
     this.signature = section.signature;
     // A gesture on the controls about to be taken away (a drag whose release they will never see) ends here.
     if (this.view.gestureStartedAt != null) this.endGesture();
-    this.el.empty();
+    this.emptyPanel();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
     renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv(section));
@@ -698,7 +726,27 @@ export class Inspector {
 
   /** The node types' context, and how a gesture's writes end their undo step, for drawing the fields. */
   private fieldEnv(section?: Section): FieldEnv & InspectorContext {
-    return { ...this.context(), endMerge: () => this.endGesture(), ...(section?.mixed ? { mixed: section.mixed } : {}) };
+    return {
+      ...this.context(),
+      endMerge: () => this.endGesture(),
+      cancelMerge: () => this.cancelGesture(),
+      track: (composite) => this.live.push(composite),
+      ...(section?.mixed ? { mixed: section.mixed } : {}),
+    };
+  }
+
+  /** The composite fields drawn in the panel now: destroyed before it is emptied. */
+  private live: { destroy?(): void }[] = [];
+
+  private emptyPanel(): void {
+    for (const composite of this.live.splice(0)) composite.destroy?.();
+    this.el.empty();
+  }
+
+  /** Takes a gesture's writes back as though never made (see `DocumentStore.revertMerge`), and ends it. */
+  private cancelGesture(): void {
+    this.view.store.revertMerge();
+    this.endGesture();
   }
 
   /**
@@ -770,7 +818,7 @@ export class Inspector {
         const current = live();
         if (!current) return;
         if (key === "paper" && value === null) value = TRANSPARENT_PAPER;
-        const call = prepareCall(this.view.plugin.registries, { id: "page.update", args: { id, patch: patchFor(current, key, value) } });
+        const call = prepareCall(this.view.plugin.registries, { id: "page.update", args: { id, patch: patchFor(current, key, valueFor(value, readValue(current, key))) } });
         this.runWrite(key, fields, [call]);
       },
     };
@@ -849,8 +897,14 @@ export class Inspector {
           if (routed.length > 0) this.runWrite(key, fields, routed, step);
           return;
         }
-        const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
-        const calls = reach(key).map((node) => prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
+        // A paint is written whole and replaces the one there (`replace`): a key it leaves out (a solid's opacity) goes.
+        const top = key.split(".")[0];
+        const replace = paintKeys.includes(key) ? { replace: [top] } : {};
+        const calls = reach(key).map((node) => {
+          const own = valueFor(value, readValue(node, key));
+          const stored = mm.has(key) && typeof own === "number" ? roundPx(mmToPx(own)) : own;
+          return prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored), ...replace } });
+        });
         if (calls.length === 0) return;
         this.runWrite(key, fields, calls, step);
       },

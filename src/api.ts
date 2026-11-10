@@ -82,7 +82,7 @@ export interface LinkFiguresApi {
    * Colour as the inspector's colour slider edits it, so that scripts share its rule: `of` reads a paint whose type has
    * a ramp (solid, linear, radial) as a ramp of stops, sorted (undefined for one that has none); `toPaint` writes a ramp
    * back, one stop as a solid and more as the paint of its geometry, keeping `previous`'s other keys when it is of the
-   * type written. Neither changes a figure: pass the paint to `node.update`.
+   * type written. Neither changes a figure: pass the paint to `node.update` with `replace` naming its top-level key.
    */
   ramp: {
     of(paint: Paint): ColorRamp | undefined;
@@ -184,7 +184,7 @@ export function createApi(host: ApiHost): LinkFiguresApi {
 
     ramp: {
       of: (paint) => structuredClone(rampOf(paint, registries)),
-      toPaint: (ramp, previous) => structuredClone(paintOfRamp(ramp, previous, registries.rampGeometries)),
+      toPaint: (ramp, previous) => structuredClone(paintOfRamp(ramp, previous, registries.rampGeometries, registries.paints)),
     },
 
     commands: () =>

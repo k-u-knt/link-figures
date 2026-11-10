@@ -52,6 +52,20 @@ function setup(fill: Paint, others: Paint[] = []) {
     focusPage: () => pageInFocus(store.doc, selection.ids, store.doc.pages[0])!,
     commandContext: () => ({ app: {} as never, registries, view, store, selection: selection.ids, page: view.focusPage() }),
   };
+  // The listeners on the document, by type, so a test can see that none is left behind.
+  const docListeners = new Map<string, Set<unknown>>();
+  const add = document.addEventListener.bind(document) as (...args: unknown[]) => void;
+  const remove = document.removeEventListener.bind(document) as (...args: unknown[]) => void;
+  (document as unknown as { addEventListener: unknown }).addEventListener = (type: string, fn: never, opts?: never) => {
+    if (!docListeners.has(type)) docListeners.set(type, new Set());
+    docListeners.get(type)!.add(fn);
+    add(type, fn, opts);
+  };
+  (document as unknown as { removeEventListener: unknown }).removeEventListener = (type: string, fn: never, opts?: never) => {
+    docListeners.get(type)?.delete(fn);
+    remove(type, fn, opts);
+  };
+  const listening = () => [...docListeners.entries()].filter(([, set]) => set.size > 0).map(([type]) => type);
   const el = document.createElement("div");
   document.body.appendChild(el);
   const inspector = new Inspector(view as never, el as never);
@@ -66,8 +80,9 @@ function setup(fill: Paint, others: Paint[] = []) {
   const handles = () => Array.from(holder().querySelectorAll(".lf-ramp-handle")) as unknown as HTMLElement[];
   const fillNow = () => (store.doc.nodes[0] as ShapeNode).fill;
   const fills = () => store.doc.nodes.map((n) => (n as ShapeNode).fill);
-  const pointer = (target: unknown, type: string, x: number, y = 10) =>
-    (target as EventTarget).dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1 }) as never);
+  /** A pointer event; a press and a move have the primary button down (`buttons` 1) unless `buttons` says otherwise. */
+  const pointer = (target: unknown, type: string, x: number, y = 10, buttons = type === "pointerup" ? 0 : 1) =>
+    (target as EventTarget).dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons, pointerId: 1 }) as never);
   const key = (target: unknown, k: string, shiftKey = false) =>
     (target as EventTarget).dispatchEvent(new window.KeyboardEvent("keydown", { key: k, shiftKey, bubbles: true, cancelable: true }) as never);
   const click = (target: unknown) => (target as EventTarget).dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }) as never);
@@ -78,7 +93,7 @@ function setup(fill: Paint, others: Paint[] = []) {
     for (const x of xs) pointer(q(".lf-ramp-track"), "pointermove", x, y);
     pointer(q(".lf-ramp-track"), "pointerup", xs[xs.length - 1] ?? 0, y);
   };
-  return { window, document, el, store, labels, fills, holder, q, handles, fillNow, pointer, key, click, drag, kind: () => q(".lf-paint-kind").textContent };
+  return { window, document, el, store, selection, labels, fills, listening, holder, q, handles, fillNow, pointer, key, click, drag, kind: () => q(".lf-paint-kind").textContent };
 }
 
 describe("the paint control", () => {
@@ -398,12 +413,12 @@ describe("the selected stop's row", () => {
 });
 
 describe("writes that drop a key", () => {
-  test("a solid's opacity set back to 1 is written as 1, not left at its old value by node.update's merge", () => {
+  test("a solid's opacity set back to 1 is gone from the paint, not left at its old value by a merge", () => {
     const t = setup({ type: "solid", color: "#ff0000", opacity: 0.5 });
     const opacity = t.q<HTMLInputElement>('[data-key="fill.stop.opacity"]');
     opacity.value = "1";
     opacity.dispatchEvent(new t.window.Event("change") as never);
-    expect(t.fillNow()).toEqual({ type: "solid", color: "#ff0000", opacity: 1 });
+    expect(t.fillNow()).toEqual({ type: "solid", color: "#ff0000" });
   });
 
   test("a stop's opacity set back to 1 is kept as written", () => {
@@ -466,5 +481,87 @@ describe("the presets menu", () => {
     t.click(t.q(".lf-ramp-presets-button"));
     t.pointer(t.q(".lf-ramp-bar"), "pointerdown", 100);
     expect(t.holder().querySelector(".lf-ramp-presets")).toBeNull();
+  });
+});
+
+describe("review fixes", () => {
+  test("a mixed pair, one with an opacity and one without, is exactly one paint after an edit, and no longer Mixed", () => {
+    const t = setup({ type: "solid", color: "#ff0000" }, [{ type: "solid", color: "#0000ff", opacity: 0.5 }]);
+    expect(t.kind()).toBe("Mixed");
+    const color = t.q<HTMLInputElement>('[data-key="fill.stop.color"]');
+    color.value = "#00aa00";
+    color.dispatchEvent(new t.window.Event("input") as never);
+    expect(t.fills()).toEqual([{ type: "solid", color: "#00aa00" }, { type: "solid", color: "#00aa00" }]);
+    expect(t.kind()).toBe("Solid");
+  });
+
+  test("the other way round: the first has the opacity, and the second gains it", () => {
+    const t = setup({ type: "solid", color: "#0000ff", opacity: 0.5 }, [{ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }], note: 1 }]);
+    t.click(t.q(".lf-ramp-reverse"));
+    expect(t.fills()).toEqual([{ type: "solid", color: "#0000ff", opacity: 0.5 }, { type: "solid", color: "#0000ff", opacity: 0.5 }]);
+    expect(t.kind()).toBe("Solid");
+  });
+
+  test("Escape during a drag puts the ramp back as it was and leaves no undo step", () => {
+    const t = setup(BLACK_WHITE);
+    const handle = t.handles()[0];
+    t.pointer(handle, "pointerdown", 0, 20);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 40);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 80);
+    expect((t.fillNow().stops as { offset: number }[])[0].offset).toBe(0.4);
+    t.key(t.document, "Escape");
+    expect(t.fillNow()).toEqual(BLACK_WHITE);
+    expect(t.store.canUndo()).toBe(false);
+    expect(t.store.canRedo()).toBe(false);
+    // The drag is over: a later move writes nothing, and its listeners are gone.
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 120);
+    t.pointer(t.q(".lf-ramp-track"), "pointerup", 120);
+    expect(t.fillNow()).toEqual(BLACK_WHITE);
+    expect(t.listening()).toEqual([]);
+  });
+
+  test("Escape during a drag keeps the edits made before it", () => {
+    const t = setup(BLACK_WHITE);
+    t.click(t.q(".lf-ramp-reverse"));
+    const reversed = t.fillNow();
+    t.drag(0, [40]);
+    t.pointer(t.handles()[0], "pointerdown", 40, 20);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 100);
+    t.key(t.document, "Escape");
+    expect((t.fillNow().stops as { offset: number }[])[0].offset).toBe(0.2);
+    t.store.undo();
+    expect(t.fillNow()).toEqual(reversed);
+  });
+
+  test("the one handle of a solid is selected by a press, and moving it writes nothing", () => {
+    const t = setup({ type: "solid", color: "#ff0000" });
+    t.drag(0, [60, 120], 10);
+    expect(t.labels).toEqual([]);
+    expect(t.fillNow()).toEqual({ type: "solid", color: "#ff0000" });
+    expect(t.handles()[0].classList.contains("lf-ramp-handle-selected")).toBe(true);
+  });
+
+  test("a move with no button down (a release the slider never saw) ends the drag", () => {
+    const t = setup(BLACK_WHITE);
+    t.pointer(t.handles()[0], "pointerdown", 0, 20);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 40);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 80, 10, 0);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 120);
+    expect((t.fillNow().stops as { offset: number }[])[0].offset).toBe(0.2);
+    expect(t.labels).toEqual(["inspect:fill"]);
+    expect(t.listening()).toEqual([]);
+  });
+
+  test("an open presets menu's listener goes when the control is drawn again, and when the inspector is emptied", () => {
+    const t = setup(BLACK_WHITE);
+    t.click(t.q(".lf-ramp-presets-button"));
+    expect(t.listening()).toEqual(["pointerdown"]);
+    // Another kind of paint from elsewhere: the control is drawn again.
+    t.store.commit("paint", (d) => { (d.nodes[0] as ShapeNode).fill = { type: "solid", color: "#ff0000" }; });
+    expect(t.listening()).toEqual([]);
+    t.click(t.q(".lf-ramp-presets-button"));
+    expect(t.listening()).toEqual(["pointerdown"]);
+    t.selection.set([]);
+    expect(t.listening()).toEqual([]);
   });
 });

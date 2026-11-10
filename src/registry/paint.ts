@@ -47,9 +47,10 @@ export interface PaintType {
   /**
    * A paint that is a ramp of colour stops (a solid colour, a gradient) reads as one here, so that the colour slider
    * edits it; the ramp is written back by `paintOfRamp` (one stop a solid, more through the ramp's geometry). A type
-   * without it keeps its own fields.
+   * without it keeps its own fields. `write`, where the type has it, writes a ramp of two or more stops whose geometry
+   * is not registered (its own kind) as this type's paint; without it such a paint is left as it is.
    */
-  ramp?: { read(paint: Paint): ColorRamp };
+  ramp?: { read(paint: Paint): ColorRamp; write?(ramp: ColorRamp, previous?: Paint): Paint };
 }
 
 export class PaintRegistry {

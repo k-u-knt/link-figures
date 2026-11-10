@@ -235,6 +235,19 @@ describe("node.update", () => {
     expect((await nodeOf<ShapeNode>(doc(), "s")).fill).toEqual(linear);
   });
 
+  test("replace names top-level keys whose patch value replaces what is there whole, with no key-by-key merge", async () => {
+    const { api, doc } = await withShapeAndConnector();
+    await api.run(PATH, "node.update", { id: "s", patch: { fill: { opacity: 0.5, note: 1 } } });
+    await api.run(PATH, "node.update", { id: "s", patch: { fill: { type: "solid", color: "#ff0000" }, border: { width: 2 } }, replace: ["fill"] });
+    const s = await nodeOf<ShapeNode>(doc(), "s");
+    expect(s.fill).toEqual({ type: "solid", color: "#ff0000" });
+    // A key not named is merged as before.
+    expect(s.border).toEqual({ ...defaultBorder(), width: 2 });
+    // A replaced value is still checked.
+    await expect(api.run(PATH, "node.update", { id: "s", patch: { border: { paint: { type: "solid", color: "#000000" }, width: -1, dash: "solid" } }, replace: ["border"] })).rejects.toThrow();
+    await expect(api.run(PATH, "node.update", { id: "s", patch: {}, replace: [3] })).rejects.toThrow(/replace/);
+  });
+
   test("null turns a border off, a stroke turns it back on; an empty name removes the name", async () => {
     const { api, doc } = await withShapeAndConnector();
     await api.run(PATH, "node.update", { id: "s", patch: { border: null, name: "Box" } });

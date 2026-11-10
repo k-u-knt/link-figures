@@ -61,8 +61,8 @@ describe("rampOf and paintOfRamp", () => {
     expect(write({ stops: [{ offset: 0.3, color: "#ff0000" }], geometry: { kind: "radial", cx: 0.5, cy: 0.5, r: 0.5 } })).toEqual({ type: "solid", color: "#ff0000" });
     expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 1 }], geometry: { kind: "linear", angle: 0 } })).toEqual({ type: "solid", color: "#ff0000" });
     expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 0.2 }], geometry: { kind: "linear", angle: 0 } })).toEqual({ type: "solid", color: "#ff0000", opacity: 0.2 });
-    // A previous solid's opacity is kept as a key (1), so that node.update's merge does not keep the old value.
-    expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 1 }], geometry: { kind: "linear", angle: 0 } }, { type: "solid", color: "#ff0000", opacity: 0.5 })).toEqual({ type: "solid", color: "#ff0000", opacity: 1 });
+    // An opaque stop over a previous solid with an opacity: the opacity goes (the inspector and scripts write it with `replace`).
+    expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 1 }], geometry: { kind: "linear", angle: 0 } }, { type: "solid", color: "#ff0000", opacity: 0.5 })).toEqual({ type: "solid", color: "#ff0000" });
     // A gradient's extra keys are not carried onto a solid.
     expect(write({ stops: [{ offset: 0, color: "#ff0000" }], geometry: { kind: "linear", angle: 0 } }, { type: "linear", angle: 0, stops: [], note: 1 })).toEqual({ type: "solid", color: "#ff0000" });
   });
@@ -86,6 +86,34 @@ describe("rampOf and paintOfRamp", () => {
     geometries.register(conic);
     const stops = [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }];
     expect(paintOfRamp({ stops, geometry: { kind: "x.conic", from: 90 } }, undefined, geometries)).toEqual({ type: "x.conic", from: 90, stops });
+  });
+
+  test("a ramp whose geometry is not registered keeps its paint's type: the hook's own write, else the paint as it was, with a warning", () => {
+    const r = registries();
+    const stops = [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }];
+    const conic = (write?: boolean) => ({
+      id: "x.conic",
+      name: "Conic",
+      defaults: () => ({ type: "x.conic", from: 0, stops }),
+      fields: () => [],
+      toSvg: () => ({ ref: "none", defs: [] }),
+      ramp: {
+        read: (paint: Paint) => ({ stops: paint.stops as typeof stops, geometry: { kind: "x.conic", from: paint.from } }),
+        ...(write ? { write: (ramp: ColorRamp, previous?: Paint) => ({ ...previous, type: "x.conic", from: ramp.geometry.from, stops: ramp.stops }) } : {}),
+      },
+    });
+    const previous: Paint = { type: "x.conic", from: 30, stops, extra: true };
+    const reversed: ColorRamp = { stops: [{ offset: 0, color: "#ffffff" }, { offset: 1, color: "#000000" }], geometry: { kind: "x.conic", from: 30 } };
+    r.paints.register(conic(true));
+    expect(paintOfRamp(reversed, previous, r.rampGeometries, r.paints)).toEqual({ type: "x.conic", from: 30, stops: reversed.stops, extra: true });
+    r.paints.register(conic(false));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(paintOfRamp(reversed, previous, r.rampGeometries, r.paints)).toEqual(previous);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("x.conic");
+    warn.mockRestore();
+    // One stop is still a solid.
+    expect(paintOfRamp({ ...reversed, stops: [reversed.stops[0]] }, previous, r.rampGeometries, r.paints)).toEqual({ type: "solid", color: "#ffffff" });
   });
 
   test("stops are written sorted by offset and kept within 0 to 1", () => {

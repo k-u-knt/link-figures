@@ -51,27 +51,30 @@ export function rampKindName(paint: Paint, registries: PaintLookup): string {
 }
 
 /**
- * The paint `ramp` writes. One stop is a `solid`: its colour, and its opacity when under 1 (or when `previous` is a
- * solid that has one). Two or more are the paint
- * of the ramp's geometry, written by its registered kind (the first registered when it has none). `previous`, when it
- * is of the type written, keeps its other keys and their order.
+ * The paint `ramp` writes. One stop is a `solid`: its colour, and its opacity when under 1. Two or more are the paint
+ * of the ramp's geometry, written by its registered kind. A geometry that is not registered keeps the paint's type: the
+ * `previous` paint's type writes it (`PaintType.ramp.write`, looked up in `paints`), or else `previous` is given back
+ * as it was, with a console warning; with no `previous` it is an error. `previous`, when it is of the type written,
+ * keeps its other keys and their order. The paint is whole: write it with `node.update`'s `replace`, or a key it
+ * leaves out (a solid's opacity) is kept by the merge.
  */
-export function paintOfRamp(ramp: ColorRamp, previous: Paint | undefined, geometries: GeometryLookup): Paint {
+export function paintOfRamp(ramp: ColorRamp, previous: Paint | undefined, geometries: GeometryLookup, paints?: Pick<PaintRegistry, "get">): Paint {
   const stops = sortStops(ramp.stops);
   if (stops.length <= 1) {
     const stop = stops[0] ?? { offset: 0, color: "#000000" };
     const paint: Paint = previous?.type === "solid" ? { ...previous, type: "solid", color: stop.color } : { type: "solid", color: stop.color };
     const opacity = num(stop.opacity, 1);
-    // A previous solid's opacity is written as 1, not dropped: `node.update` merges a paint of the same type key by
-    // key, so a key left out would keep its old value.
-    if (opacity < 1 || (previous?.type === "solid" && "opacity" in previous)) paint.opacity = clamp01(opacity);
+    if (opacity < 1) paint.opacity = clamp01(opacity);
     else delete paint.opacity;
     return paint;
   }
-  const kind = geometries.get(ramp.geometry.kind) ?? geometries.all()[0];
-  if (!kind) throw new Error(`no ramp geometry "${ramp.geometry.kind}" is registered`);
-  const geometry = kind.kind === ramp.geometry.kind ? ramp.geometry : kind.defaults();
-  return kind.toPaint(stops, geometry, previous);
+  const kind = geometries.get(ramp.geometry.kind);
+  if (kind) return kind.toPaint(stops, ramp.geometry, previous);
+  const own = previous ? paints?.get(previous.type)?.ramp?.write : undefined;
+  if (own) return own({ ...ramp, stops }, previous);
+  if (!previous) throw new Error(`no ramp geometry "${ramp.geometry.kind}" is registered`);
+  console.warn(`Link Figures: no ramp geometry "${ramp.geometry.kind}" is registered, and paint type "${previous.type}" cannot write its ramp: the paint is left as it was`);
+  return previous;
 }
 
 /** A colour as straight sRGB bytes, when it is `#rgb` or `#rrggbb`. */

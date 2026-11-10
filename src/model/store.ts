@@ -119,6 +119,19 @@ export class DocumentStore {
   }
 
   /**
+   * Takes back the run of commits that is merging now (a drag cancelled with Escape) as though it had never been made:
+   * the document is as it was before the run, and no undo or redo step is left of it. False, changing nothing, when no
+   * run is open or another step has been pushed since.
+   */
+  revertMerge(): boolean {
+    const entry = this.mergeTarget;
+    if (!entry || this.undoStack[this.undoStack.length - 1] !== entry) return false;
+    this.undoStack.pop();
+    this.step("undo", entry, entry.inversePatches);
+    return true;
+  }
+
+  /**
    * Forgets every step there is to redo: for an edit taken back as though it had never been made (a cancelled crop
    * session). When there was something to forget, a `history` event (naming no node) tells the subscribers, so that
    * what shows whether there is anything to redo (the toolbar's Redo) follows.

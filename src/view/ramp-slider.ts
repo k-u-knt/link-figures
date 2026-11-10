@@ -25,6 +25,8 @@ export interface RampSliderHost {
   read(): ColorRamp | undefined;
   write(ramp: ColorRamp, step?: UndoStep): void;
   endMerge?(): void;
+  /** Takes back the undo step a drag's writes have been merging into, leaving none (Escape). */
+  cancelMerge?(): void;
   geometries(): RampGeometryType[];
   presets(): RampPreset[];
   /** The inspector's own field rows, for the selected stop's colour, opacity and offset. */
@@ -79,7 +81,15 @@ export class RampSlider {
   private drawnHandles: string | null = null;
   private drawnGeometry: string | null = null;
   private drawnRow: string | null = null;
-  private drag: { index: number; started: boolean; off: boolean } | null = null;
+  private drag: { index: number; started: boolean; off: boolean; selected: number } | null = null;
+  /** While a drag lasts: Escape takes it back. */
+  private readonly escapeDrag = (e: Event): void => {
+    const ev = e as KeyboardEvent;
+    if (ev.key !== "Escape" || !this.drag) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.cancelDrag();
+  };
 
   constructor(
     holder: HTMLElement,
@@ -109,6 +119,14 @@ export class RampSlider {
 
     this.stopRow = this.root.createDiv({ cls: "lf-ramp-stop" });
     this.sync();
+  }
+
+  /** Lets go of the document: closes the menu, and ends a drag that is under way (its writes are kept). */
+  destroy(): void {
+    this.closeMenu();
+    const drag = this.drag;
+    this.stopDragging();
+    if (drag?.started) this.host.endMerge?.();
   }
 
   /** Brings the slider in line with the ramp the field reads now. */
@@ -345,7 +363,9 @@ export class RampSlider {
 
   private startDrag(ev: PointerEvent, index: number): void {
     if (ev.button !== undefined && ev.button !== 0) return;
-    this.drag = { index, started: false, off: false };
+    this.stopDragging();
+    this.drag = { index, started: false, off: false, selected: this.state.selected };
+    this.root.ownerDocument?.addEventListener?.("keydown", this.escapeDrag, true);
     this.select(index);
     try {
       this.track.setPointerCapture?.(ev.pointerId);
@@ -358,9 +378,15 @@ export class RampSlider {
   private moveDrag(ev: PointerEvent): void {
     const drag = this.drag;
     if (!drag) return;
+    // No button down: the release happened where the slider did not see it.
+    if (ev.buttons === 0) {
+      this.endDrag(ev, false);
+      return;
+    }
     const at = this.measure(ev);
     const ramp = this.host.read();
-    if (!at || !ramp) return;
+    // A solid's one stop has nowhere to go: a press only selects it.
+    if (!at || !ramp || ramp.stops.length <= 1) return;
     drag.off = ramp.stops.length > 1 && at.below > DROP_OFF_PX;
     this.handleEls[drag.index]?.toggleClass("lf-ramp-handle-off", drag.off);
     if (drag.off || ramp.stops[drag.index]?.offset === at.offset) return;
@@ -373,15 +399,31 @@ export class RampSlider {
   }
 
   /** The release: a handle pulled off is removed (in the drag's undo step), and the step ends. */
-  private endDrag(ev: PointerEvent, released: boolean): void {
-    const drag = this.drag;
-    if (!drag) return;
+  /** Forgets the drag (no write), its Escape listener and its pointer capture. */
+  private stopDragging(pointerId?: number): void {
     this.drag = null;
+    this.root.ownerDocument?.removeEventListener?.("keydown", this.escapeDrag, true);
     try {
-      if (this.track.hasPointerCapture?.(ev.pointerId)) this.track.releasePointerCapture(ev.pointerId);
+      if (pointerId !== undefined && this.track.hasPointerCapture?.(pointerId)) this.track.releasePointerCapture(pointerId);
     } catch {
       // Already released.
     }
+  }
+
+  /** Escape: the ramp is put back as it was before the drag, and the drag leaves no undo step. */
+  private cancelDrag(): void {
+    const drag = this.drag;
+    if (!drag) return;
+    this.stopDragging();
+    this.state.selected = drag.selected;
+    if (drag.started) this.host.cancelMerge?.();
+    this.sync();
+  }
+
+  private endDrag(ev: PointerEvent, released: boolean): void {
+    const drag = this.drag;
+    if (!drag) return;
+    this.stopDragging(ev.pointerId);
     const ramp = this.host.read();
     if (released && drag.off && ramp && ramp.stops.length > 1) {
       this.state.selected = Math.min(drag.index, ramp.stops.length - 2);

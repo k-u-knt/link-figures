@@ -2,7 +2,7 @@ import { pageSizePx } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import type { Document, Node, NodeId, Page } from "../model/types";
 import type { Registries } from "../registry";
-import { nodeTypeFor, type SvgContext } from "../registry/node-type";
+import { isExported, nodeTypeFor, type SvgContext } from "../registry/node-type";
 import type { AssetMap } from "./asset-types";
 import { isTransparentPaper } from "../model/paper";
 
@@ -78,9 +78,10 @@ export function buildPageSvg(
     unreadable: opts.unreadable,
   };
 
-  // `sort` is stable, so nodes with the same `z` keep the document's order.
+  // `sort` is stable, so nodes with the same `z` keep the document's order. What no export draws (a card, an
+  // association, a connector with an end on a card: `isExported`) is left out silently, inside groups too.
   const nodes = doc.nodes
-    .filter((n) => n.page === page.id && (!opts.only || opts.only.has(n.id)))
+    .filter((n) => n.page === page.id && (!opts.only || opts.only.has(n.id)) && isExported(doc, registries, n, opts.unreadable))
     .sort((a, b) => a.z - b.z);
 
   const body: string[] = [];

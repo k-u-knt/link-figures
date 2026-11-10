@@ -4,6 +4,7 @@ import { readHeadlessFigure, type FigureFiles } from "./commands/headless";
 import { displayAdjustment } from "./adjust/display";
 import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
+import { cardCommands } from "./commands/cards";
 import { builtinSnapSources } from "./model/snap";
 import { registerBuiltinCommands, registerPaletteCommand } from "./commands/builtin";
 import { cropCommands } from "./commands/crop";
@@ -28,6 +29,7 @@ import { localFontSource } from "./fonts/local-source";
 import { createDecoders } from "./links/decoders";
 import { ObsidianVaultAccess } from "./links/obsidian-access";
 import type { Decoders } from "./links/types";
+import { cardNodeType } from "./nodes/card-node";
 import { connectorNodeType } from "./nodes/connector-node";
 import { fileNodeType } from "./nodes/file-node";
 import { groupNodeType } from "./nodes/group-node";
@@ -93,6 +95,7 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.nodeTypes.register(shapeNodeType);
     this.registries.nodeTypes.register(connectorNodeType);
     this.registries.nodeTypes.register(groupNodeType);
+    this.registries.nodeTypes.register(cardNodeType);
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
     this.registries.exporters.register(pngExporter);
@@ -131,7 +134,7 @@ export default class LinkFiguresPlugin extends Plugin {
     );
     registerBuiltinCommands(this);
     // Not in the palette: each needs arguments (the tools, the inspector and scripts give them).
-    for (const command of [...drawingCommands(), ...panelCommands()]) this.registries.commands.register(command);
+    for (const command of [...drawingCommands(), ...panelCommands(), ...cardCommands()]) this.registries.commands.register(command);
     // Group, Ungroup, Align and Distribute act on the selection, so they are in the palette (and can take hotkeys); the hidden ones need arguments.
     for (const command of [...groupCommands(), ...arrangeCommands()]) {
       if (command.hidden) this.registries.commands.register(command);

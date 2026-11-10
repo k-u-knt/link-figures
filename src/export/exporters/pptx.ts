@@ -5,7 +5,7 @@ import { nodeLabel } from "../../model/labels";
 import { isTransparentPaper } from "../../model/paper";
 import type { Document, Node, NodeId, Page } from "../../model/types";
 import type { Exporter, ExportInput } from "../../registry/exporter";
-import type { PptxContext, PptxPart } from "../../registry/node-type";
+import { isExported, type PptxContext, type PptxPart } from "../../registry/node-type";
 import type { AssetMap } from "../asset-types";
 import { EMU_PER_MM, EMU_PER_PX, hexColor, nvPrXml, xfrmXml } from "../pptx/drawingml";
 import { pictureXml } from "../pptx/media";
@@ -66,8 +66,9 @@ type Tree = { kind: "item"; node: Node } | { kind: "group"; node: Node; children
  * whose drawing members are next to each other in z order. A group whose members are not is left out of the tree (its
  * members are written loose, in z order) and named in `flattened`, so the slide stacks its items as the figure does.
  */
-export function slideTree(doc: Document, page: Page, registries: ExportInput["registries"], flattened: Node[]): Tree[] {
-  const nodes = doc.nodes.filter((n) => n.page === page.id).sort((a, b) => a.z - b.z);
+export function slideTree(doc: Document, page: Page, registries: ExportInput["registries"], flattened: Node[], unreadable?: ReadonlySet<NodeId>): Tree[] {
+  // What no export draws (a card, an association, a connector with an end on a card) is left out, inside groups too.
+  const nodes = doc.nodes.filter((n) => n.page === page.id && isExported(doc, registries, n, unreadable)).sort((a, b) => a.z - b.z);
   const container = (id: NodeId) => isGroup(doc, id, registries);
   const items = nodes.filter((n) => !container(n.id));
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -258,7 +259,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
         };
 
         const flattened: Node[] = [];
-        const tree = slideTree(input.doc, page, input.registries, flattened);
+        const tree = slideTree(input.doc, page, input.registries, flattened, input.unreadable);
         for (const group of flattened) {
           warn(`${nodeLabel(input.doc, group)}: its members are not next to each other in the stacking order, written as separate items`);
         }

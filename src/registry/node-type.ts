@@ -275,6 +275,28 @@ export interface NodeType<N extends Node = Node> {
    */
   fieldRoute?(key: string): FieldRoute<N> | undefined;
   /**
+   * `false` keeps the type's items out of every export, inside groups too, and with them every node drawn from one of
+   * them (a connector with an end on one, see `isExported`): a card beside the figure. Absent, the items are exported.
+   */
+  exportable?: false;
+  /**
+   * Opts the type in to being kept off the paper: the store keeps each of its items at least `CARD_PAPER_GAP_MM` outside
+   * every page's paper rectangle (`pushOffPaper`, by the smallest move), in the commit that would put it there, whether
+   * the item or a page moved. Its box (`bounds`) is what is kept clear.
+   */
+  offPaper?: true;
+  /**
+   * Opts the type in to being tied to pages by connectors: a connector whose one end is attached to an item of the type
+   * may have its other end on a page (`{ kind: "page" }`), and is then an association (`isAssociation`). A page end on a
+   * connector from anything else is refused.
+   */
+  pageTies?: true;
+  /**
+   * The pages the node is tied to by itself (a connector's page ends). Deleting one of these pages deletes the node with
+   * it, in the same undo step, and a node tied to a page is never exported.
+   */
+  tiedPages?(node: N): PageId[];
+  /**
    * For a type a plugin registers (not one this plugin builds in): validates one of its nodes as a figure file holds it,
    * and gives the node back, completed with what is missing. `raw` has the base fields checked (`id`, `type`, `page`, a
    * numeric box) and the common defaults filled in (`z`, `rotation`, `opacity`, `locked`); every other key is as the
@@ -343,4 +365,22 @@ export class NodeTypeRegistry {
  */
 export function nodeTypeFor(registries: { nodeTypes: NodeTypeRegistry }, node: Pick<Node, "id" | "type">, unreadable?: ReadonlySet<NodeId>): NodeType<any> | undefined {
   return unreadable?.has(node.id) ? undefined : registries.nodeTypes.get(node.type);
+}
+
+/**
+ * Whether an export draws `node`: not when its type is not `exportable` (a card), nor when it is tied to a page
+ * (`tiedPages`: an association), nor when it is drawn from a node that is not exportable (`dependsOn`: a connector with
+ * an end on a card). A node no registered type can be asked about is left to the exporter, which skips it with its own
+ * warning.
+ */
+export function isExported(doc: Document, registries: { nodeTypes: NodeTypeRegistry }, node: Node, unreadable?: ReadonlySet<NodeId>): boolean {
+  const type = nodeTypeFor(registries, node, unreadable);
+  if (!type) return true;
+  if (type.exportable === false) return false;
+  if ((type.tiedPages?.(node).length ?? 0) > 0) return false;
+  for (const id of type.dependsOn?.(node) ?? []) {
+    const other = doc.nodes.find((n) => n.id === id);
+    if (other && nodeTypeFor(registries, other, unreadable)?.exportable === false) return false;
+  }
+  return true;
 }

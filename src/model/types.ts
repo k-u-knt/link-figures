@@ -118,14 +118,21 @@ export interface ShapeNode extends NodeBase {
   border: Stroke | null;
 }
 
+/** The anchors of a page end: the midpoints of its paper's north, east, south and west edges. */
+export type PageAnchor = "n" | "e" | "s" | "w";
+
 /**
- * One end of a connector: a free point in page px, or attached to an item (any node whose type is `attachable`) at one of
- * its anchors or at its centre. An attached end stores no point of its own; it is resolved from the item at render time.
+ * One end of a connector: a free point in page px, attached to an item (any node whose type is `attachable`) at one of
+ * its anchors or at its centre, or tied to a page's paper (`kind: "page"`) at one of its edge midpoints or, without an
+ * anchor, at its centre. An attached or page end stores no point of its own; it is resolved at render time. A page end
+ * may name any page of the figure, not only the connector's own, and only a connector whose other end is attached to an
+ * item tied to pages (a card, see `NodeType.pageTies`) has one: such a connector is an association.
  */
 export type End =
   | { kind: "free"; x: number; y: number }
   | { kind: "attached"; node: NodeId; snap: "anchor"; anchor: string }
-  | { kind: "attached"; node: NodeId; snap: "center" };
+  | { kind: "attached"; node: NodeId; snap: "center" }
+  | { kind: "page"; page: PageId; anchor?: PageAnchor };
 
 /** What a connector draws at one end: `kind` is a registered cap kind's id (an unknown one is kept as it is), `size` a multiple of the stroke's width. */
 export type Cap = { kind: string; size: number };
@@ -152,7 +159,20 @@ export interface GroupNode extends NodeBase {
   type: "group";
 }
 
-export type Node = FileNode | TextNode | ShapeNode | ConnectorNode | GroupNode;
+/**
+ * A card beside the figure, as in Obsidian Canvas: Markdown typed into it (`text`, a text card) or a link to a note, a
+ * heading or a block (`file` and `subpath`, a note card). Exactly one of `text` and `file` is present, and `subpath` only
+ * with `file`. A card is never on any page's paper (the store keeps it `CARD_PAPER_GAP_MM` clear) and never exported;
+ * its `page` is the page it is placed against, and its x and y are relative to that page as for every node.
+ */
+export interface CardNode extends NodeBase {
+  type: "card";
+  text?: string;
+  file?: string;
+  subpath?: string;
+}
+
+export type Node = FileNode | TextNode | ShapeNode | ConnectorNode | GroupNode | CardNode;
 
 /**
  * A node of a type this plugin does not build in, such as another plugin's item: the base fields plus keys of its own,

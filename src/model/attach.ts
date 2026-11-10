@@ -1,5 +1,5 @@
-import type { Document, End, Node, NodeId } from "./types";
-import type { Pt, Rect } from "./geometry";
+import type { ConnectorNode, Document, End, Node, NodeId, PageId } from "./types";
+import { pageOriginsPx, pageSizePx, type Pt, type Rect } from "./geometry";
 import { rectPath, transformPath, type Matrix, type PathData } from "./path";
 import type { Registries } from "../registry";
 import { nodeTypeFor } from "../registry/node-type";
@@ -196,6 +196,8 @@ export function nearestAnchor(anchors: readonly Anchor[], at: Pt): Anchor {
  */
 export function endError(doc: Document, registries: Registries, end: End, page: string, unreadable?: ReadonlySet<NodeId>): string | null {
   if (end.kind === "free") return null;
+  // A page end may name any page: an association crosses pages by design. Which other end it needs is `pageEndsError`'s.
+  if (end.kind === "page") return doc.pages.some((p) => p.id === end.page) ? null : `is tied to page "${end.page}", which is not a page of the figure`;
   const target = doc.nodes.find((n) => n.id === end.node);
   if (!target) return `is attached to "${end.node}", which is not a node of the figure`;
   if (!attachTarget(doc, registries, end.node, unreadable)) return `cannot attach to "${end.node}" (a ${target.type})`;
@@ -223,4 +225,47 @@ export function snapMarks(
   if (!found) return [];
   const { anchors, center } = found.target;
   return mode === "center" || anchors.length === 0 ? [center] : anchors.map((a) => ({ x: a.x, y: a.y }));
+}
+
+/**
+ * What a connector on page `inPage` attaches to for a page end on `page`: the page's paper rectangle in `inPage`'s px
+ * (pages are stacked, so another page's paper is offset by the difference of their origins), with the box anchors of its
+ * edge midpoints (`n`, `e`, `s`, `w`) and its centre. Null when there is no such page.
+ */
+export function pageTarget(doc: Document, page: PageId, inPage: PageId): AttachTarget | null {
+  const target = doc.pages.find((p) => p.id === page);
+  if (!target) return null;
+  const origins = pageOriginsPx(doc);
+  const at = origins.get(page) ?? { x: 0, y: 0 };
+  const from = origins.get(inPage) ?? { x: 0, y: 0 };
+  const box: Rect = { x: at.x - from.x, y: at.y - from.y, ...pageSizePx(target) };
+  return { outline: rectPath(box, 0), anchors: boxAnchors(box), center: { x: box.x + box.width / 2, y: box.y + box.height / 2 } };
+}
+
+/** Whether `end` is attached to an item whose type may be tied to pages (`NodeType.pageTies`: a card). */
+export function onPageTiedItem(doc: Document, registries: Registries, end: End | undefined, unreadable?: ReadonlySet<NodeId>): boolean {
+  if (end?.kind !== "attached") return false;
+  const node = doc.nodes.find((n) => n.id === end.node);
+  return !!node && nodeTypeFor(registries, node, unreadable)?.pageTies === true;
+}
+
+/**
+ * What is wrong with a connector's two ends as far as page ends go, or null when nothing is: a page end needs the other
+ * end attached to an item that may be tied to pages (a card), so page to page, a free end or a shape to a page are
+ * refused. Ends without a page end are fine.
+ */
+export function pageEndsError(doc: Document, registries: Registries, ends: readonly End[], unreadable?: ReadonlySet<NodeId>): string | null {
+  for (const i of [0, 1] as const) {
+    if (ends[i]?.kind === "page" && !onPageTiedItem(doc, registries, ends[1 - i], unreadable)) return "only a card can be tied to a page";
+  }
+  return null;
+}
+
+/**
+ * Whether `connector` is an association: exactly one end on a page and the other attached to an item that may be tied
+ * to pages (a card). Such a connector is drawn as the item's tie to the page, and never exported.
+ */
+export function isAssociation(doc: Document, connector: ConnectorNode, registries: Registries, unreadable?: ReadonlySet<NodeId>): boolean {
+  const pages = connector.ends.filter((e) => e.kind === "page").length;
+  return pages === 1 && pageEndsError(doc, registries, connector.ends, unreadable) === null;
 }

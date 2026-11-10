@@ -1,7 +1,9 @@
 import { current, isDraft } from "immer";
 import { isConnector, resolveConnector } from "../connectors/geometry";
 import type { Registries } from "../registry";
-import { attachTarget, nearestAnchor } from "./attach";
+import { nodeTypeFor } from "../registry/node-type";
+import { attachTarget, nearestAnchor, onPageTiedItem } from "./attach";
+import { paperRectsWorld, pushOffPaper } from "./card-space";
 import { pageOriginsPx, type Pt } from "./geometry";
 import { DocumentStore } from "./store";
 import type { ConnectorNode, Document, End, Node, NodeId, PageId } from "./types";
@@ -32,6 +34,8 @@ export interface NormaliseContext {
  */
 export function createFigureStore(doc: Document, registries: Registries, now?: () => number, unreadable?: Iterable<NodeId>): DocumentStore {
   const store = new DocumentStore(doc, now, unreadable);
+  // First, so a connector attached to an item pushed off the paper follows it in the same commit.
+  store.addNormaliser(offPaperNormaliser(registries));
   // Every connector is kept in step with its items in each commit, and the document is brought in line now.
   store.addNormaliser(connectorNormaliser(registries));
   // After the connectors, so a group whose member is a connector takes in the connector's box as it now is.
@@ -44,6 +48,8 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
  * - an attached end whose item is gone, is on another page, or cannot be attached to (a connector) becomes a free end
  *   at its last resolved point: where it was in the document before this commit, when it was drawn there, else where
  *   the connector resolves it now;
+ * - a page end whose page is gone becomes a free end at its last resolved point, as above, and one whose other end is
+ *   not attached to an item tied to pages (a card, see `NodeType.pageTies`) becomes a free end where it is drawn;
  * - an end snapped to an anchor whose id its item does not have (the snap was just switched to anchor) takes the item's
  *   anchor nearest to where the end is drawn; an end snapped to the centre keeps no anchor id;
  * - the box (`x, y, width, height`) is the drawn area (`resolveConnector(…).bounds`) and `rotation` is 0.
@@ -63,6 +69,10 @@ export function connectorNormaliser(registries: Registries): Normaliser {
       let ends: [End, End] = snapshot.ends;
       for (const i of [0, 1] as const) {
         const end = ends[i];
+        if (end.kind === "page" && resolved.detached[i]) {
+          const pt = lastPoint(before, snapshot, i, registries, unreadable) ?? resolved.ends[i].pt;
+          ends = withEnd(ends, i, { kind: "free", x: pt.x, y: pt.y });
+        }
         if (end.kind !== "attached") continue;
         if (resolved.detached[i]) {
           const pt = lastPoint(before, snapshot, i, registries, unreadable) ?? resolved.ends[i].pt;
@@ -76,6 +86,13 @@ export function connectorNormaliser(registries: Registries): Normaliser {
           }
         } else if ("anchor" in end) {
           ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "center" });
+        }
+      }
+      // A page end with no card at the other end (the card was deleted or its end freed) comes free where it is drawn.
+      for (const i of [0, 1] as const) {
+        if (ends[i].kind === "page" && !onPageTiedItem(now, registries, ends[1 - i], unreadable)) {
+          const { pt } = resolved.ends[i];
+          ends = withEnd(ends, i, { kind: "free", x: pt.x, y: pt.y });
         }
       }
       if (ends !== snapshot.ends) {
@@ -116,7 +133,7 @@ function withEnd(ends: [End, End], i: 0 | 1, end: End): [End, End] {
 
 /**
  * Where end `i` of `c` was drawn in `before` (the document as it was before this edit), when the connector was there
- * with that end attached to the same item and the item was there to resolve it; otherwise null. A connector that has
+ * with that end attached to the same item (or on the same page) and it was there to resolve it; otherwise null. A connector that has
  * changed page since gets the point in its new page's pixels, at the same place on the canvas.
  */
 function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Registries, unreadable?: ReadonlySet<NodeId>): Pt | null {
@@ -124,7 +141,8 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
   if (!was || !isConnector(was)) return null;
   const end = was.ends[i];
   const now = c.ends[i];
-  if (end.kind !== "attached" || now.kind !== "attached" || end.node !== now.node) return null;
+  const same = (end.kind === "attached" && now.kind === "attached" && end.node === now.node) || (end.kind === "page" && now.kind === "page" && end.page === now.page);
+  if (!same) return null;
   const resolved = resolveConnector(before, was, registries, unreadable);
   if (resolved.detached[i]) return null;
   const pt = resolved.ends[i].pt;
@@ -154,12 +172,15 @@ function lastPoint(before: Document, c: ConnectorNode, i: 0 | 1, registries: Reg
  */
 export function groupNormaliser(registries: Registries): Normaliser {
   const once = groupPass(registries);
+  const offPaper = offPaperNormaliser(registries);
   const connectors = connectorNormaliser(registries);
   return (draft, before, ctx) => {
     // A member this pass took to its group's page may have a connector attached to it from its old page; the connector
     // rule (an end attached to an item on another page is freed) is applied again at once, in this same commit, and the
-    // boxes are then worked out again from the connectors as they now are.
+    // boxes are then worked out again from the connectors as they now are. A card taken to another page keeps its
+    // coordinates, which may put it on that page's paper: it is pushed off first.
     if (once(draft, before)) {
+      offPaper(draft, before, ctx);
       connectors(draft, before, ctx);
       once(draft, before);
     }
@@ -286,4 +307,43 @@ function breakCycles(nodes: Node[], byId: Map<NodeId, Node>, before: Document): 
     // Every node met now ends at the top: the walk did, or it ran into the cycle, whose broken link is now the top.
     for (const n of path) settled.add(n.id);
   }
+}
+
+/** `value` rounded to 0.01 px away from where it came from (`dir`), so a pushed box never ends a hair inside the gap. */
+function roundAway(value: number, dir: number): number {
+  const scaled = value * 100;
+  return (dir > 0 ? Math.ceil(scaled) : Math.floor(scaled)) / 100;
+}
+
+/**
+ * Keeps every item whose type is kept off the paper (`NodeType.offPaper`: a card) at least `CARD_PAPER_GAP_MM` outside
+ * every page's paper: one that overlaps a paper (it was moved, created or resized there, or a page was added, resized or
+ * moved under it) is moved by the smallest move clear of all of them (`pushOffPaper`), on its own page, in the same
+ * commit. Its box (`bounds`) is what is kept clear; its position is rounded to 0.01 px away from the paper. Nothing else
+ * changes, and an item already clear is not written.
+ */
+export function offPaperNormaliser(registries: Registries): Normaliser {
+  return (draft, _before, ctx) => {
+    const unreadable = ctx?.unreadable;
+    const typeOf = (n: Node) => nodeTypeFor(registries, n, unreadable);
+    if (!draft.nodes.some((n) => typeOf(n)?.offPaper === true)) return;
+    const snapshot: Document = isDraft(draft) ? current(draft) : draft;
+    const papers = paperRectsWorld(snapshot);
+    const origins = pageOriginsPx(snapshot);
+    const plain = new Map(snapshot.nodes.map((n) => [n.id, n] as const));
+    for (const node of draft.nodes) {
+      const type = typeOf(node);
+      const was = plain.get(node.id);
+      const origin = origins.get(node.page);
+      if (type?.offPaper !== true || !was || !origin) continue;
+      const box = type.bounds(was);
+      const world = { x: origin.x + box.x, y: origin.y + box.y, width: box.width, height: box.height };
+      const out = pushOffPaper(world, papers);
+      if (out === world) continue;
+      const dx = out.x - world.x;
+      const dy = out.y - world.y;
+      if (dx !== 0) node.x = roundAway(was.x + dx, dx);
+      if (dy !== 0) node.y = roundAway(was.y + dy, dy);
+    }
+  };
 }

@@ -1,5 +1,5 @@
 import { resolveConnector } from "../connectors/geometry";
-import { endAt, endError, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
+import { endAt, endError, pageEndsError, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { MIN_NODE_PX } from "../constants";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
 import { getPreset } from "../model/presets";
@@ -137,6 +137,12 @@ function checkEnd(ctx: CommandContext, command: string, name: string, end: End, 
   if (error !== null) throw new CommandError(`${command}: "${name}" ${error}`);
 }
 
+/** Throws `CommandError` unless a page end among `ends` has a card at the other end (`pageEndsError`). */
+function checkPageEnds(ctx: CommandContext, command: string, ends: readonly End[]): void {
+  const error = pageEndsError(ctx.store.doc, ctx.registries, ends, unreadableIn(ctx));
+  if (error !== null) throw new CommandError(`${command}: ${error}`);
+}
+
 type ConnectorCreateArgs = {
   id?: string;
   page?: string;
@@ -167,6 +173,7 @@ function createConnector(ctx: CommandContext, args: ConnectorCreateArgs): { id: 
   const page = creationPage(ctx, command, args);
   checkEnd(ctx, command, "from", args.from, page.id);
   checkEnd(ctx, command, "to", args.to, page.id);
+  checkPageEnds(ctx, command, [args.from, args.to]);
   const doc = ctx.store.doc;
   const partial: Partial<ConnectorNode> = {
     ends: [args.from, args.to],
@@ -264,7 +271,8 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     const target = draft.nodes.find((n) => n.id === node.id) as unknown as Record<string, unknown> | undefined;
     if (!target) return;
     for (const key of changed) {
-      if (key === "name" && after[key] === "") delete target.name;
+      // An empty name, and a key the type's `completeUpdate` cleared (a card's text when a link is given), are removed.
+      if ((key === "name" && after[key] === "") || after[key] === undefined) delete target[key];
       else target[key] = after[key];
     }
   });
@@ -458,6 +466,9 @@ function setConnectorEnd(ctx: CommandContext, args: { id: string; which: 0 | 1; 
   if (node.type !== "connector") throw new CommandError(`${command}: "${args.id}" is not a connector`);
   checkPlain(command, "end", args.end);
   checkEnd(ctx, command, "end", args.end, node.page);
+  // A page end needs a card at the other end. Moving the card end of an association elsewhere is not refused: the
+  // connector normaliser then frees the page end where it is drawn.
+  if (args.end.kind === "page") checkPageEnds(ctx, command, args.which === 0 ? [args.end, node.ends[1]] : [node.ends[0], args.end]);
   const end = structuredClone(args.end);
   ctx.store.commit(command, (draft) => {
     const target = draft.nodes.find((n) => n.id === node.id);

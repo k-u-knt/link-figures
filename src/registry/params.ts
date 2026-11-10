@@ -37,10 +37,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** Whether `value` is a connector end: a free point, or attached to a node at an anchor or at its centre. */
+/** The anchors a page end may name: its paper's edge midpoints. */
+const PAGE_ANCHORS: readonly unknown[] = ["n", "e", "s", "w"];
+
+/** Whether `value` is a connector end: a free point, attached to a node at an anchor or at its centre, or on a page. */
 export function isEnd(value: unknown): value is End {
   if (!isRecord(value)) return false;
   if (value.kind === "free") return isFiniteNumber(value.x) && isFiniteNumber(value.y);
+  if (value.kind === "page") return typeof value.page === "string" && (value.anchor === undefined || PAGE_ANCHORS.includes(value.anchor));
   if (value.kind !== "attached" || typeof value.node !== "string") return false;
   if (value.snap === "center") return true;
   return value.snap === "anchor" && typeof value.anchor === "string";
@@ -86,7 +90,7 @@ const CHECKS: Record<ParamType, { test: (value: unknown) => boolean; what: strin
   boolean: { test: (v) => typeof v === "boolean", what: "true or false" },
   object: { test: isRecord, what: "an object" },
   array: { test: Array.isArray, what: "an array" },
-  end: { test: isEnd, what: 'an end ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})' },
+  end: { test: isEnd, what: 'an end ({kind: "free", x, y}, {kind: "attached", node, snap, anchor?} or {kind: "page", page, anchor?})' },
   paint: { test: isPaint, what: "a paint ({type, …})" },
   stroke: { test: isStroke, what: "a stroke ({paint, width, dash, cap?, join?})" },
 };

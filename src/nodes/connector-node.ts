@@ -1,6 +1,6 @@
 import { PT_TO_PX } from "../constants";
 import { resolveConnector } from "../connectors/geometry";
-import { attachTarget, endAt, endError, nearestAnchor, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
+import { attachTarget, endAt, endError, nearestAnchor, pageEndsError, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
 import { rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import { distanceToPath, toSvgPath, type PathData } from "../model/path";
@@ -212,6 +212,11 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     return node.ends.flatMap((end) => (end.kind === "attached" ? [end.node] : []));
   },
 
+  /** The pages its page ends are on: an association goes when its page is deleted. */
+  tiedPages(node: ConnectorNode): PageId[] {
+    return node.ends.flatMap((end) => (end.kind === "page" ? [end.page] : []));
+  },
+
   inspector(node: ConnectorNode, ctx: InspectorContext): Field[] {
     const { routes, caps } = ctx.registries;
     const route = routes.get(node.route);
@@ -247,15 +252,19 @@ export const connectorNodeType: NodeType<ConnectorNode> = {
     return withNearestAnchors(next, ctx);
   },
 
-  /** Two ends, each free or attached to an item on the connector's page that can be attached to; two caps; the rest by `CONNECTOR_FIELDS`. */
+  /**
+   * Two ends, each free, attached to an item on the connector's page that can be attached to, or on a page of the figure
+   * (any page: an association crosses pages) when the other end is attached to a card (`pageEndsError`); two caps; the
+   * rest by `CONNECTOR_FIELDS`.
+   */
   checkField(key: string, value: unknown, ctx: UpdateContext, node: ConnectorNode): string | null {
     if (key === "ends") {
-      if (!pairOf(value, isEnd)) return '"ends" must be two ends ({kind: "free", x, y} or {kind: "attached", node, snap, anchor?})';
+      if (!pairOf(value, isEnd)) return '"ends" must be two ends ({kind: "free", x, y}, {kind: "attached", node, snap, anchor?} or {kind: "page", page, anchor?})';
       for (const i of [0, 1] as const) {
         const error = endError(ctx.doc, ctx.registries, (value as End[])[i], node.page, ctx.unreadable);
         if (error !== null) return `"ends.${i}" ${error}`;
       }
-      return null;
+      return pageEndsError(ctx.doc, ctx.registries, value as End[], ctx.unreadable);
     }
     if (key === "caps") return pairOf(value, isCap) ? null : '"caps" must be two caps ({kind, size})';
     if (key === "page") {

@@ -10,7 +10,7 @@ import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../mod
 import type LinkFiguresPlugin from "../main";
 import { CommandError, markUnreadableIn, unreadableIn, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
-import type { ImageState } from "../registry/node-type";
+import { nodeTypeFor, type ImageState } from "../registry/node-type";
 import type { Plane } from "../links/decoders/tiff-convert";
 import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
@@ -312,6 +312,8 @@ function duplicate(ctx: CommandContext, args?: NodesArgs): { ids: NodeId[] } {
     const resolved = resolveConnector(doc, original, ctx.registries, unreadableIn(ctx));
     copy.ends = copy.ends.map((end, which): End => {
       if (end.kind === "free") return { kind: "free", x: roundPx(end.x + offset), y: roundPx(end.y + offset) };
+      // A page end stays on its page: a copied card's association ties the copy to the same page.
+      if (end.kind === "page") return end;
       const target = copyOf.get(end.node);
       if (target !== undefined) return { ...end, node: target };
       const { pt } = resolved.ends[which];
@@ -374,16 +376,25 @@ function addPage(ctx: CommandContext, args?: { page?: unknown; preset?: unknown 
   return { id: page.id };
 }
 
-/** Removes a page (`args.page`, else the focus page) and everything on it; never the last page. Headless the page must be named. */
+/**
+ * Removes a page (`args.page`, else the focus page) and everything on it, and every node tied to it from another page (an
+ * association, `NodeType.tiedPages`); never the last page. Headless the page must be named.
+ */
 function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
   const page = targetPage(ctx, "delete-page", args);
   if (!page && !ctx.view) throw new CommandError(`delete-page needs "page" when the figure is not open`);
   const id = page?.id;
   if (id === undefined || ctx.store.doc.pages.length < 2) return;
+  // The nodes tied to the page from elsewhere (associations from cards beside other pages, see `NodeType.tiedPages`)
+  // go with it; the cards stay.
+  const unreadable = unreadableIn(ctx);
+  const tied = new Set(
+    ctx.store.doc.nodes.filter((n) => nodeTypeFor(ctx.registries, n, unreadable)?.tiedPages?.(n).includes(id) === true).map((n) => n.id),
+  );
   // One commit, so one undo brings the page back with everything on it. The node host lets go of the removed nodes' links.
   ctx.store.commit("delete-page", (draft) => {
     draft.pages = draft.pages.filter((p) => p.id !== id);
-    draft.nodes = draft.nodes.filter((n) => n.page !== id);
+    draft.nodes = draft.nodes.filter((n) => n.page !== id && !tied.has(n.id));
   });
 }
 

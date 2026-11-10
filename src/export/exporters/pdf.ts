@@ -5,6 +5,7 @@ import { pageSizePx } from "../../model/geometry";
 import { nodeLabel } from "../../model/labels";
 import { PX_TO_PT } from "../../constants";
 import type { Exporter, ExportInput } from "../../registry/exporter";
+import { isExported } from "../../registry/node-type";
 import type { AssetMap, PdfAsset } from "../asset-types";
 import { pdfPanelPlacement, splitLayers, type Layer, type PdfPlacement } from "../pdf-layers";
 import { buildPageSvg } from "../svg-builder";
@@ -306,7 +307,8 @@ export const pdfExporter: Exporter = {
     const plans = input.pages.map((page): PagePlan => {
       const svg = input.svgs.get(page.id);
       if (svg === undefined) throw new Error(`No SVG was built for page "${page.name}"`);
-      const nodes = input.doc.nodes.filter((n) => n.page === page.id);
+      // What no export draws (a card, an association) opens no layer.
+      const nodes = input.doc.nodes.filter((n) => n.page === page.id && isExported(input.doc, input.registries, n, input.unreadable));
       const panels = pdfPanelsOf(nodes, input.assets.get(page.id) ?? new Map());
       return { page, svg, panels, layers: splitLayers(nodes, (n) => panels.has(n.id), (n) => input.registries.nodeTypes.get(n.type)?.members !== undefined) };
     });

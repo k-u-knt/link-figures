@@ -1,5 +1,5 @@
 import { PT_TO_PX } from "../constants";
-import { attachTarget, type AttachTarget } from "../model/attach";
+import { attachTarget, pageTarget, type AttachTarget } from "../model/attach";
 import { unionRect, type Pt, type Rect } from "../model/geometry";
 import { clipToOutline, pathBounds, pointAtEnd, transformPath, type PathData, type Seg } from "../model/path";
 import type { ConnectorNode, Document, End, NodeId } from "../model/types";
@@ -28,7 +28,7 @@ export interface ResolvedConnector {
    * has a box to lay a paint across.
    */
   paintBox: Rect;
-  /** Which ends are attached to an item that is missing, on another page, or not attachable. */
+  /** Which ends are attached to an item that is missing, on another page, or not attachable, or tied to a page that is missing. */
   detached: [boolean, boolean];
 }
 
@@ -42,6 +42,13 @@ type Placed = { pt: Pt; dir: Pt | null; clipTo: AttachTarget | null } | null;
  */
 function place(doc: Document, c: ConnectorNode, end: End, registries: Registries, unreadable?: ReadonlySet<NodeId>): Placed {
   if (end.kind === "free") return { pt: { x: end.x, y: end.y }, dir: null, clipTo: null };
+  if (end.kind === "page") {
+    // Any page: the paper is placed in the connector's page's px. An anchor that is not an edge's is the centre.
+    const target = pageTarget(doc, end.page, c.page);
+    if (!target) return null;
+    const anchor = end.anchor === undefined ? undefined : target.anchors.find((a) => a.id === end.anchor);
+    return anchor ? { pt: { x: anchor.x, y: anchor.y }, dir: anchor.dir, clipTo: null } : { pt: target.center, dir: null, clipTo: target };
+  }
   const node = doc.nodes.find((n) => n.id === end.node);
   if (!node || node.page !== c.page) return null;
   const target = attachTarget(doc, registries, end.node, unreadable);
@@ -378,7 +385,7 @@ export function isConnector(node: { type: string } | undefined): node is Connect
   return node?.type === "connector";
 }
 
-/** Whether either end of `node` is attached to an item (such a connector follows its items; it cannot move as a whole). */
+/** Whether either end of `node` is attached to an item or tied to a page (such a connector follows them; it cannot move as a whole). */
 export function hasAttachedEnd(node: ConnectorNode): boolean {
-  return node.ends.some((end) => end.kind === "attached");
+  return node.ends.some((end) => end.kind !== "free");
 }

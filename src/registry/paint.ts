@@ -3,6 +3,7 @@ import { escapeAttr } from "../export/svg-builder";
 import type { Rect } from "../model/geometry";
 import type { Paint, Stroke } from "../model/types";
 import type { Field } from "./fields";
+import type { ColorRamp } from "./ramp";
 
 /** What a paint needs from the SVG build it is part of. `warnings`, where there is one, is told what could not be painted. */
 export interface PaintContext {
@@ -43,6 +44,12 @@ export interface PaintType {
    * no fill, with a warning.
    */
   toPptx?(paint: Paint, alpha: number, box: { width: number; height: number }, ctx: PaintPptxContext): string;
+  /**
+   * A paint that is a ramp of colour stops (a solid colour, a gradient) reads as one here, so that the colour slider
+   * edits it; the ramp is written back by `paintOfRamp` (one stop a solid, more through the ramp's geometry). A type
+   * without it keeps its own fields.
+   */
+  ramp?: { read(paint: Paint): ColorRamp };
 }
 
 export class PaintRegistry {

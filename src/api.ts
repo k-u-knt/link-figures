@@ -17,7 +17,8 @@ import { newFigureText } from "./format/new-figure";
 import type { BlockIdResult } from "./links/note-block-id";
 import { DEFAULT_PRESET_ID, getPreset } from "./model/presets";
 import type { DocumentStore } from "./model/store";
-import type { Document } from "./model/types";
+import type { Document, Paint } from "./model/types";
+import { paintOfRamp, rampOf, type ColorRamp } from "./paint/ramp";
 import type { Registries } from "./registry";
 import { settlesWithin } from "./util/event-loop";
 import { CommandError, type CommandContext } from "./registry/command";
@@ -77,6 +78,16 @@ export interface LinkFiguresApi {
    * Resolves to the figure's vault path. Not a figure command: it makes the file the commands then act on.
    */
   createFigure(path: string, options?: CreateFigureOptions): Promise<{ path: string }>;
+  /**
+   * Colour as the inspector's colour slider edits it, so that scripts share its rule: `of` reads a paint whose type has
+   * a ramp (solid, linear, radial) as a ramp of stops, sorted (undefined for one that has none); `toPaint` writes a ramp
+   * back, one stop as a solid and more as the paint of its geometry, keeping `previous`'s other keys when it is of the
+   * type written. Neither changes a figure: pass the paint to `node.update`.
+   */
+  ramp: {
+    of(paint: Paint): ColorRamp | undefined;
+    toPaint(ramp: ColorRamp, previous?: Paint): Paint;
+  };
   registries: Registries;
 }
 
@@ -170,6 +181,11 @@ export function createApi(host: ApiHost): LinkFiguresApi {
 
   return {
     registries,
+
+    ramp: {
+      of: (paint) => structuredClone(rampOf(paint, registries)),
+      toPaint: (ramp, previous) => structuredClone(paintOfRamp(ramp, previous, registries.rampGeometries)),
+    },
 
     commands: () =>
       registries.commands.all().map((c) => ({

@@ -5,6 +5,7 @@ import { toSvgPath, type PathData } from "../model/path";
 import type { Paint, Stop } from "../model/types";
 import type { Field } from "../registry/fields";
 import type { PaintContext, PaintType } from "../registry/paint";
+import { linearGeometryFields, radialGeometryFields, rampStops } from "./ramp";
 
 /** A finite number from a paint's params, or `fallback`. */
 function num(value: unknown, fallback: number): number {
@@ -71,6 +72,14 @@ export const solidPaint: PaintType = {
     return opacity < 1 ? { ref, defs: [], opacity } : { ref, defs: [] };
   },
   toPptx: (paint, alpha, _box, ctx) => `<a:solidFill>${colorXml(readColor(paint.color, ctx), clamp01(num(paint.opacity, 1)) * alpha)}</a:solidFill>`,
+  /** One stop, at 0, on a linear ramp at angle 0: the gradient a second stop makes. */
+  ramp: {
+    read: (paint) => {
+      const stop: Stop = { offset: 0, color: typeof paint.color === "string" ? paint.color : "#000000" };
+      if (typeof paint.opacity === "number" && Number.isFinite(paint.opacity)) stop.opacity = paint.opacity;
+      return { stops: [stop], geometry: { kind: "linear", angle: 0 } };
+    },
+  },
 };
 
 /** A gradient of fewer than two stops for PowerPoint: one colour, or nothing; null for a real gradient. */
@@ -88,7 +97,8 @@ export const linearPaint: PaintType = {
   id: "linear",
   name: "Linear gradient",
   defaults: () => ({ type: "linear", angle: 0, stops: defaultStops() }),
-  fields: () => [{ kind: "number", key: "angle", label: "Angle (°)", step: 1 }, stopsField],
+  fields: () => [...linearGeometryFields(), stopsField],
+  ramp: { read: (paint) => ({ stops: rampStops(paint.stops), geometry: { kind: "linear", angle: num(paint.angle, 0) } }) },
   toSvg(paint, box: Rect, ctx: PaintContext) {
     const d = direction(num(paint.angle, 0));
     const half = (Math.abs(box.width * d.x) + Math.abs(box.height * d.y)) / 2;
@@ -111,12 +121,10 @@ export const radialPaint: PaintType = {
   id: "radial",
   name: "Radial gradient",
   defaults: () => ({ type: "radial", cx: 0.5, cy: 0.5, r: 0.5, stops: defaultStops() }),
-  fields: () => [
-    { kind: "number", key: "cx", label: "Centre x", min: 0, max: 1, step: 0.05 },
-    { kind: "number", key: "cy", label: "Centre y", min: 0, max: 1, step: 0.05 },
-    { kind: "number", key: "r", label: "Radius", min: 0, step: 0.05 },
-    stopsField,
-  ],
+  fields: () => [...radialGeometryFields(), stopsField],
+  ramp: {
+    read: (paint) => ({ stops: rampStops(paint.stops), geometry: { kind: "radial", cx: num(paint.cx, 0.5), cy: num(paint.cy, 0.5), r: num(paint.r, 0.5) } }),
+  },
   toSvg(paint, box: Rect, ctx: PaintContext) {
     const cx = box.x + num(paint.cx, 0.5) * box.width;
     const cy = box.y + num(paint.cy, 0.5) * box.height;

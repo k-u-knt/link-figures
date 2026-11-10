@@ -34,6 +34,7 @@ import { groupNodeType } from "./nodes/group-node";
 import { shapeNodeType } from "./nodes/shape-node";
 import { textNodeType } from "./nodes/text-node";
 import { builtinPaintTypes } from "./paint/builtin";
+import { builtinRampGeometries, builtinRampPresets } from "./paint/ramp";
 import { createRegistries, type Registries } from "./registry";
 import { CommandError } from "./registry/command";
 import { builtinShapeKinds } from "./shapes/builtin";
@@ -98,6 +99,8 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.exporters.register(tiffExporter);
     this.registries.exporters.register(pptxExporter);
     for (const paint of builtinPaintTypes) this.registries.paints.register(paint);
+    for (const geometry of builtinRampGeometries) this.registries.rampGeometries.register(geometry);
+    for (const preset of builtinRampPresets) this.registries.rampPresets.register(preset);
     for (const kind of builtinShapeKinds) this.registries.shapes.register(kind);
     for (const route of builtinRoutes) this.registries.routes.register(route);
     for (const cap of builtinCapKinds) this.registries.caps.register(cap);

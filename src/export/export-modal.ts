@@ -62,6 +62,8 @@ export class ExportModal extends Modal {
   /** The chosen format's options, as its fields show them (each starts at its default: see `optionDefaults`). */
   private optionValues: Record<string, unknown> = {};
   private optionsEl: HTMLElement | null = null;
+  /** Where the options placed at the end go (`Field.placement`). */
+  private endOptionsEl: HTMLElement | null = null;
   private busy = false;
 
   /** The export dialog that is open, if one is: there is never more than one (see `show`). */
@@ -116,7 +118,6 @@ export class ExportModal extends Modal {
       });
     });
     this.optionsEl = contentEl.createDiv({ cls: "lf-export-options" });
-    this.renderOptions();
 
     const pages = new Setting(contentEl).setName("Pages").setDesc(`The current page is "${this.currentPage()?.name ?? ""}".`);
     const group = "lf-export-pages";
@@ -156,6 +157,10 @@ export class ExportModal extends Modal {
       );
     }
 
+    // The options placed at the end (`Field.placement`: the cards options), after Pages and Resolution.
+    this.endOptionsEl = contentEl.createDiv({ cls: "lf-export-options" });
+    this.renderOptions();
+
     new Setting(contentEl).addButton((button) =>
       button
         .setButtonText("Export")
@@ -168,6 +173,7 @@ export class ExportModal extends Modal {
     if (ExportModal.shown === this) ExportModal.shown = null;
     this.contentEl.empty();
     this.optionsEl = null;
+    this.endOptionsEl = null;
   }
 
   /** Brings the keyboard back to the dialog: its first control, else the dialog itself. */
@@ -176,17 +182,19 @@ export class ExportModal extends Modal {
     (first ?? this.modalEl).focus();
   }
 
-  /** The chosen format's options, under the Format menu, then the options every format has, each at its default. */
+  /** The chosen format's options, under the Format menu, then the options every format has, each at its default; those placed at the end (`Field.placement`) after Resolution. */
   private renderOptions(): void {
-    const el = this.optionsEl;
-    if (!el) return;
-    el.empty();
+    const top = this.optionsEl;
+    const end = this.endOptionsEl;
+    if (!top || !end) return;
+    top.empty();
+    end.empty();
     const exporter: Exporter | undefined = this.view.plugin.registries.exporters.get(this.formatId);
     const fields = [...(exporter?.options() ?? []), ...COMMON_EXPORT_OPTIONS];
     this.optionValues = optionDefaults(fields);
     for (const field of fields) {
       if (!(field.key in this.optionValues)) continue;
-      const setting = new Setting(el).setName(field.label);
+      const setting = new Setting(field.placement === "end" ? end : top).setName(field.label);
       const set = (value: unknown) => {
         this.optionValues[field.key] = value;
       };

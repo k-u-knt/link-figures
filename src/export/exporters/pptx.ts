@@ -134,7 +134,7 @@ export function createPptxExporter(backend: PptxBackend = { renderClearPng: rend
     ext: "pptx",
     mime: PPTX_MIME,
     pdfPanels: "raster",
-    options: () => [{ kind: "toggle", key: "notes", label: "Card text in presenter notes" }],
+    options: () => [{ kind: "toggle", key: "notes", label: "Card text in presenter notes", placement: "end" }],
     async run(input: ExportInput, opts: Record<string, unknown>) {
       const warnings = new Set<string>();
       const fromSvg = svgWarnings(input);

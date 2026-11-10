@@ -8,7 +8,7 @@ import type { Field } from "../registry/fields";
  * besides the figure, so the export run handles them, not the exporter, which is never given them. A toggle with an
  * `onValue` is on while its value is that (`cards: "markdown"`), and off when it is null or left out.
  */
-export const COMMON_EXPORT_OPTIONS: Field[] = [{ kind: "toggle", key: "cards", label: "Export cards as Markdown", onValue: "markdown" }];
+export const COMMON_EXPORT_OPTIONS: Field[] = [{ kind: "toggle", key: "cards", label: "Export cards as Markdown", onValue: "markdown", placement: "end" }];
 
 /** The kinds of field an exporter's options may use, and so the ones the modal draws. */
 const OPTION_KINDS = new Set<Field["kind"]>(["select", "toggle", "number", "text"]);

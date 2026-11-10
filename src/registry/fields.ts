@@ -26,4 +26,9 @@ export type Field = {
   nullable?: boolean;
   /** For a `heading`: 1 for a section's heading, 2 (the default) for a heading within a section. */
   level?: 1 | 2;
+  /**
+   * For an export option: `end` draws it at the end of the Export dialog, after Pages and Resolution, rather than under
+   * the Format menu (what the export writes besides the figure: the cards options).
+   */
+  placement?: "end";
 };

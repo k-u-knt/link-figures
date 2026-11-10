@@ -52,6 +52,9 @@ function recordingType() {
     bounds: () => ({ x: 0, y: 0, width: 0, height: 0 }),
     inspector: () => [],
     toSvg: () => "raster",
+    // As the file type's: a panel's link is resolved as the panel itself. (The stub registry gives this type for every
+    // node, the label too, which has no link.)
+    linkTarget: (n) => (n.type === "file" ? (n as FileNode) : null),
   };
   return { type, mounted, seenOnMount };
 }

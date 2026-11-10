@@ -60,3 +60,16 @@ test("a Links entry of a node whose type is not known (a missing plugin's) is ke
   // The node itself is untouched by its entry.
   expect("file" in loaded.doc.nodes[0]).toBe(false);
 });
+
+test("the built-in Links table is the linkField of the registered built-in types", async () => {
+  const { BUILTIN_LINKED_TYPES } = await import("../../src/format/node-links");
+  const { fileNodeType } = await import("../../src/nodes/file-node");
+  const { textNodeType } = await import("../../src/nodes/text-node");
+  const { shapeNodeType } = await import("../../src/nodes/shape-node");
+  const { connectorNodeType } = await import("../../src/nodes/connector-node");
+  const { groupNodeType } = await import("../../src/nodes/group-node");
+  const { cardNodeType } = await import("../../src/nodes/card-node");
+  const builtins: NodeType[] = [fileNodeType, textNodeType, shapeNodeType, connectorNodeType, groupNodeType, cardNodeType] as unknown as NodeType[];
+  const declared = Object.fromEntries(builtins.filter((t) => t.linkField).map((t) => [t.type, t.linkField]));
+  expect(Object.fromEntries(BUILTIN_LINKED_TYPES)).toEqual(declared);
+});

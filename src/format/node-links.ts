@@ -13,15 +13,20 @@ export interface LinkField {
 }
 
 /**
- * The types that keep a link, by type id: fed by `NodeTypeRegistry.register` from each type's `linkField`, so the file
- * format (`serializeFigureFile`, `loadDocument`) needs no registries. The built-in kinds are known from the start (a
- * figure written before its types are registered, or headless): a file panel's link has been in the Links section since
- * the first format version, and a note card's since cards exist. Their types declare the same `linkField`.
+ * The built-in kinds that keep a link, known from the start (a figure written before its types are registered, or
+ * headless): a file panel's link has been in the Links section since the first format version, and a note card's since
+ * cards exist. Their types declare the same `linkField` (a test holds the two equal).
  */
-const linkedTypes = new Map<string, LinkField>([
+export const BUILTIN_LINKED_TYPES: ReadonlyMap<string, LinkField> = new Map<string, LinkField>([
   ["file", { always: true }],
   ["card", { always: false }],
 ]);
+
+/**
+ * The types that keep a link, by type id: the built-ins, and each type `NodeTypeRegistry.register` is given with a
+ * `linkField`, so the file format (`serializeFigureFile`, `loadDocument`) needs no registries.
+ */
+const linkedTypes = new Map<string, LinkField>(BUILTIN_LINKED_TYPES);
 
 /** Whether nodes of `type` keep their link in the Links section (a type registered with `linkField`, or a built-in). */
 export function isLinkedType(type: string): boolean {

@@ -414,6 +414,8 @@ export const fileNodeType: NodeType<FileNode> = {
   icon: "image",
   // Every panel has a link (an empty one when it has none), kept in the figure file's Links section.
   linkField: { always: true },
+  // What the stage resolves is the panel itself: its link, and which image, page, range and adjustments it draws.
+  linkTarget: (node: FileNode) => node,
 
   mount(node: FileNode, host: HTMLElement, ctx: RenderContext): NodeRenderer {
     return new FileNodeRenderer(node, host, ctx);

@@ -45,11 +45,10 @@ function fileIdentity(node: FileNode): string {
 }
 
 /**
- * What `node`'s link is resolved as: a file panel itself, and for a node whose type names a link it shows
- * (`NodeType.linkTarget`, a note card) a panel of that link; null for a node that has none.
+ * What `node`'s link is resolved as: for a node whose type names a link it shows (`NodeType.linkTarget`: a file panel,
+ * itself; a note card, its note) a panel of that link, with the node's id; null for a node that has none.
  */
-function resolvableAs(registries: Registries, node: Node, doc: Document, unreadable?: ReadonlySet<NodeId>): FileNode | null {
-  if (node.type === "file") return node;
+export function resolvableAs(registries: Registries, node: Node, doc: Document, unreadable?: ReadonlySet<NodeId>): FileNode | null {
   let target;
   try {
     target = nodeTypeFor(registries, node, unreadable)?.linkTarget?.(node);
@@ -59,7 +58,7 @@ function resolvableAs(registries: Registries, node: Node, doc: Document, unreada
   }
   const page = doc.pages.find((p) => p.id === node.page);
   if (!target || !page) return null;
-  return { ...fileNodeDefaults(page, target, []), id: node.id };
+  return { ...fileNodeDefaults(page, target, []), type: "file", page: page.id, id: node.id };
 }
 
 /**

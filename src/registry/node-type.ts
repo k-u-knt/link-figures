@@ -4,17 +4,20 @@ import { registerLinkedType, type LinkField } from "../format/node-links";
 import type { Attachable } from "../model/attach";
 import type { Pt, Rect } from "../model/geometry";
 import type { PathData } from "../model/path";
-import type { Document, Node, NodeId, Page, PageId } from "../model/types";
+import type { Document, FileNode, Node, NodeId, Page, PageId } from "../model/types";
 import type { Plane } from "../links/decoders/tiff-convert";
 import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
 import type { Registries } from "./index";
 
-/** A link the stage resolves for a node (see `NodeType.linkTarget`), as a file panel's own fields name its link. */
-export interface LinkTarget {
+/**
+ * A link the stage resolves for a node (see `NodeType.linkTarget`), as a file panel's own fields name its link. Any
+ * other file panel field given (which image, page, range, adjustments) is kept, so a file panel gives itself.
+ */
+export interface LinkTarget extends Partial<Omit<FileNode, "file" | "subpath" | "show">> {
   file: string;
   subpath: string;
-  show: "image" | "content";
+  show: FileNode["show"];
 }
 
 export interface RenderContext {
@@ -314,7 +317,7 @@ export interface NodeType<N extends Node = Node> {
    * The vault link whose target the stage shows in the node, resolved as a file panel's link is (`resolveFileNode`): the
    * file, its subpath, and whether the node shows the section's content or an image in it. The result reaches the
    * node's renderer through `RenderContext.resolved`, and the node is resolved again when the target changes. Null (or
-   * absent) for a node that shows no link (a text card). A file panel resolves its own link and needs none.
+   * absent) for a node that shows no link (a text card). A file panel gives itself.
    */
   linkTarget?(node: N): LinkTarget | null;
   /**

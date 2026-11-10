@@ -1,5 +1,5 @@
 import { resolveConnector } from "../connectors/geometry";
-import { endAt, endError, nearestAnchor, onPageTiedItem, pageEndsError, pageTarget, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
+import { attachableUnder, endAt, endError, nearestAnchor, onPageTiedItem, pageEndsError, pageTarget, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { MIN_NODE_PX } from "../constants";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
 import { getPreset } from "../model/presets";
@@ -715,7 +715,12 @@ const connectorTool: Command = {
   group: "insert",
   menu: ["page"],
   needsView: true,
-  pressOffPaper: true,
+  // Off the paper only from an item that may be tied to pages (a card), the item its end would attach to; any other
+  // press there puts the tool down, as before.
+  pressOffPaper(ctx, at, under) {
+    const found = attachableUnder(ctx.store.doc, ctx.registries, at.page.id, under, undefined, unreadableIn(ctx));
+    return !!found && onPageTiedItem(ctx.store.doc, ctx.registries, { kind: "attached", node: found.id, snap: "center" }, unreadableIn(ctx));
+  },
   applies: (ctx) => !!ctx.page,
   run: (ctx) => ctx.view?.armTool(connectorTool),
   placeDrag(ctx, from, to, _mods, targets) {

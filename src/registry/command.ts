@@ -196,12 +196,17 @@ export interface Command<A = unknown, R = unknown> {
    */
   preview?(ctx: CommandContext, from: PlacePoint | null, to: PlacePoint, targets: DragTargets): ToolPreview | null;
   /**
-   * The tool is pressed off the paper too (on the canvas round the pages), where any other tool is put down. The point
-   * it is given is then on the page the item under the pointer is placed against (a card beside a page), else on the
-   * page whose paper is nearest, and lies outside that page's paper. A `placeDrag` tool pressed there is not clamped to
-   * the paper at the release either.
+   * Whether the tool takes a press off the paper (on the canvas round the pages), where a tool without it is put down,
+   * as it is when this says false. `at` is the press on the page the item under the pointer is placed against (a card
+   * beside a page), else on the page whose paper is nearest, outside that page's paper; `under` is that page's items
+   * under the pointer, topmost first. A `placeDrag` tool pressed there is not clamped to the paper at the release.
    */
-  pressOffPaper?: true;
+  pressOffPaper?(ctx: CommandContext, at: PlacePoint, under: NodeId[]): boolean;
+  /**
+   * Chosen from a context menu, the tool is placed at the menu's point (`place`, as a press there would place it), rather
+   * than armed. Without it a tool chosen from a menu is armed, as from the toolbar.
+   */
+  placeFromMenu?: true;
   /** How the command's toolbar button shows the view's state now (a toggle's mode); without it the button is as the command is. */
   state?(ctx: CommandContext): CommandState;
   /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */

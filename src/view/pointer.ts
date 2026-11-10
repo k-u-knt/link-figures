@@ -9,7 +9,7 @@ import { toSvgPath } from "../model/path";
 import { collectSnapLines, SNAP_OPTION, SNAP_REACH_SCREEN_PX, snapEdges, snapMove, snapOn, type SnapLines } from "../model/snap";
 import type { DocumentStore } from "../model/store";
 import type { Document, Node, NodeId, Page, PageId } from "../model/types";
-import type { DragTargets, ToolPreview } from "../registry/command";
+import type { Command, DragTargets, ToolPreview } from "../registry/command";
 import { nodeTypeFor, type HandleDrag, type InteractionContext, type NodeType } from "../registry/node-type";
 import type { SnapLine } from "../registry/snap";
 import { CROP_ROTATED_NOTICE, CropSession, croppable, type CropHandle } from "./crop-session";
@@ -297,12 +297,11 @@ export class PointerController {
       this.cropSession.finish();
       ev.preventDefault();
       const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-      const onPaper = pagePointAt(this.store.doc, world);
-      // A tool that is pressed off the paper too (the Card tool, the Connector tool from a card) is given the canvas point.
-      const at = onPaper ?? (tool.pressOffPaper ? this.offPaperPoint(this.store.doc, world) : null);
+      // A tool that takes a press off the paper (the Card tool, the Connector tool from a card) is given the canvas point.
+      const at = this.toolPointAt(tool, world);
       this.clearHover();
       if (!at) this.view.disarmTool();
-      else if (tool.placeDrag) this.startDrawing(ev, world, at, onPaper !== null);
+      else if (tool.placeDrag) this.startDrawing(ev, world, at, pagePointAt(this.store.doc, world) !== null);
       else this.view.placeTool(at);
       return;
     }
@@ -768,7 +767,7 @@ export class PointerController {
     const doc = this.store.doc;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
     const onPaper = pagePointAt(doc, world);
-    const at = onPaper ?? (this.view.armedTool.pressOffPaper ? this.offPaperPoint(doc, world) : null);
+    const at = this.toolPointAt(this.view.armedTool, world);
     if (!at) {
       this.clearHover();
       return;
@@ -1343,6 +1342,25 @@ export class PointerController {
   }
 
   /**
+   * Where `tool` is placed by a press at the world point `world`: the point on the page whose paper is under it, else,
+   * for a tool that takes this press off the paper (`Command.pressOffPaper`), the point `offPaperPoint` gives; null when
+   * the tool is put down instead (or cannot tell).
+   */
+  toolPointAt(tool: Command, world: Pt): PlacePoint | null {
+    const doc = this.store.doc;
+    const onPaper = pagePointAt(doc, world);
+    if (onPaper || !tool.pressOffPaper) return onPaper;
+    const at = this.offPaperPoint(doc, world);
+    if (!at) return null;
+    try {
+      return tool.pressOffPaper(this.view.commandContext(), at, this.itemsUnder(doc, at.page.id, world)) ? at : null;
+    } catch (error) {
+      console.error(`Link Figures: "${tool.name}" could not tell whether it takes a press off the paper`, error);
+      return null;
+    }
+  }
+
+  /**
    * Where a tool pressed off the paper (`Command.pressOffPaper`) is pressed: on the page the item under `world` is placed
    * against (a card beside a page), else on the page whose paper is nearest; null for a document without pages.
    */
@@ -1500,7 +1518,8 @@ function pointOnPage(doc: Document, page: Page, world: Pt): PlacePoint {
  * The offset a move drag of items kept off the paper goes to, given that it was at `moved` and the pointer asks for
  * `to`: each item slides from where it was last let go (`slideAlongPaper`), stopping at the papers and keeping its
  * motion along them, and the drag takes the most held-back offset on each axis, so the items move as one. Rounded
- * towards where the drag was, so a rounding never takes an item into the gap. Updates each item's `last`.
+ * towards where the drag was, so a rounding never takes an item into the gap. Each item's `last` becomes where the
+ * offset puts it.
  */
 function keepOffPaper(drag: OffPaperDrag, moved: Pt, to: Pt): Pt {
   const allowed = drag.items.map((item) => {
@@ -1514,7 +1533,7 @@ function keepOffPaper(drag: OffPaperDrag, moved: Pt, to: Pt): Pt {
     return back ? Math.ceil(held * 100) / 100 : Math.floor(held * 100) / 100;
   };
   const out = { x: pick("x"), y: pick("y") };
-  for (const a of allowed) a.item.last = a.at;
+  for (const a of allowed) a.item.last = offsetRect(a.item.start, out);
   return out;
 }
 

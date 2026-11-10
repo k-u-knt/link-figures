@@ -9,6 +9,8 @@ export interface MenuHost {
   plugin: { registries: Pick<Registries, "commands"> };
   commandContext(): CommandContext;
   runCommandById(id: string): void;
+  /** Places the tool `id` at the client point `at`, as a press there would (see `Command.placeFromMenu`). */
+  placeToolAt?(id: string, at: Pt): void;
   /** True while a context menu is open, and for the rest of the task in which it closed (see `showContextMenu`). */
   contextMenuOpen: boolean;
   /** The menu that set `contextMenuOpen`: only it clears the flag, so a menu that hid does not clear a newer one's. */
@@ -17,7 +19,8 @@ export interface MenuHost {
 
 /**
  * Opens the context menu for `where` at `at` (client px): an Obsidian `Menu` generated from the command registry
- * (`menuModel`), a separator between groups. Each entry runs its command through the view, as a toolbar button does.
+ * (`menuModel`), a separator between groups. Each entry runs its command through the view, as a toolbar button does;
+ * a tool placed from a menu (`Command.placeFromMenu`) is placed at `at`.
  * A menu with nothing in it is not shown, and null is returned.
  */
 export function showContextMenu(host: MenuHost, where: MenuPlace, at: Pt): Menu | null {
@@ -28,7 +31,9 @@ export function showContextMenu(host: MenuHost, where: MenuPlace, at: Pt): Menu 
     if (i > 0) menu.addSeparator();
     for (const entry of group) {
       menu.addItem((item) => {
-        item.setTitle(entry.name).setDisabled(entry.disabled).onClick(() => host.runCommandById(entry.id));
+        // A tool that is placed from a menu goes where the menu was opened; any other command runs as a button runs it.
+        const placed = host.placeToolAt && host.plugin.registries.commands.get(entry.id)?.placeFromMenu;
+        item.setTitle(entry.name).setDisabled(entry.disabled).onClick(() => (placed ? host.placeToolAt?.(entry.id, at) : host.runCommandById(entry.id)));
         if (entry.icon) item.setIcon(entry.icon);
       });
     }

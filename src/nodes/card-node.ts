@@ -53,8 +53,7 @@ interface EditingView {
 
 /**
  * One card's DOM: `.lf-node.lf-card` (`is-note` for a note card) holding `.lf-card-body`, which shows the card's content
- * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller, or its
- * own `dblclick`) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown; Escape or the textarea
+ * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown; Escape or the textarea
  * losing the focus ends the edit and writes what was typed with `node.update`, one undo step, and nothing when it is
  * unchanged. The pointer controller leaves presses and keys on the textarea to it (`isEditable`).
  */
@@ -73,8 +72,9 @@ class CardNodeRenderer implements NodeRenderer {
     this.node = node;
     this.el = host.createDiv({ cls: ["lf-node", "lf-card"] });
     this.body = this.el.createDiv({ cls: "lf-card-body" });
+    // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
+    // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
-    this.el.addEventListener("dblclick", () => this.beginEdit());
     this.update(node);
   }
 

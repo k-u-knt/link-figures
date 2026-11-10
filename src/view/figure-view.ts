@@ -645,6 +645,20 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   }
 
   /**
+   * A tool chosen from a context menu that is placed from one (`Command.placeFromMenu`): placed at the client point `at`,
+   * where the menu was opened, as a press there would place it (`PointerController.toolPointAt`). Nothing happens where
+   * the tool would be put down. A failure is shown as `runCommand` shows one.
+   */
+  placeToolAt(id: string, at: Pt): void {
+    const tool = this.plugin.registries.commands.get(id);
+    if (this.readOnly || !tool?.place || !tool.applies(this.commandContext())) return;
+    const point = this.pointer.toolPointAt(tool, this.viewport.toWorld(this.stagePoint({ clientX: at.x, clientY: at.y })));
+    if (!point) return;
+    this.setArmedTool(tool);
+    this.placeTool(point);
+  }
+
+  /**
    * The release of a drag of an armed tool (`placeDrag`): the tool is disarmed, then given the press and release points
    * on the press page and the items under them (once), a failure shown as `runCommand` shows one.
    */

@@ -2,6 +2,7 @@
 import { registerBuiltinCommands } from "../../src/commands/builtin";
 import { cardCommands } from "../../src/commands/cards";
 import { drawingCommands } from "../../src/commands/drawing";
+import { groupCommands } from "../../src/commands/groups";
 import { prepareCall, runCall } from "../../src/commands/headless";
 import { panelCommands } from "../../src/commands/panels";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
@@ -15,6 +16,7 @@ import type { CardNode, ConnectorNode, Document, FileNode, Node } from "../../sr
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import { connectorNodeType } from "../../src/nodes/connector-node";
 import { fileNodeType } from "../../src/nodes/file-node";
+import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
 import { createRegistries, type Registries } from "../../src/registry";
@@ -26,7 +28,25 @@ import { FakeAccess } from "../links/fake-access";
 const render = vi.fn(async (_app: unknown, markdown: string, el: HTMLElement) => {
   if (el) el.textContent = markdown;
 });
+/** An Obsidian `Menu` that records its entries, so a test can click one. */
+class FakeMenuItem {
+  title = "";
+  click: (() => void) | null = null;
+  setTitle(t: string) { this.title = t; return this; }
+  setIcon() { return this; }
+  setDisabled() { return this; }
+  onClick(fn: () => void) { this.click = fn; return this; }
+}
+const menus = vi.hoisted(() => [] as { items: { title: string; click: (() => void) | null }[] }[]);
 vi.mock("obsidian", () => ({
+  Menu: class {
+    items: FakeMenuItem[] = [];
+    constructor() { menus.push(this); }
+    addItem(fn: (item: FakeMenuItem) => void) { const item = new FakeMenuItem(); fn(item); this.items.push(item); return this; }
+    addSeparator() { return this; }
+    onHide() { return this; }
+    showAtPosition() { return this; }
+  },
   Component: class {
     addChild() {}
     removeChild() {}
@@ -45,6 +65,7 @@ const { Viewport } = await import("../../src/view/viewport");
 const { Intake } = await import("../../src/links/intake");
 const { menuModel } = await import("../../src/view/menu-model");
 const { NodeHost } = await import("../../src/view/node-host");
+const { showContextMenu } = await import("../../src/view/context-menu");
 
 // Obsidian's element helpers, which the renderers use; happy-dom has the rest of the DOM.
 beforeAll(() => {
@@ -76,11 +97,12 @@ function registries(): Registries {
   r.nodeTypes.register(connectorNodeType);
   r.nodeTypes.register(cardNodeType);
   r.nodeTypes.register(fileNodeType);
+  r.nodeTypes.register(groupNodeType);
   for (const kind of builtinShapeKinds) r.shapes.register(kind);
   for (const route of builtinRoutes) r.routes.register(route);
   for (const cap of builtinCapKinds) r.caps.register(cap);
   for (const paint of builtinPaintTypes) r.paints.register(paint);
-  for (const command of [...drawingCommands(), ...cardCommands(), ...panelCommands()]) r.commands.register(command);
+  for (const command of [...drawingCommands(), ...cardCommands(), ...panelCommands(), ...groupCommands()]) r.commands.register(command);
   registerBuiltinCommands({ registries: r, addCommand: () => undefined, activeFigureView: () => null } as never);
   return r;
 }
@@ -169,6 +191,16 @@ function setup(armed: string | null = null) {
   };
   const stage = new FakeStage();
   const pointerController = new PointerController(view);
+  // As the figure view does: a tool chosen from a context menu is placed at the menu's point (see `placeToolAt`).
+  view.placeToolAt = (id: string, client: { x: number; y: number }) => {
+    const tool = r.commands.get(id)!;
+    const at = pointerController.toolPointAt(tool, view.viewport.toWorld(view.stagePoint({ clientX: client.x, clientY: client.y })));
+    if (!at) return;
+    view.armedTool = tool;
+    view.placeTool(at);
+  };
+  view.contextMenuOpen = false;
+  const fire = (type: string, ev: object) => stage.fire(type, ev);
   controller = pointerController;
   pointerController.attach(stage as never);
   const pointer = (type: string, [clientX, clientY]: [number, number]) =>
@@ -186,7 +218,7 @@ function setup(armed: string | null = null) {
   };
   const node = <T extends Node = Node>(id: string) => store.doc.nodes.find((n) => n.id === id) as T;
   const connectors = () => store.doc.nodes.filter((n): n is ConnectorNode => n.type === "connector");
-  return { r, store, view, labels, drag, click, node, connectors, settled: () => Promise.all(pending) };
+  return { r, store, view, labels, drag, click, node, connectors, fire, controller: pointerController, settled: () => Promise.all(pending) };
 }
 
 /** A card mounted in a host element, drawn again on every change of the store as the node host draws it. */
@@ -265,6 +297,25 @@ describe("card rendering and editing", () => {
     expect(s.labels).toHaveLength(1);
   });
 
+  test("only the pointer controller's lf-activate starts an edit: a double-click on a card in a group enters the group", async () => {
+    const s = setup();
+    const { el } = mountCard(s, "C");
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(el.querySelector("textarea")).toBeNull();
+
+    s.view.selection.set(["C", "N"]);
+    s.view.runCommandById("group.create", { ids: ["C", "N"] });
+    await s.settled();
+    s.view.nodeHost = { elementFor: (id: string) => (id === "C" ? el : undefined) };
+    const card = nodeWorldRect(s.store.doc, s.node("C"));
+    s.fire("dblclick", { clientX: card.x + 10, clientY: card.y + 10, target: {} });
+    expect(s.view.enteredGroup).toBe(s.node("C").parent);
+    expect(el.querySelector("textarea")).toBeNull();
+    // Inside the entered group, the same double-click edits it.
+    s.fire("dblclick", { clientX: card.x + 10, clientY: card.y + 10, target: {} });
+    expect(el.querySelector("textarea")).not.toBeNull();
+  });
+
   test("a note card is not edited in place", () => {
     const s = setup();
     const { el } = mountCard(s, "N");
@@ -332,6 +383,24 @@ describe("the Card tool", () => {
     expect(box.y + box.height / 2).toBeCloseTo(500, 1);
   });
 
+  test("Card chosen from the canvas or page menu places a card at the menu's point and starts editing it", async () => {
+    const s = setup();
+    for (const [where, at] of [["canvas", { x: -600, y: 300 }], ["page", { x: 60, y: 700 }]] as const) {
+      menus.length = 0;
+      showContextMenu(s.view, where, at);
+      menus[0].items.find((i) => i.title === "Card")!.click!();
+      await s.settled();
+      const id = s.view.selection.ids[0];
+      expect(s.node(id).type).toBe("card");
+      expect(s.view.activateNode).toHaveBeenLastCalledWith(id);
+      const box = nodeWorldRect(s.store.doc, s.node(id));
+      expect(box.y + box.height / 2).toBeCloseTo(at.y, 1);
+      if (where === "canvas") expect(box.x + box.width / 2).toBeCloseTo(at.x, 1);
+      else expect(box.x + box.width).toBeCloseTo(-GAP, 1);
+      expect(s.view.armedTool).toBeNull();
+    }
+  });
+
   test("the Card tool is in the insert group, and in the canvas and page menus", () => {
     const tool = registries().commands.get("tool.card")!;
     expect(tool.group).toBe("insert");
@@ -341,11 +410,12 @@ describe("the Card tool", () => {
 });
 
 describe("drops", () => {
-  function dropSetup(onPaper: boolean) {
+  function dropSetup(onPaper: boolean, files?: { path: string }[]) {
     const s = setup();
     const handlers = new Map<string, (ev: any) => void>();
-    const access = new FakeAccess({ files: { "Notes/a.md": "# A\nText", "fig.lnkfig.md": "" } });
-    s.view.app = { dragManager: { draggable: { type: "file", file: { path: "Notes/a.md" } } } };
+    const access = new FakeAccess({ files: { "Notes/a.md": "# A\nText", "Notes/b.md": "# B\nText", "fig.lnkfig.md": "" } });
+    const draggable = files ? { type: "files", files } : { type: "file", file: { path: "Notes/a.md" } };
+    s.view.app = { dragManager: { draggable } };
     Object.assign(s.view.plugin, { settings: { dropFromNote: "direct" }, editorDrag: { source: null, embed: null }, access, decoders: {} });
     s.view.stageEl = { focus: () => {} };
     s.view.registerDomEvent = (_el: unknown, type: string, fn: (ev: any) => void) => handlers.set(type, fn);
@@ -365,6 +435,12 @@ describe("drops", () => {
     const box = nodeWorldRect(off.store.doc, card);
     expect([box.x, box.y]).toEqual([-700, 300]);
     expect(off.view.selection.ids).toEqual([card.id]);
+
+    // Two notes off the paper: one card below the other, a 4 mm gap between them.
+    const two = dropSetup(false, [{ path: "Notes/a.md" }, { path: "Notes/b.md" }]);
+    await vi.waitFor(() => expect(two.store.doc.nodes).toHaveLength(5));
+    const [first, second] = two.store.doc.nodes.slice(3) as CardNode[];
+    expect(second.y).toBeCloseTo(first.y + first.height + GAP, 1);
 
     const on = dropSetup(true);
     await vi.waitFor(() => expect(on.store.doc.nodes).toHaveLength(4));
@@ -397,6 +473,15 @@ describe("the connector tool and pages", () => {
     const ctx = { registries: s.r, doc: () => s.store.doc };
     connectorNodeType.mount(line, host, ctx as never);
     expect((host.firstElementChild as HTMLElement).classList.contains("lf-association")).toBe(true);
+  });
+
+  test("a press off the paper that is not on a card puts the Connector tool down and draws nothing", async () => {
+    const s = setup("tool.connector");
+    await s.drag([-700, 300], [-300, 300], [100, 100]);
+    expect(s.connectors()).toHaveLength(0);
+    expect(s.view.armedTool).toBeNull();
+    expect(s.controller.toolPointAt(s.r.commands.get("tool.connector")!, { x: -700, y: 300 })).toBeNull();
+    expect(s.controller.toolPointAt(s.r.commands.get("tool.card")!, { x: -700, y: 300 })).not.toBeNull();
   });
 
   test("released over paper from a shape, the end stays free", async () => {

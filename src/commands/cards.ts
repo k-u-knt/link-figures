@@ -75,7 +75,9 @@ const cardTool: Command = {
   group: "insert",
   menu: ["canvas", "page"],
   needsView: true,
-  pressOffPaper: true,
+  // Anywhere on the canvas: a card is placed beside a page, or just outside the paper it is pressed on.
+  pressOffPaper: () => true,
+  placeFromMenu: true,
   applies: (ctx) => !!ctx.page,
   run: (ctx) => editor(ctx).armTool(cardTool),
   place: placeCard,

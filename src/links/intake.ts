@@ -2,7 +2,9 @@ import { normalizePath, Notice, type App } from "obsidian";
 import { FILE_SUFFIX, MIN_NODE_PX } from "../constants";
 import { splitLinktext } from "../format/links-section";
 import { prepareCall, runInOneCommit } from "../commands/headless";
+import { CARD_PAPER_GAP_MM } from "../model/card-space";
 import { fileNodeDefaults } from "../model/defaults";
+import { CARD_SIZE_MM } from "../nodes/card-node";
 import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
@@ -471,6 +473,9 @@ export class Intake {
     const width = fileNodeDefaults(page, { file: "", subpath: "", show: "image" }, []).width;
     // Off every paper, a note's content goes on a note card beside the nearest page (cards are never artwork).
     const cardAt = at.offPaper && store.doc.pages.some((p) => p.id === at.offPaper?.page.id) ? at.offPaper : undefined;
+    // Cards of one drop go one below the other, a gap apart, so none covers the next.
+    let cards = 0;
+    const cardStep = mmToPx(CARD_SIZE_MM.height + CARD_PAPER_GAP_MM);
     const calls = items.map((item, i) =>
       cardAt && item.show === "content"
         ? prepareCall(registries, {
@@ -480,7 +485,7 @@ export class Intake {
               file: item.file,
               ...(item.subpath !== "" ? { subpath: item.subpath } : {}),
               x: roundPx(cardAt.x),
-              y: roundPx(cardAt.y + i * mmToPx(STAGGER_MM)),
+              y: roundPx(cardAt.y + cards++ * cardStep),
             },
           })
         : prepareCall(registries, {

@@ -1,4 +1,4 @@
-import { Component, MarkdownRenderer, setIcon } from "obsidian";
+import { setIcon } from "obsidian";
 import type { FileAsset, SkippedAsset } from "../export/asset-types";
 import { joinLinktext } from "../format/links-section";
 import type { Resolved } from "../links/types";
@@ -12,6 +12,7 @@ import type { Field } from "../registry/fields";
 import type { FieldRoute, ImageState, InspectorContext, NodeRenderer, NodeType, RenderContext, SvgContext } from "../registry/node-type";
 import { strokeFields } from "../registry/paint";
 import { fieldError, paramError, type ParamSpec } from "../registry/params";
+import { renderMarkdown, type RenderedMarkdown } from "../view/markdown-render";
 import { displayFields, displayRoute } from "./display-fields";
 import { fileNodePptx } from "./file-node-pptx";
 import { fileFrameSvg, fileNodeSvg, skippedReason } from "./file-node-svg";
@@ -75,8 +76,8 @@ class FileNodeRenderer implements NodeRenderer {
   /** The `.lf-image` element round the picture: it is placed at the crop's region, and clips the picture to it. */
   private imageFrame: HTMLElement | null = null;
   private contentEl: HTMLElement | null = null;
-  /** Owns the components the markdown renderer creates, so a re-render or unmount can release them. */
-  private card: Component | null = null;
+  /** The note content's rendering, which owns the components the markdown renderer creates, so a re-render or unmount can release them. */
+  private card: RenderedMarkdown | null = null;
   /** Why the image could not be shown although it resolved; shown on the badge. */
   private loadFailure: string | null = null;
 
@@ -223,7 +224,7 @@ class FileNodeRenderer implements NodeRenderer {
   /** Empties the body and releases what it held. Callers waiting on `naturalSize()` are rejected unless the node may yet get an image. */
   private clearBody(reason: string, failWaiters = true): void {
     if (this.card) {
-      this.ctx.component.removeChild(this.card);
+      this.card.release();
       this.card = null;
     }
     this.body.empty();
@@ -308,12 +309,8 @@ class FileNodeRenderer implements NodeRenderer {
     this.contentEl = holder;
     this.scaleContent();
     // The source note's path, so relative links and embeds inside the section resolve as they do in the note.
-    const card = new Component();
-    this.ctx.component.addChild(card);
-    this.card = card;
-    this.contentDrawn = MarkdownRenderer.render(this.ctx.app, resolved.markdown, holder, resolved.file.path, card).catch((error: unknown) => {
-      console.error(`Link Figures: could not render the content of node ${this.node.id}`, error);
-    });
+    this.card = renderMarkdown(this.ctx, resolved.markdown, holder, resolved.file.path, `the content of node ${this.node.id}`);
+    this.contentDrawn = this.card.drawn;
   }
 
   private scaleContent(): void {

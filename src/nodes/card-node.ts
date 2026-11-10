@@ -5,6 +5,7 @@ import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
 import { firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
 import type { LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { attachLinkSuggest } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
 
 /** The size of a new card, in mm. */
@@ -54,7 +55,8 @@ interface EditingView {
 
 /**
  * One card's DOM: `.lf-node.lf-card` (`is-note` for a note card) holding `.lf-card-body`, which shows the card's content
- * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown; Escape or the textarea
+ * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown, with link suggestions while a `[[` link is
+ * typed (`attachLinkSuggest`; Escape with their list open closes only the list); Escape or the textarea
  * losing the focus ends the edit and writes what was typed with `node.update`, one undo step, and nothing when it is
  * unchanged. The pointer controller leaves presses and keys on the textarea to it (`isEditable`).
  */
@@ -68,6 +70,8 @@ class CardNodeRenderer implements NodeRenderer {
   private editor: HTMLTextAreaElement | null = null;
   /** The text when editing began: what tells whether anything was typed. */
   private before = "";
+  /** Detaches the editor's link suggestions (`attachLinkSuggest`); a no-op when not editing. */
+  private detachSuggest: () => void = () => {};
 
   constructor(node: CardNode, host: HTMLElement, private readonly ctx: RenderContext) {
     this.node = node;
@@ -100,6 +104,7 @@ class CardNodeRenderer implements NodeRenderer {
   unmount(): void {
     // The card is gone (deleted, undone, reloaded): what was being typed has nowhere to go.
     this.editor = null;
+    this.detachSuggest();
     this.shown?.release();
     this.shown = null;
     this.el.remove();
@@ -156,6 +161,8 @@ class CardNodeRenderer implements NodeRenderer {
     area.className = "lf-card-editor";
     area.value = this.before;
     area.spellcheck = true;
+    // Link suggestions first: while their list is open, its keys (Escape among them) are its own, not the edit's.
+    this.detachSuggest = attachLinkSuggest(area, this.ctx.app, this.ctx.figurePath);
     area.addEventListener("blur", () => this.endEdit(false));
     area.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape" || ev.isComposing) return;
@@ -174,6 +181,8 @@ class CardNodeRenderer implements NodeRenderer {
     const area = this.editor;
     if (!area) return;
     this.editor = null;
+    this.detachSuggest();
+    this.detachSuggest = () => {};
     const typed = area.value.replace(/\r\n?/g, "\n");
     area.remove();
     // Compared with what editing began with: a change made elsewhere meanwhile (an undo) is not the user's to put back.

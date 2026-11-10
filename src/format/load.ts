@@ -2,7 +2,7 @@ import { createDocument } from "../model/defaults";
 import type { Document, NodeId } from "../model/types";
 import type { Registries } from "../registry";
 import { FormatError } from "./errors";
-import { splitLinktext } from "./links-section";
+import { withLink } from "./node-links";
 import { migrate, type HookFailure } from "./migrate";
 import { parseFigureFile, type ParsedFigureFile } from "./parse";
 
@@ -30,7 +30,7 @@ export function loadDocument(
 
   const doc = migrate(json, registries ? (type) => registries.nodeTypes.get(type) : undefined, hookFailures);
   const linktexts = new Map(parsed.links.map((l) => [l.id, l.linktext]));
-  doc.nodes = doc.nodes.map((n) => (n.type === "file" ? { ...n, ...splitLinktext(linktexts.get(n.id) ?? "") } : n));
+  doc.nodes = doc.nodes.map((n) => withLink(n, linktexts.get(n.id)));
   return { doc, parsed, hookFailures, unreadable: new Set(hookFailures.map((f) => f.id)) };
 }
 

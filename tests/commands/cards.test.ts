@@ -5,7 +5,9 @@ import { groupCommands } from "../../src/commands/groups";
 import { prepareCall, runCall } from "../../src/commands/headless";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { resolveConnector } from "../../src/connectors/geometry";
+import { applyLinkEntries, classifyReload } from "../../src/format/links-reload";
 import { loadDocument } from "../../src/format/load";
+import { parseFigureFile } from "../../src/format/parse";
 import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { isAssociation } from "../../src/model/attach";
 import { paperRectsWorld } from "../../src/model/card-space";
@@ -301,5 +303,98 @@ describe("node.update of a card", () => {
     await expect(call("node.update", { id, patch: { text: "x", file: "y.md" } })).rejects.toThrow(/^node\.update: give text or file, not both$/);
     await expect(call("node.update", { id, patch: { text: 3 } })).rejects.toThrow(/^node\.update: /);
     await expect(call("node.update", { id, patch: { subpath: "#x" } })).rejects.toThrow(/^node\.update: /);
+  });
+});
+
+describe("delete-page and cards placed against it", () => {
+  test("a card placed against the deleted page moves to the nearest page, keeping its world position, pushed off the paper, in one undo step", async () => {
+    const doc = figure(true);
+    // Page 2 is wider, so once it moves up into page 1's place the card beside page 1 is over its paper.
+    Object.assign(doc.pages[1], { preset: "custom", width: 250 });
+    const { call, node, store } = setup(doc);
+    const { id: card } = (await call("card.create", { page: "pg-1", x: 220 * MM, y: 10 * MM, id: "c" })) as { id: string };
+    const toOld = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: { kind: "page", page: "pg-1", anchor: "e" } })) as { id: string };
+    const toOther = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: { kind: "page", page: "pg-2", anchor: "n" } })) as { id: string };
+    await call("delete-page", { page: "pg-1" });
+    expect(store.doc.pages.map((p) => p.id)).toEqual(["pg-2"]);
+    const moved = node(card)!;
+    expect(moved.page).toBe("pg-2");
+    // Its world position (page 2 now starts at the top) is kept, then pushed clear of the 250 mm paper.
+    expect(moved.x).toBeCloseTo(254 * MM, 1);
+    expect(moved.y).toBeCloseTo(10 * MM, 1);
+    expect(clearOfPapers(store.doc, moved)).toBe(true);
+    // Its association to the deleted page goes; the one to page 2 stays with the card.
+    expect(node(toOld.id)).toBeUndefined();
+    expect(node<ConnectorNode>(toOther.id)).toMatchObject({ page: "pg-2", ends: [cardEnd(card), { kind: "page", page: "pg-2", anchor: "n" }] });
+    store.undo();
+    expect(store.doc.pages.map((p) => p.id)).toEqual(["pg-1", "pg-2"]);
+    expect(node(card)).toMatchObject({ page: "pg-1" });
+    expect(node(card)!.x).toBeCloseTo(220 * MM, 1);
+    expect(node(toOld.id)).toBeDefined();
+    expect(node(toOther.id)).toMatchObject({ page: "pg-1" });
+  });
+
+  test("a card keeps its world position on the remaining page nearest it", async () => {
+    const doc = figure(true);
+    doc.pages.push({ ...createPage("a4-portrait", ["pg-1", "pg-2"]), id: "pg-3" });
+    const { call, node, store } = setup(doc);
+    // Beside the bottom of page 2: page 3 is nearer than page 1.
+    await call("card.create", { page: "pg-2", x: -70 * MM, y: 280 * MM, id: "c" });
+    const world = nodeWorldRect(store.doc, node("c")!);
+    await call("delete-page", { page: "pg-2" });
+    const card = node("c")!;
+    expect(card.page).toBe("pg-3");
+    expect(nodeWorldRect(store.doc, card).x).toBeCloseTo(world.x, 1);
+    expect(nodeWorldRect(store.doc, card).y).toBeCloseTo(world.y, 1);
+  });
+});
+
+describe("note cards keep their link in the Links section", () => {
+  async function noteFigure() {
+    const s = setup(figure());
+    await s.call("card.create", { page: "pg-1", x: 220 * MM, y: 0, file: "Notes/a.md", subpath: "#Legend", id: "n" });
+    await s.call("card.create", { page: "pg-1", x: 220 * MM, y: 60 * MM, text: "typed", id: "t" });
+    return s;
+  }
+
+  test("the link is written as a Links entry, not in the JSON, and read back from it", async () => {
+    const { store, r } = await noteFigure();
+    const text = serializeFigureFile(store.doc, emptyParsed());
+    expect(text).toContain("- n: ![[Notes/a.md#Legend]] ^n");
+    const json = text.slice(text.indexOf("```lnkfig"));
+    expect(json).not.toContain("Notes/a.md");
+    expect(text).not.toContain("- t:");
+    const loaded = loadDocument(text, r);
+    expect(loaded.unreadable.size).toBe(0);
+    expect(loaded.doc.nodes.find((n) => n.id === "n")).toMatchObject({ file: "Notes/a.md", subpath: "#Legend" });
+    expect(loaded.doc.nodes.find((n) => n.id === "t")).toMatchObject({ text: "typed" });
+    expect("file" in loaded.doc.nodes.find((n) => n.id === "t")!).toBe(false);
+    expect(serializeFigureFile(createFigureStore(loaded.doc, r).doc, loaded.parsed)).toBe(text);
+  });
+
+  test("a rename of the linked note, made by Obsidian in the Links section, is a links-only reload that relinks the card", async () => {
+    const { store, r } = await noteFigure();
+    const text = serializeFigureFile(store.doc, emptyParsed());
+    const current = loadDocument(text, r);
+    const renamedText = text.replace("![[Notes/a.md#Legend]]", "![[Notes/b.md#Legend]]");
+    const next = loadDocument(renamedText, r);
+    expect(classifyReload(current, next)).toBe("links");
+    const { doc, changedIds } = applyLinkEntries(current.doc, parseFigureFile(renamedText).links);
+    expect(changedIds).toEqual(["n"]);
+    expect(doc.nodes.find((n) => n.id === "n")).toMatchObject({ file: "Notes/b.md", subpath: "#Legend" });
+    expect(doc.nodes.find((n) => n.id === "t")).toBe(current.doc.nodes.find((n) => n.id === "t"));
+    // A link without a subpath leaves none.
+    const plain = applyLinkEntries(current.doc, parseFigureFile(text.replace("![[Notes/a.md#Legend]]", "![[Notes/c]]")).links);
+    const relinked = plain.doc.nodes.find((n) => n.id === "n")!;
+    expect(relinked).toMatchObject({ file: "Notes/c" });
+    expect("subpath" in relinked).toBe(false);
+  });
+
+  test("a note card that is only in the undo history is relinked by a rename, so undo brings it back linked to the new name", async () => {
+    const { store, call, node } = await noteFigure();
+    await call("delete", { ids: ["n"] });
+    store.rebasePaths(new Map([["Notes/a.md", "Notes/b.md"]]));
+    store.undo();
+    expect(node("n")).toMatchObject({ file: "Notes/b.md", subpath: "#Legend" });
   });
 });

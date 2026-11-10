@@ -30,14 +30,15 @@ export function cardNodeDefaults(page: Page, x: number, y: number, existingIds: 
 /**
  * What is wrong with a card's content, or null when nothing is: `text` or `file` (a non-empty path), exactly one of
  * them, and `subpath` only with `file`. The messages are the ones `card.create` and `node.update` give, after the
- * command's name.
+ * command's name. With `linkless`, a card with neither is fine: a note card as the JSON holds it, whose link is in the
+ * figure file's Links section (see `format/node-links.ts`), or whose entry is gone.
  */
-export function cardContentError(card: { text?: unknown; file?: unknown; subpath?: unknown }): string | null {
+export function cardContentError(card: { text?: unknown; file?: unknown; subpath?: unknown }, linkless = false): string | null {
   if (card.text !== undefined && typeof card.text !== "string") return '"text" must be a string';
   if (card.file !== undefined && (typeof card.file !== "string" || card.file === "")) return '"file" must be the path of a note';
   if (card.subpath !== undefined && typeof card.subpath !== "string") return '"subpath" must be a string';
   if (card.text !== undefined && card.file !== undefined) return "give text or file, not both";
-  if (card.text === undefined && card.file === undefined) return "give text or file";
+  if (card.text === undefined && card.file === undefined && !linkless) return "give text or file";
   if (card.subpath !== undefined && card.file === undefined) return '"subpath" goes only with "file"';
   return null;
 }
@@ -110,9 +111,12 @@ export const cardNodeType: NodeType<CardNode> = {
     return key === "text" || key === "file" || key === "subpath" ? cardContentError(node) : null;
   },
 
-  /** A card as a figure file holds it: its content must be well formed (see `cardContentError`). */
+  /**
+   * A card as a figure file's JSON holds it: its content must be well formed (see `cardContentError`). A note card's
+   * link is not in the JSON but in the Links section, which the loader applies after this, so a card with neither is fine.
+   */
   migrate(raw: Record<string, unknown>): CardNode {
-    const error = cardContentError(raw);
+    const error = cardContentError(raw, true);
     if (error !== null) throw new Error(error);
     return raw as unknown as CardNode;
   },

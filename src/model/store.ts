@@ -1,3 +1,4 @@
+import { linkOf } from "../format/node-links";
 import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from "immer";
 import { COALESCE_MS } from "../constants";
 import type { NormaliseContext, Normaliser } from "./normalise";
@@ -339,8 +340,10 @@ function renameInValue(value: unknown, renames: ReadonlyMap<string, string>): un
     return renamed.some((item, i) => item !== value[i]) ? renamed : value;
   }
   if (typeof value !== "object" || value === null) return value;
-  const node = value as { type?: unknown; file?: unknown };
-  const file = node.type === "file" && typeof node.file === "string" ? renames.get(node.file) : undefined;
+  const node = value as Node;
+  // A node whose type keeps a link (a file panel, a note card: see `linkOf`).
+  const link = typeof node.type === "string" ? linkOf(node) : null;
+  const file = link ? renames.get(link.file) : undefined;
   return file === undefined ? value : { ...node, file };
 }
 

@@ -1,6 +1,7 @@
 import { FENCE_LANG, FORMAT_VERSION, FRONTMATTER_KEY } from "../constants";
 import type { Document } from "../model/types";
-import { emitLinksSection, joinLinktext, type LinkEntry } from "./links-section";
+import { emitLinksSection, type LinkEntry } from "./links-section";
+import { linktextOf, withoutLink } from "./node-links";
 import type { ParsedFigureFile } from "./parse";
 
 const MARKER = `${FRONTMATTER_KEY}: ${FORMAT_VERSION}`;
@@ -27,11 +28,9 @@ function ensureMarker(frontmatter: string): string {
 export function serializeFigureFile(doc: Document, parsed: ParsedFigureFile): string {
   const entries: LinkEntry[] = [];
   const nodes = doc.nodes.map((n) => {
-    if (n.type !== "file") return n;
-    const { file, subpath, ...onDisk } = n;
-    const linktext = joinLinktext(file, subpath);
+    const linktext = linktextOf(n);
     if (linktext !== "") entries.push({ id: n.id, linktext });
-    return onDisk;
+    return withoutLink(n);
   });
   const json = JSON.stringify({ ...doc, nodes }, null, 2);
   return (

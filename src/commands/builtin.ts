@@ -2,7 +2,7 @@ import { resolveConnector } from "../connectors/geometry";
 import { DEFAULT_PAGE_LIMIT_MM, MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
-import { mmToPx, type PlacePoint } from "../model/geometry";
+import { mmToPx, pageOriginsPx, pageSizePx, type PlacePoint, type Rect } from "../model/geometry";
 import { commonParent, expandUnits, isGroup, isLocked, unitsOf } from "../model/groups";
 import { PAGE_PRESETS, getPreset } from "../model/presets";
 import { SNAP_OPTION, snapOn } from "../model/snap";
@@ -10,7 +10,7 @@ import type { Document, End, FileNode, Node, NodeId, Page, PageId } from "../mod
 import type LinkFiguresPlugin from "../main";
 import { CommandError, markUnreadableIn, unreadableIn, type Command, type CommandContext, type FigureViewLike } from "../registry/command";
 import type { ParamSpec } from "../registry/params";
-import { nodeTypeFor, type ImageState } from "../registry/node-type";
+import { nodeTypeFor, type ImageState, type NodeType } from "../registry/node-type";
 import type { Plane } from "../links/decoders/tiff-convert";
 import { CUSTOM_PRESET, clampPageSize } from "../view/page-fields";
 import { roundPx } from "../view/pointer-math";
@@ -378,24 +378,63 @@ function addPage(ctx: CommandContext, args?: { page?: unknown; preset?: unknown 
 
 /**
  * Removes a page (`args.page`, else the focus page) and everything on it, and every node tied to it from another page (an
- * association, `NodeType.tiedPages`); never the last page. Headless the page must be named.
+ * association, `NodeType.tiedPages`); never the last page. Headless the page must be named. An item kept off the paper
+ * (`NodeType.offPaper`: a card) placed against the page is not on it, so it stays: it goes to the remaining page whose
+ * paper is nearest it, keeping its place on the canvas (the store then pushes it off any paper), and the nodes tied to
+ * other pages that are drawn only from it (its associations) go with it. All in one undo step.
  */
 function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
   const page = targetPage(ctx, "delete-page", args);
   if (!page && !ctx.view) throw new CommandError(`delete-page needs "page" when the figure is not open`);
   const id = page?.id;
-  if (id === undefined || ctx.store.doc.pages.length < 2) return;
-  // The nodes tied to the page from elsewhere (associations from cards beside other pages, see `NodeType.tiedPages`)
-  // go with it; the cards stay.
+  const doc = ctx.store.doc;
+  if (id === undefined || doc.pages.length < 2) return;
   const unreadable = unreadableIn(ctx);
-  const tied = new Set(
-    ctx.store.doc.nodes.filter((n) => nodeTypeFor(ctx.registries, n, unreadable)?.tiedPages?.(n).includes(id) === true).map((n) => n.id),
-  );
+  const typeOf = (n: Node) => nodeTypeFor(ctx.registries, n, unreadable);
+  // The nodes tied to the page (associations, see `NodeType.tiedPages`) go with it.
+  const tied = new Set(doc.nodes.filter((n) => typeOf(n)?.tiedPages?.(n).includes(id) === true).map((n) => n.id));
+  const rehomed = rehomeOffPage(doc, id, typeOf);
+  for (const n of doc.nodes) {
+    if (n.page !== id || tied.has(n.id) || rehomed.has(n.id) || (typeOf(n)?.tiedPages?.(n).length ?? 0) === 0) continue;
+    // Tied to another page and drawn only from items that stay (a card's association): it goes where they go.
+    const from = typeOf(n)?.dependsOn?.(n) ?? [];
+    const to = from.length > 0 && from.every((d) => rehomed.has(d)) ? rehomed.get(from[0])?.page : undefined;
+    if (to !== undefined) rehomed.set(n.id, { page: to });
+  }
   // One commit, so one undo brings the page back with everything on it. The node host lets go of the removed nodes' links.
   ctx.store.commit("delete-page", (draft) => {
     draft.pages = draft.pages.filter((p) => p.id !== id);
-    draft.nodes = draft.nodes.filter((n) => n.page !== id && !tied.has(n.id));
+    draft.nodes = draft.nodes.filter((n) => (n.page !== id || rehomed.has(n.id)) && !tied.has(n.id));
+    for (const n of draft.nodes) {
+      const to = rehomed.get(n.id);
+      if (!to) continue;
+      n.page = to.page;
+      if (to.x !== undefined) n.x = to.x;
+      if (to.y !== undefined) n.y = to.y;
+    }
   });
+}
+
+/**
+ * Where each item kept off the paper (`offPaper`) that is placed against page `id` goes once the page is deleted: the
+ * remaining page whose paper is nearest its box, at the same place on the canvas as the pages then stand.
+ */
+function rehomeOffPage(doc: Document, id: PageId, typeOf: (n: Node) => NodeType | undefined): Map<NodeId, { page: PageId; x?: number; y?: number }> {
+  const out = new Map<NodeId, { page: PageId; x?: number; y?: number }>();
+  const before = pageOriginsPx(doc);
+  const after = pageOriginsPx({ ...doc, pages: doc.pages.filter((p) => p.id !== id) });
+  const from = before.get(id);
+  if (!from) return out;
+  const papers = doc.pages.filter((p) => p.id !== id).map((p) => ({ page: p.id, rect: { ...(after.get(p.id) ?? { x: 0, y: 0 }), ...pageSizePx(p) } }));
+  const gap = (a: Rect, b: Rect): number =>
+    Math.hypot(Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width)), Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height)));
+  for (const n of doc.nodes) {
+    if (n.page !== id || typeOf(n)?.offPaper !== true) continue;
+    const world: Rect = { x: from.x + n.x, y: from.y + n.y, width: n.width, height: n.height };
+    const nearest = papers.reduce((best, p) => (gap(world, p.rect) < gap(world, best.rect) ? p : best));
+    out.set(n.id, { page: nearest.page, x: roundPx(world.x - nearest.rect.x), y: roundPx(world.y - nearest.rect.y) });
+  }
+  return out;
 }
 
 /** A new text node with its top-left at `at`, above everything on that page, selected and being edited. */

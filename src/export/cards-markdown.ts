@@ -386,6 +386,9 @@ export async function writeCardFiles(
 
   for (const [i, { texts }] of withCards.entries()) {
     const name = names[i];
+    // Refused before anything is copied for it: a refused file leaves nothing behind.
+    const path = exportPathFor(run.folder, name);
+    if (refused(path, true)) continue;
     const dirName = name.replace(/\.md$/, "");
     const imageFolder = dir ? `${dir}/${dirName}` : dirName;
     const copy = imageCopier(dirName, async (imageName, file) => {
@@ -411,8 +414,6 @@ export async function writeCardFiles(
       warnings.push(...rewritten.warnings);
       parts.push(rewritten.markdown);
     }
-    const path = exportPathFor(run.folder, name);
-    if (refused(path, true)) continue;
     // A file that starts with `---` would be read as front matter: a blank first line keeps the first card's text.
     const body = parts.join(CARD_SEPARATOR);
     const lead = body.startsWith("---") ? "\n" : "";

@@ -405,6 +405,19 @@ describe("links and embeds in a text card", () => {
   });
 });
 
+describe("in-app check fixes (34, 35)", () => {
+  test("a cards file refused (it would replace a source) leaves nothing behind: none of its images are copied", async () => {
+    const doc = pages();
+    // A card that embeds the figure's own earlier cards file, which embeds an image: that file is a source now.
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "![[out/Fig - Page 1 cards]]" });
+    tie(doc, c, doc.pages[0]);
+    const { vault, out } = await exportCards(doc, { files: { "out/Fig - Page 1 cards.md": "Old ![[img/plot.png]]", "img/plot.png": new Uint8Array([1]) } });
+    expect(out.warnings).toContain("Refused to overwrite out/Fig - Page 1 cards.md: it is a source of this figure");
+    expect([...vault.content.keys()].filter((p) => p.startsWith("out/Fig - Page 1 cards"))).toEqual([]);
+    expect(out.paths.filter((p) => p.startsWith("out/Fig - Page 1 cards"))).toEqual([]);
+  });
+});
+
 describe("embeds that are kept", () => {
   test('a note found without its section: `the section "X#h" was not found; its embed is kept`, said once', async () => {
     const doc = pages();

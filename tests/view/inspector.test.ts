@@ -756,19 +756,23 @@ describe("paint fields", () => {
     expect(frameOf(store).paint).toEqual({ type: "x.future", amount: 3 });
   });
 
-  test("with several nodes selected, the slider's edit is not written onto a paint of another type", () => {
+  test("with several nodes selected, differing paints read Mixed and the slider's edit makes them all the first's paint", () => {
     const { el, store, selection } = setup((d) => {
       addNode(d, { id: "p-a", frame: solidFrame() } as Partial<FileNode>);
       addNode(d, { id: "p-b", frame: { ...solidFrame(), paint: linearDefaults() } } as Partial<FileNode>);
       addNode(d, { id: "p-c", frame: { ...solidFrame(), paint: { type: "solid", color: "#0000ff" } } } as Partial<FileNode>);
     });
     selection.set(["p-a", "p-b", "p-c"]);
+    const kind = () => el.find((e) => e.hasClass("lf-paint-kind"))!.text;
+    expect(kind()).toBe("Mixed");
     el.typeInto("frame.paint.stop.opacity", "0.25");
-    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint)).toEqual([
-      { type: "solid", color: "#ff0000", opacity: 0.25 },
-      linearDefaults(),
-      { type: "solid", color: "#ff0000", opacity: 0.25 },
-    ]);
+    const same = { type: "solid", color: "#ff0000", opacity: 0.25 };
+    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint)).toEqual([same, same, same]);
+    expect(kind()).toBe("Solid");
+    // A gradient's own field still goes only to the paints of the first's type.
+    store.commit("mix", (d) => { (d.nodes[1] as FileNode).frame!.paint = linearDefaults(); (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
+    el.typeInto("frame.paint.angle", "45");
+    expect(store.doc.nodes.map((n) => (n as FileNode).frame!.paint.angle)).toEqual([45, 45, undefined]);
     // Choosing a type is for all of them, each with its own copy.
     el.control("frame.paint.type").value = "pattern";
     el.control("frame.paint.type").fire("change");

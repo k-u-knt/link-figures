@@ -22,7 +22,7 @@ const BLACK_WHITE: Paint = { type: "linear", angle: 0, stops: [{ offset: 0, colo
  * An inspector in a happy-dom window on one selected rectangle whose fill is `fill`, with the plugin's paints, ramp
  * geometries and presets registered, and the store's clock as the view wires it (a gesture's start while one lasts).
  */
-function setup(fill: Paint) {
+function setup(fill: Paint, others: Paint[] = []) {
   const window = obsidianWindow();
   const document = window.document;
   const proto = window.HTMLElement.prototype as unknown as { getBoundingClientRect(): unknown };
@@ -32,6 +32,7 @@ function setup(fill: Paint) {
   };
   const doc = createDocument("a4-portrait");
   doc.nodes.push({ ...shapeNodeDefaults(doc.pages[0], { id: "p-shp" }, []), fill: structuredClone(fill) } as ShapeNode);
+  others.forEach((other, i) => doc.nodes.push({ ...shapeNodeDefaults(doc.pages[0], { id: `p-${i}` }, doc.nodes.map((n) => n.id)), fill: structuredClone(other) } as ShapeNode));
   const registries = createRegistries();
   for (const t of builtinPaintTypes) registries.paints.register(t);
   for (const g of builtinRampGeometries) registries.rampGeometries.register(g);
@@ -56,7 +57,7 @@ function setup(fill: Paint) {
   const inspector = new Inspector(view as never, el as never);
   store.subscribe(() => inspector.render());
   selection.onChange(() => inspector.render());
-  selection.set(["p-shp"]);
+  selection.set(doc.nodes.map((n) => n.id));
   const labels: string[] = [];
   store.subscribe((ev) => labels.push(ev.label));
 
@@ -64,6 +65,7 @@ function setup(fill: Paint) {
   const q = <T = HTMLElement>(selector: string) => holder().querySelector(selector) as unknown as T;
   const handles = () => Array.from(holder().querySelectorAll(".lf-ramp-handle")) as unknown as HTMLElement[];
   const fillNow = () => (store.doc.nodes[0] as ShapeNode).fill;
+  const fills = () => store.doc.nodes.map((n) => (n as ShapeNode).fill);
   const pointer = (target: unknown, type: string, x: number, y = 10) =>
     (target as EventTarget).dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1 }) as never);
   const key = (target: unknown, k: string, shiftKey = false) =>
@@ -76,7 +78,7 @@ function setup(fill: Paint) {
     for (const x of xs) pointer(q(".lf-ramp-track"), "pointermove", x, y);
     pointer(q(".lf-ramp-track"), "pointerup", xs[xs.length - 1] ?? 0, y);
   };
-  return { window, document, el, store, labels, holder, q, handles, fillNow, pointer, key, click, drag, kind: () => q(".lf-paint-kind").textContent };
+  return { window, document, el, store, labels, fills, holder, q, handles, fillNow, pointer, key, click, drag, kind: () => q(".lf-paint-kind").textContent };
 }
 
 describe("the paint control", () => {
@@ -410,5 +412,59 @@ describe("writes that drop a key", () => {
     opacity.value = "1";
     opacity.dispatchEvent(new t.window.Event("change") as never);
     expect((t.fillNow().stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000", opacity: 1 });
+  });
+});
+
+describe("several items selected", () => {
+  const setOpacity = (t: ReturnType<typeof setup>, value: string) => {
+    const opacity = t.q<HTMLInputElement>('[data-key="fill.stop.opacity"]');
+    opacity.value = value;
+    opacity.dispatchEvent(new t.window.Event("change") as never);
+  };
+
+  test("paints of different types read Mixed; the bar shows the first; an edit writes that paint to all and the label follows", () => {
+    const t = setup({ type: "solid", color: "#ff0000" }, [BLACK_WHITE]);
+    expect(t.kind()).toBe("Mixed");
+    expect(t.handles()).toHaveLength(1);
+    expect(t.q<HTMLInputElement>('[data-key="fill.stop.color"]').value).toBe("#ff0000");
+    expect(t.labels).toEqual([]);
+    setOpacity(t, "0.5");
+    expect(t.fills()).toEqual([{ type: "solid", color: "#ff0000", opacity: 0.5 }, { type: "solid", color: "#ff0000", opacity: 0.5 }]);
+    expect(t.kind()).toBe("Solid");
+    expect(t.labels).toEqual(["inspect:fill"]);
+  });
+
+  test("paints of one type with different values read Mixed, and an edit makes them the same", () => {
+    const t = setup({ type: "solid", color: "#ff0000" }, [{ type: "solid", color: "#0000ff", opacity: 0.25 }]);
+    expect(t.kind()).toBe("Mixed");
+    t.pointer(t.q(".lf-ramp-bar"), "pointerdown", 100);
+    const expected = { type: "linear", angle: 0, stops: [{ offset: 0, color: "#ff0000" }, { offset: 0.5, color: "#ff0000" }] };
+    expect(t.fills()).toEqual([expected, expected]);
+    expect(t.kind()).toBe("Linear gradient");
+  });
+
+  test("equal paints read their kind, and an edit goes to all of them", () => {
+    const t = setup(BLACK_WHITE, [BLACK_WHITE]);
+    expect(t.kind()).toBe("Linear gradient");
+    t.click(t.q(".lf-ramp-reverse"));
+    const reversed = { type: "linear", angle: 0, stops: [{ offset: 0, color: "#ffffff" }, { offset: 1, color: "#000000" }] };
+    expect(t.fills()).toEqual([reversed, reversed]);
+    expect(t.kind()).toBe("Linear gradient");
+  });
+});
+
+describe("the presets menu", () => {
+  test("closes on a press outside it, and stays open for a press inside it", () => {
+    const t = setup(BLACK_WHITE);
+    t.click(t.q(".lf-ramp-presets-button"));
+    t.pointer(t.q(".lf-ramp-preset"), "pointerdown", 0);
+    expect(t.holder().querySelector(".lf-ramp-presets")).not.toBeNull();
+    t.pointer(t.document.body, "pointerdown", 0);
+    expect(t.holder().querySelector(".lf-ramp-presets")).toBeNull();
+    expect(t.q(".lf-ramp-presets-button").getAttribute("aria-expanded")).toBe("false");
+    // A press on the bar while it is open closes it too (and adds a stop, as any press there does).
+    t.click(t.q(".lf-ramp-presets-button"));
+    t.pointer(t.q(".lf-ramp-bar"), "pointerdown", 100);
+    expect(t.holder().querySelector(".lf-ramp-presets")).toBeNull();
   });
 });

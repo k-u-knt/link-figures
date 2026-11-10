@@ -69,6 +69,12 @@ export class RampSlider {
   private readonly stopRow: HTMLElement;
   private readonly presetsButton: HTMLElement;
   private menu: HTMLElement | null = null;
+  /** While the menu is open: closes it on a press anywhere outside it (⋯ toggles it itself). */
+  private readonly pressOutside = (e: Event): void => {
+    const target = e.target as Node | null;
+    if (!this.menu || (target && (this.menu.contains(target) || this.presetsButton.contains(target)))) return;
+    this.closeMenu();
+  };
   private handleEls: HTMLElement[] = [];
   private drawnHandles: string | null = null;
   private drawnGeometry: string | null = null;
@@ -286,6 +292,8 @@ export class RampSlider {
     const menu = this.root.createDiv({ cls: "lf-ramp-presets", attr: { role: "menu", "aria-label": "Colour presets" } });
     this.menu = menu;
     this.presetsButton.setAttribute("aria-expanded", "true");
+    // In the capture phase, so a press that something else handles (the bar) still closes it.
+    this.root.ownerDocument?.addEventListener?.("pointerdown", this.pressOutside, true);
     const items = this.host.presets().map((preset) => {
       const item = menu.createEl("button", { cls: "lf-ramp-preset", text: preset.name, attr: { type: "button", role: "menuitem", "data-preset": preset.id } });
       item.addEventListener("click", () => {
@@ -310,6 +318,7 @@ export class RampSlider {
   }
 
   private closeMenu(): void {
+    this.root.ownerDocument?.removeEventListener?.("pointerdown", this.pressOutside, true);
     this.menu?.remove();
     this.menu = null;
     this.presetsButton.setAttribute("aria-expanded", "false");

@@ -77,6 +77,11 @@ export interface FieldEnv {
   registries?: Pick<Registries, "paints"> & Partial<Pick<Registries, "rampGeometries" | "rampPresets">>;
   /** Ends the undo step a gesture's writes have been merging into: the next write is a step of its own. */
   endMerge?(): void;
+  /**
+   * Whether the items a write of `key` reaches (several selected nodes) hold different values there. A paint field
+   * then names its kind "Mixed": the slider shows the first item's paint, and its edit makes them all that paint.
+   */
+  mixed?(key: string): boolean;
 }
 
 type Read = (key: string) => unknown;
@@ -85,17 +90,7 @@ type Read = (key: string) => unknown;
  * merge into the edit before it, then "continue" (see `UndoStep`), and `FieldEnv.endMerge` when it ends. Without it a
  * write merges with the writes of the same field just before it, as the store merges commits.
  */
-type Write = (key: string, value: unknown, step?: UndoStep, scope?: WriteScope) => void;
-
-/**
- * How far a write reaches when several nodes are selected. `samePaintType`: a whole paint written as an edit of the
- * paint the first node has (the colour slider's), which goes only to the nodes whose paint at that key is of the same
- * type, as a paint's own field (`fill.color`) does. Without it a paint written whole (a choice in the paint select)
- * goes to every selected node.
- */
-export interface WriteScope {
-  samePaintType?: boolean;
-}
+type Write = (key: string, value: unknown, step?: UndoStep) => void;
 
 /**
  * A field made of other fields (`paint`, `stops`), drawn into its holder. Which controls it has depends on its value
@@ -180,7 +175,8 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   const kindName = (): string => {
     const paint = paintOf();
     const registries = paints();
-    return paint && registries ? rampKindName(paint, { paints: registries }) : "";
+    if (!paint || !registries) return "";
+    return env.mixed?.(field.key) ? "Mixed" : rampKindName(paint, { paints: registries });
   };
   /** The selected stop, kept while the field is drawn again (a solid that gains a stop gets its geometry fields). */
   const sliderState: RampSliderState = { selected: 0, refocus: false };
@@ -188,7 +184,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
   let kind: HTMLElement | null = null;
 
   const writeRamp = (ramp: ColorRamp, step?: UndoStep): void => {
-    write(field.key, paintOfRamp(ramp, paintOf(), ramps.rampGeometries), step, { samePaintType: true });
+    write(field.key, paintOfRamp(ramp, paintOf(), ramps.rampGeometries), step);
     syncComposite(holder);
   };
 
@@ -623,7 +619,9 @@ interface Section {
   signature: string;
   fields: Field[];
   read(key: string): unknown;
-  write(key: string, value: unknown, step?: UndoStep, scope?: WriteScope): void;
+  write(key: string, value: unknown, step?: UndoStep): void;
+  /** See `FieldEnv.mixed`. */
+  mixed?(key: string): boolean;
 }
 
 /**
@@ -671,7 +669,7 @@ export class Inspector {
     this.pending = false;
     // The same controls as before (a store change that is none of their business, or the user's own edit): only their values change, so a field being typed in keeps its text and focus.
     if (section.signature === this.signature) {
-      syncFields(this.el, section.fields, section.read, this.fieldEnv());
+      syncFields(this.el, section.fields, section.read, this.fieldEnv(section));
       return;
     }
     this.signature = section.signature;
@@ -680,7 +678,7 @@ export class Inspector {
     this.el.empty();
     this.el.createDiv({ cls: "lf-inspector-title", text: section.title });
     if (section.subtitle) this.el.createDiv({ cls: "lf-inspector-sub", text: section.subtitle });
-    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv());
+    renderFields(this.el.createDiv({ cls: "lf-fields" }), section.fields, section.read, section.write, this.fieldEnv(section));
   }
 
   /**
@@ -699,8 +697,8 @@ export class Inspector {
   }
 
   /** The node types' context, and how a gesture's writes end their undo step, for drawing the fields. */
-  private fieldEnv(): FieldEnv & InspectorContext {
-    return { ...this.context(), endMerge: () => this.endGesture() };
+  private fieldEnv(section?: Section): FieldEnv & InspectorContext {
+    return { ...this.context(), endMerge: () => this.endGesture(), ...(section?.mixed ? { mixed: section.mixed } : {}) };
   }
 
   /**
@@ -796,6 +794,25 @@ export class Inspector {
     // A group (a type that has members) is titled with its type's name and how many direct members it has.
     const members = ids.length === 1 && type?.members ? childrenOf(this.view.store.doc, first.id).length : null;
     const title = ids.length > 1 ? `${ids.length} nodes` : members !== null ? `${type?.name ?? "Group"} (${members} items)` : "Node";
+    /**
+     * The selected nodes a write of `key` goes to (locked ones too: asking for it in the inspector is explicit). What
+     * belongs to one node type is not written onto nodes of another, nor is a nested value written onto a node that has
+     * nothing there (a frame that is off). A paint's own field (`frame.paint.angle`) belongs to the first node's paint
+     * type and is not written onto a paint of another; a whole paint (the select, the colour slider) goes to every one.
+     */
+    const reach = (key: string): Node[] => {
+      const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;
+      const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`));
+      const doc = this.view.store.doc;
+      const firstNow = doc.nodes.find((n) => n.id === first.id);
+      const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;
+      return doc.nodes.filter((node) => {
+        if (!targets.has(node.id)) return false;
+        if (!baseKeys.has(key) && node.type !== first.type) return false;
+        if (parent !== null && !isRecord(readValue(node, parent)) && !Array.isArray(readValue(node, parent))) return false;
+        return !(paintKey && readValue(node, `${paintKey}.type`) !== paintType);
+      });
+    };
     return {
       title,
       subtitle: ids.length > 1 || members !== null ? undefined : type?.name,
@@ -810,7 +827,13 @@ export class Inspector {
         const value = node ? readValue(node, key) : undefined;
         return mm.has(key) && typeof value === "number" ? pxToMm(value) : value;
       },
-      write: (key, value, step, scope) => {
+      // Several nodes that hold different values where a write would reach (a paint field shows "Mixed").
+      mixed: (key) => {
+        if (targets.size < 2) return false;
+        const values = reach(key).map((node) => readValue(node, key));
+        return values.some((v) => !sameJson(v, values[0]));
+      },
+      write: (key, value, step) => {
         const route = type?.fieldRoute?.(key);
         if (route) {
           // One call of the type's command per selected node of the type (or the first only), in one commit, as `node.update` writes are.
@@ -827,29 +850,21 @@ export class Inspector {
           return;
         }
         const stored = mm.has(key) && typeof value === "number" ? roundPx(mmToPx(value)) : value;
-        // A locked node is written too: asking for it in the inspector is explicit.
-        const parent = key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : null;
-        // A paint's own field (`frame.paint.angle`), and the colour slider's whole paint (`scope.samePaintType`), belong
-        // to the first node's paint type, and are not written onto a paint of another.
-        const paintKey = paintKeys.find((p) => key.startsWith(`${p}.`)) ?? (scope?.samePaintType && paintKeys.includes(key) ? key : undefined);
-        const doc = this.view.store.doc;
-        const firstNow = doc.nodes.find((n) => n.id === first.id);
-        const paintType = paintKey && firstNow ? readValue(firstNow, `${paintKey}.type`) : undefined;
-        const calls: PreparedCall[] = [];
-        for (const node of doc.nodes) {
-          if (!targets.has(node.id)) continue;
-          // What belongs to one node type is not written onto nodes of another.
-          if (!baseKeys.has(key) && node.type !== first.type) continue;
-          // Nor is a nested value written onto a node that has nothing there (a frame that is off).
-          if (parent !== null && !isRecord(readValue(node, parent)) && !Array.isArray(readValue(node, parent))) continue;
-          if (paintKey && readValue(node, `${paintKey}.type`) !== paintType) continue;
-          calls.push(prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
-        }
+        const calls = reach(key).map((node) => prepareCall(this.view.plugin.registries, { id: "node.update", args: { id: node.id, patch: patchFor(node, key, stored) } }));
         if (calls.length === 0) return;
         this.runWrite(key, fields, calls, step);
       },
     };
   }
+}
+
+/** Whether two JSON values are the same, all the way down (key order aside). */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => sameJson(v, b[i]));
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && sameJson(a[k], b[k]));
 }
 
 /**

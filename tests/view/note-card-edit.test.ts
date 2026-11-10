@@ -256,6 +256,46 @@ describe("a note card's body is Obsidian's editable embed", () => {
     expect(embed.editMode).toBeNull();
   });
 
+  test("a press on a control in the rendered embed (a callout's fold, a collapse indicator, a checkbox) is the embed's", async () => {
+    const s = await setup();
+    const embed = s.embedOf("N");
+    const callout = embed.previewEl.appendChild(document.createElement("div"));
+    callout.className = "callout is-collapsible is-collapsed";
+    const title = callout.appendChild(document.createElement("div"));
+    title.className = "callout-title";
+    const inner = title.appendChild(document.createElement("div"));
+    inner.className = "callout-title-inner";
+    const indicator = embed.previewEl.appendChild(document.createElement("span"));
+    indicator.className = "heading-collapse-indicator collapse-indicator collapse-icon";
+    const checkbox = embed.previewEl.appendChild(document.createElement("input"));
+    checkbox.type = "checkbox";
+    checkbox.className = "task-list-item-checkbox";
+    const { at } = s.inside("N");
+    for (const target of [inner, indicator, checkbox]) {
+      for (const selected of [false, true]) {
+        s.view.selection.set(selected ? ["N"] : []);
+        s.pointer("pointerdown", at, target);
+        s.pointer("pointerup", at, target);
+        await s.settled();
+        // Not selected (nor deselected), not edited: the click reaches the control itself.
+        expect(s.view.selection.ids).toEqual(selected ? ["N"] : []);
+        expect(embed.editMode).toBeNull();
+      }
+    }
+    // A press elsewhere on the card still selects it.
+    s.view.selection.set([]);
+    await s.click("N");
+    expect(s.view.selection.ids).toEqual(["N"]);
+    // A drag from the callout's title moves the card, as a drag from a link does.
+    const before = nodeWorldRect(s.store.doc, s.node("N"));
+    s.pointer("pointerdown", at, inner);
+    s.pointerHeld("pointermove", [at[0] + 40, at[1]], inner);
+    s.pointerHeld("pointerup", [at[0] + 40, at[1]], inner);
+    await s.settled();
+    expect(nodeWorldRect(s.store.doc, s.node("N")).x).toBeCloseTo(before.x + 40, 5);
+    expect(embed.editMode).toBeNull();
+  });
+
   test("keys inside the editor do not reach the stage", async () => {
     const s = await setup();
     await s.click("N");

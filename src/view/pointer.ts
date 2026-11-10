@@ -53,23 +53,32 @@ export function isEditable(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a press on `target` is the target's own, not the stage's: a node's link badge, a link or an embed's open
- * icon (`.markdown-embed-link`) in what a node renders whose links are live (`LIVE_LINKS`, a card's text), or a node's
- * grip (`NODE_GRIP`, a note card's label), which opens on its click. Capturing the pointer would send that click to the
- * stage.
+ * The controls Obsidian draws in rendered Markdown that act on their own click, as they do in a Canvas card: a foldable
+ * callout's title, a heading's or list's collapse indicator, a task's checkbox, a button, a `<details>` summary.
+ */
+const RENDERED_CONTROLS = [".callout.is-collapsible > .callout-title", ".collapse-indicator", ".task-list-item-checkbox", "button", "summary"];
+
+/** Those controls (`RENDERED_CONTROLS`) and links, inside what a node renders whose links are live (`LIVE_LINKS`). */
+const LIVE_CONTROLS = ["a", ...RENDERED_CONTROLS].map((c) => `.${LIVE_LINKS} ${c}`).join(", ");
+
+/**
+ * Whether a press on `target` is the target's own, not the stage's: a node's link badge, a link, a control (a callout's
+ * fold, a collapse indicator, a checkbox: `RENDERED_CONTROLS`) or an embed's open icon (`.markdown-embed-link`) in what
+ * a node renders whose links are live (`LIVE_LINKS`, a card's text or note), or a node's grip (`NODE_GRIP`, a note
+ * card's label), which opens on its click. Capturing the pointer would send that click to the stage.
  */
 export function isOwnClick(target: EventTarget | null): boolean {
   const el = target as Element | null;
-  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a, .${LIVE_LINKS} .markdown-embed-link, .${NODE_GRIP}`) !== null;
+  return typeof el?.closest === "function" && el.closest(`.lf-badge, ${LIVE_CONTROLS}, .${LIVE_LINKS} .markdown-embed-link, .${NODE_GRIP}`) !== null;
 }
 
 /**
- * Whether a press on `target` waits to be a click or a drag: on a link in what a node renders whose links are live
- * (`LIVE_LINKS`, a card's text), or on a node's grip (`NODE_GRIP`).
+ * Whether a press on `target` waits to be a click or a drag: on a link or a control in what a node renders whose links
+ * are live (`LIVE_LINKS`, a card's text or note), or on a node's grip (`NODE_GRIP`).
  */
 export function isLivePress(target: EventTarget | null): boolean {
   const el = target as Element | null;
-  return typeof el?.closest === "function" && el.closest(`.${LIVE_LINKS} a, .${NODE_GRIP}`) !== null;
+  return typeof el?.closest === "function" && el.closest(`${LIVE_CONTROLS}, .${NODE_GRIP}`) !== null;
 }
 
 /**

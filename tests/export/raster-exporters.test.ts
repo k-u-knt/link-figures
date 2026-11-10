@@ -125,7 +125,11 @@ test("a page over the canvas limits is drawn at the largest dpi that fits, and t
   const { backend, calls } = fakeBackend();
   const run = input({ dpi: 1200 });
   run.pages = [run.pages[1]];
+  // A long thin page: the side limit is what binds (1000 mm at 416 dpi is 16378 px), and at 10 mm high the image is
+  // about 2.7 Mpx. At A4's 297 mm it was 80 Mpx, a 318 MB buffer filled pixel by pixel, then encoded and decoded as a
+  // TIFF: over 2 s alone and past the 5 s timeout under a loaded full run.
   run.pages[0].width = 1000;
+  run.pages[0].height = 10;
   const { files, warnings } = await createTiffExporter(backend).run(run, { compression: "none" });
   expect(files).toHaveLength(1);
   expect(calls[0].width).toBeLessThanOrEqual(16384);

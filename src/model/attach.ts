@@ -247,7 +247,7 @@ export function pageTarget(doc: Document, page: PageId, inPage: PageId): AttachT
  * even when its plugin could not read the item: the flag is the type's, not the node's, so such a card keeps its
  * associations.
  */
-export function onPageTiedItem(doc: Document, registries: Registries, end: End | undefined, _unreadable?: ReadonlySet<NodeId>): boolean {
+export function onPageTiedItem(doc: Document, registries: Registries, end: End | undefined): boolean {
   if (end?.kind !== "attached") return false;
   const node = doc.nodes.find((n) => n.id === end.node);
   return !!node && registries.nodeTypes.get(node.type)?.pageTies === true;
@@ -260,7 +260,7 @@ export function onPageTiedItem(doc: Document, registries: Registries, end: End |
  */
 export function pageEndsError(doc: Document, registries: Registries, ends: readonly End[], unreadable?: ReadonlySet<NodeId>): string | null {
   for (const i of [0, 1] as const) {
-    if (ends[i]?.kind === "page" && !onPageTiedItem(doc, registries, ends[1 - i], unreadable)) return "only a card can be tied to a page";
+    if (ends[i]?.kind === "page" && !onPageTiedItem(doc, registries, ends[1 - i])) return "only a card can be tied to a page";
   }
   return null;
 }

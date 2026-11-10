@@ -90,7 +90,7 @@ export function connectorNormaliser(registries: Registries): Normaliser {
       }
       // A page end with no card at the other end (the card was deleted or its end freed) comes free where it is drawn.
       for (const i of [0, 1] as const) {
-        if (ends[i].kind === "page" && !onPageTiedItem(now, registries, ends[1 - i], unreadable)) {
+        if (ends[i].kind === "page" && !onPageTiedItem(now, registries, ends[1 - i])) {
           const { pt } = resolved.ends[i];
           ends = withEnd(ends, i, { kind: "free", x: pt.x, y: pt.y });
         }

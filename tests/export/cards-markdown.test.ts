@@ -188,6 +188,12 @@ describe("cardMarkdown and rewriteImages", () => {
     expect(out.warnings).toEqual([]);
   });
 
+  test("a stray backtick does not pair with one in a later paragraph: the embed between them is rewritten", async () => {
+    const md = "a stray ` here\n\n![[a.png]]\n\nand ` there";
+    const out = await rewriteImages(md, { label: '"c"', resolve: (link) => ({ path: link, extension: "png" }), copy: async (file) => `d/${file.path}` });
+    expect(out.markdown).toBe("a stray ` here\n\n![](<d/a.png>)\n\nand ` there");
+  });
+
   test("an unclosed code fence runs to the end: nothing after it is rewritten", async () => {
     const md = "![[a.png]]\n```\n![[b.png]]";
     const out = await rewriteImages(md, { label: '"c"', resolve: (link) => ({ path: link, extension: "png" }), copy: async (file) => `d/${file.path}` });

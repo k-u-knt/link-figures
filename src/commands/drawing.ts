@@ -692,7 +692,7 @@ function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets
     endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach, unreadable),
   ];
   const tie = (end: End, other: End, paper: PageId | null | undefined, point: PlacePoint): End => {
-    if (end.kind !== "free" || !paper || !onPageTiedItem(doc, ctx.registries, other, unreadable)) return end;
+    if (end.kind !== "free" || !paper || !onPageTiedItem(doc, ctx.registries, other)) return end;
     const target = pageTarget(doc, paper, page);
     if (!target || mode === "center") return { kind: "page", page: paper };
     return { kind: "page", page: paper, anchor: nearestAnchor(target.anchors, at(point)).id as PageAnchor };
@@ -719,7 +719,7 @@ const connectorTool: Command = {
   // press there puts the tool down, as before.
   pressOffPaper(ctx, at, under) {
     const found = attachableUnder(ctx.store.doc, ctx.registries, at.page.id, under, undefined, unreadableIn(ctx));
-    return !!found && onPageTiedItem(ctx.store.doc, ctx.registries, { kind: "attached", node: found.id, snap: "center" }, unreadableIn(ctx));
+    return !!found && onPageTiedItem(ctx.store.doc, ctx.registries, { kind: "attached", node: found.id, snap: "center" });
   },
   applies: (ctx) => !!ctx.page,
   run: (ctx) => ctx.view?.armTool(connectorTool),

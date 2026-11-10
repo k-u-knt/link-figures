@@ -125,7 +125,8 @@ export function codeRanges(markdown: string): [number, number][] {
   if (open) ranges.push([open.start, markdown.length]);
   const inFence = (at: number) => ranges.some(([a, b]) => at >= a && at < b);
   const spans: [number, number][] = [];
-  for (const m of markdown.matchAll(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g)) {
+  // An inline code span ends within its paragraph: a blank line closes it (a stray backtick pairs with nothing later).
+  for (const m of markdown.matchAll(/(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g)) {
     if (!inFence(m.index)) spans.push([m.index, m.index + m[0].length]);
   }
   return [...ranges, ...spans].sort((a, b) => a[0] - b[0]);

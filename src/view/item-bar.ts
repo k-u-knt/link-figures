@@ -38,10 +38,14 @@ export interface ItemBarEntry {
   choice?: ItemBarChoice;
 }
 
+/** The commands whose bar hook has thrown and been logged, so each is logged once a session (the bar syncs often). */
+const reportedFailures = new Set<string>();
+
 /**
  * The bar's entries for item `node`, from the command registry: every command that lists the node's type
  * (`Command.itemBar`) and shows for it now (`itemBarShows`), by `itemBarOrder`, then in the registry's order. One that
- * does not apply is disabled. A command that cannot tell is left out. In a read-only view (`readOnly`) only the commands
+ * does not apply is disabled. A command that cannot tell (its `itemBarShows` or `itemBarChoice` throws) is left out,
+ * and logged with `console.error` naming its id, once per command a session. In a read-only view (`readOnly`) only the commands
  * that change nothing are listed (`Command.readOnlySafe`: Open source).
  */
 export function itemBarModel(registries: Pick<Registries, "commands">, ctx: CommandContext, node: Node, readOnly = false): ItemBarEntry[] {
@@ -54,7 +58,10 @@ export function itemBarModel(registries: Pick<Registries, "commands">, ctx: Comm
       const choice = command.itemBarChoice?.(ctx, node.id);
       entries.push({ id: command.id, name: command.name, icon: command.icon ?? "square", disabled: !commandApplies(command, ctx), ...(choice ? { choice } : {}) });
     } catch (error) {
-      console.error(`Link Figures: could not tell how to show "${command.name}" in the item bar`, error);
+      if (!reportedFailures.has(command.id)) {
+        reportedFailures.add(command.id);
+        console.error(`Link Figures: the item bar left out the command "${command.id}": its item bar hook threw`, error);
+      }
     }
   }
   return entries;

@@ -443,6 +443,31 @@ describe("the item bar", () => {
     expect(s.bar.el.hidden).toBe(true);
   });
 
+  test("a command whose bar hook throws is left out, and logged with console.error naming its id, once per command", () => {
+    const boom = (): never => {
+      throw new Error("boom");
+    };
+    const shows: Command = { id: "cl.throws-shows", name: "Shows", icon: "star", group: "edit", hidden: true, itemBar: ["card"], itemBarShows: boom, applies: () => true, run: vi.fn() };
+    const choice: Command = { id: "cl.throws-choice", name: "Choice", icon: "star", group: "edit", hidden: true, itemBar: ["card"], itemBarChoice: boom, applies: () => true, run: vi.fn() };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = setup([shows, choice]);
+      s.select(["C"]);
+      expect(s.bar.el.hidden).toBe(false);
+      expect(s.buttons()).not.toContain("Shows");
+      expect(s.buttons()).not.toContain("Choice");
+      expect(s.buttons()).toContain("Delete");
+      s.select(["D"]);
+      s.select(["C"]);
+      const logged = errors.mock.calls.map((call) => String(call[0]));
+      expect(logged.filter((m) => m.includes('"cl.throws-shows"'))).toHaveLength(1);
+      expect(logged.filter((m) => m.includes('"cl.throws-choice"'))).toHaveLength(1);
+      expect(errors.mock.calls.find((call) => String(call[0]).includes('"cl.throws-shows"'))?.[1]).toBeInstanceOf(Error);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("two ties to the same page read 'Several pages', and choosing that page collapses them", async () => {
     const s = setup();
     await s.call("connector.create", { page: "pg-1", from: { kind: "attached", node: "C", snap: "center" }, to: { kind: "page", page: "pg-2" } });

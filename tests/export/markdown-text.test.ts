@@ -37,3 +37,9 @@ describe("markdownToPlainText", () => {
     expect(markdownToPlainText("---\ntags: [a]\n---\nText\n\n```\nx = 1\n```")).toBe("Text\n\nx = 1");
   });
 });
+
+test("only real HTML tags are stripped; anything else in angle brackets stays", () => {
+  expect(markdownToPlainText('Cells <b>stained</b> for <GFAP> and <span class="x">NeuN</span><br/>, <SUP>2</SUP> <font color="red">red</font> <a href="u">link</a> x<y>z <Iba1>')).toBe(
+    "Cells stained for <GFAP> and NeuN, 2 red link x<y>z <Iba1>",
+  );
+});

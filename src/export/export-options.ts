@@ -1,4 +1,5 @@
 import type { Registries } from "../registry";
+import { CommandError } from "../registry/command";
 import type { Exporter } from "../registry/exporter";
 import type { Field } from "../registry/fields";
 
@@ -81,7 +82,7 @@ export function splitCommonOptions(given: unknown): { common: { cards: boolean }
     }
     if (value === undefined) continue;
     const problem = badValue(field, value);
-    if (problem) throw new Error(`export: option "${key}" ${problem}`);
+    if (problem) throw new CommandError(`api.export: option "${key}" ${problem}`);
     common[key] = value;
   }
   return { common: { cards: common.cards === "markdown" }, rest };
@@ -91,7 +92,7 @@ export function splitCommonOptions(given: unknown): { common: { cards: boolean }
 const shortName = (exporter: Exporter) => exporter.name.replace(/\s*\(.*\)\s*$/, "");
 
 /**
- * What is wrong with a request's options before anything is opened, said as the API says it (`api.export: …`): a common
+ * What is wrong with a request's options before anything is opened, as the API refuses it (`api.export: …`): a common
  * option's value, or an option the format does not have but another one does (`"notes" is a PowerPoint option`). Null
  * when neither; an unknown format, or an option no format has, is left to the export's own check.
  */
@@ -100,7 +101,7 @@ export function requestOptionsProblem(registries: Registries, format: string, op
   try {
     splitCommonOptions(options);
   } catch (error) {
-    return error instanceof Error ? error.message.replace(/^export: /, "") : String(error);
+    return error instanceof Error ? error.message : String(error);
   }
   const exporter = registries.exporters.get(format);
   if (!exporter) return null;
@@ -108,7 +109,7 @@ export function requestOptionsProblem(registries: Registries, format: string, op
   for (const key of Object.keys(options)) {
     if (own.has(key) || COMMON_EXPORT_OPTIONS.some((f) => f.key === key)) continue;
     const others = registries.exporters.all().filter((e) => e.id !== exporter.id && e.options().some((f) => f.key === key));
-    if (others.length > 0) return `"${key}" is a ${[...new Set(others.map(shortName))].join(" or ")} option`;
+    if (others.length > 0) return `api.export: "${key}" is a ${[...new Set(others.map(shortName))].join(" or ")} option`;
   }
   return null;
 }

@@ -309,7 +309,7 @@ export default class LinkFiguresPlugin extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path }, active: false });
       await leaf.loadIfDeferred();
       const view = leaf.view;
-      if (!(view instanceof LinkFiguresView) || !view.hasDocument() || !view.file) throw new Error(`export: "${path}" could not be opened as a figure`);
+      if (!(view instanceof LinkFiguresView) || !view.hasDocument() || !view.file) throw new CommandError(`api.export: "${path}" could not be opened as a figure`);
       // The view started resolving its links when it loaded; any it has not started yet are started here.
       void view.nodeHost.resolveStale();
       // Closing saves what the view would write (nothing, for a figure it only read): done first, and waited on, so the

@@ -303,6 +303,6 @@ describe("export: cards as Markdown", () => {
     const r = registries();
     r.exporters.register(spy);
     const api = createApi({ app: {} as never, registries: r, files: {} as never, normalizePath: (p) => p, openFigure: () => null, exportFigure: async () => ({ files: [], warnings: [] }) });
-    await expect(api.export("F.lnkfig.md", { format: "spy", options: { cards: "html" } })).rejects.toThrow('export: option "cards" must be "markdown"');
+    await expect(api.export("F.lnkfig.md", { format: "spy", options: { cards: "html" } })).rejects.toThrow('api.export: option "cards" must be "markdown"');
   });
 });

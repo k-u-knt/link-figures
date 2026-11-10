@@ -531,7 +531,9 @@ describe("export", () => {
 
   test("a request without a format is refused, and without a host that exports, export rejects", async () => {
     const { api } = setup();
-    await expect(api.export(PATH, {} as never)).rejects.toThrow("export: format must be the id of an export format");
-    await expect(api.export(PATH, { format: "png" })).rejects.toThrow("export: figures cannot be exported here");
+    await expect(api.export(PATH, {} as never)).rejects.toThrow("api.export: format must be the id of an export format");
+    await expect(api.export(PATH, { format: "png" })).rejects.toThrow("api.export: figures cannot be exported here");
+    await expect(api.export(PATH, {} as never)).rejects.toBeInstanceOf(CommandError);
+    await expect(api.export(PATH, { format: "png" })).rejects.toBeInstanceOf(CommandError);
   });
 });

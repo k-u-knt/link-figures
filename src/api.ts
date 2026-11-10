@@ -225,13 +225,13 @@ export function createApi(host: ApiHost): LinkFiguresApi {
 
     async export(figurePath, request) {
       if (typeof request !== "object" || request === null || typeof request.format !== "string" || request.format === "") {
-        throw new Error("export: format must be the id of an export format");
+        throw new CommandError("api.export: format must be the id of an export format");
       }
       // Options another format has ("notes" with svg), or a bad common option, are refused before anything is opened.
       const problem = requestOptionsProblem(registries, request.format, request.options);
-      if (problem) throw new CommandError(`api.export: ${problem}`);
+      if (problem) throw new CommandError(problem);
       const exportFigure = host.exportFigure;
-      if (!exportFigure) throw new Error("export: figures cannot be exported here");
+      if (!exportFigure) throw new CommandError("api.export: figures cannot be exported here");
       return queued(figurePath, (path) => exportFigure(path, request));
     },
 

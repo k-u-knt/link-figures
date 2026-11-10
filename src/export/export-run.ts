@@ -3,6 +3,7 @@ import { MAX_DPI, MIN_DPI } from "../constants";
 import type { Decoders, Resolved, VaultAccess } from "../links/types";
 import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { Registries } from "../registry";
+import { CommandError } from "../registry/command";
 import type { Exporter } from "../registry/exporter";
 import type { LinkFiguresSettings } from "../settings/settings";
 import type { AssetMap } from "./asset-types";
@@ -219,18 +220,18 @@ function pagesInForm(asked: unknown): asked is ExportRequest["pages"] {
 }
 
 function pagesOf(doc: Document, current: Page | undefined, asked: ExportRequest["pages"] = "current"): Page[] {
-  if (!pagesInForm(asked)) throw new Error('export: pages must be "current", "all" or a list of page ids');
+  if (!pagesInForm(asked)) throw new CommandError('api.export: pages must be "current", "all" or a list of page ids');
   let pages: Page[];
   if (asked === "current") pages = current ? [current] : [];
   else if (asked === "all") pages = doc.pages;
   else {
     pages = [...new Set(asked)].map((id) => {
       const page = doc.pages.find((p) => p.id === id);
-      if (!page) throw new Error(`export: there is no page "${id}"`);
+      if (!page) throw new CommandError(`api.export: there is no page "${id}"`);
       return page;
     });
   }
-  if (pages.length === 0) throw new Error("export: no pages to export");
+  if (pages.length === 0) throw new CommandError("api.export: no pages to export");
   return pages;
 }
 
@@ -241,16 +242,21 @@ function pagesOf(doc: Document, current: Page | undefined, asked: ExportRequest[
 function checkRequest(registries: Registries, exportDpi: number, request: ExportRequest): { exporter: Exporter; dpi: number; options: Record<string, unknown>; cards: boolean } {
   const exporter = registries.exporters.get(request.format);
   if (!exporter) {
-    throw new Error(`export: there is no format "${request.format}" (${registries.exporters.all().map((e) => e.id).join(", ")})`);
+    throw new CommandError(`api.export: there is no format "${request.format}" (${registries.exporters.all().map((e) => e.id).join(", ")})`);
   }
   const dpi = request.dpi ?? exportDpi;
   if (typeof dpi !== "number" || !Number.isFinite(dpi) || dpi < MIN_DPI || dpi > MAX_DPI) {
-    throw new Error(`export: the resolution must be a number from ${MIN_DPI} to ${MAX_DPI} dpi`);
+    throw new CommandError(`api.export: the resolution must be a number from ${MIN_DPI} to ${MAX_DPI} dpi`);
   }
-  if (!pagesInForm(request.pages)) throw new Error('export: pages must be "current", "all" or a list of page ids');
+  if (!pagesInForm(request.pages)) throw new CommandError('api.export: pages must be "current", "all" or a list of page ids');
   // The options every format has are the run's; the rest are the exporter's own.
   const { common, rest } = splitCommonOptions(request.options);
-  const options = exportOptions(exporter, rest);
+  let options: Record<string, unknown>;
+  try {
+    options = exportOptions(exporter, rest);
+  } catch (error) {
+    throw new CommandError(`api.export: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return { exporter, dpi: Math.round(dpi), options, cards: common.cards };
 }
 

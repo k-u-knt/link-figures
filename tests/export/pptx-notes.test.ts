@@ -45,13 +45,13 @@ async function run(doc: Document, cards: Record<PageId, string[]>, opts: Record<
 const CARDS = { "pg-1": ["# Legend\n\n**A**, cortex ![[x.png]]\n- one\n- two", "Second card"], "pg-2": ["Size two"] };
 
 describe("notes parts", () => {
-  test("a notes slide holds the text as paragraphs in its body placeholder; the master has one body placeholder", () => {
+  test("a notes slide holds the text as paragraphs in its body placeholder, under the slide image; the master has both placeholders", () => {
     const slide = parseXml(notesSlideXml("Line <1> & more\n\nAfter"));
-    const ph = one(slide, "p:ph");
-    expect(ph.getAttribute("type")).toBe("body");
+    // The slide's picture above (PowerPoint's Notes Page thumbnail), the notes below.
+    expect(all(slide, "p:ph").map((p) => p.getAttribute("type"))).toEqual(["sldImg", "body"]);
     expect(all(slide, "a:p").map((p) => all(p, "a:t").map((t) => t.textContent).join(""))).toEqual(["Line <1> & more", "", "After"]);
     const master = parseXml(notesMasterXml());
-    expect(all(master, "p:ph").map((p) => p.getAttribute("type"))).toEqual(["body"]);
+    expect(all(master, "p:ph").map((p) => p.getAttribute("type"))).toEqual(["sldImg", "body"]);
     expect(all(master, "p:notesStyle")).toHaveLength(1);
   });
 });

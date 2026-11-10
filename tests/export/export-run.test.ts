@@ -1,6 +1,7 @@
 import { createDocument, createPage } from "../../src/model/defaults";
 import type { Document } from "../../src/model/types";
 import { createRegistries } from "../../src/registry";
+import { CommandError } from "../../src/registry/command";
 import type { Exporter, ExportInput } from "../../src/registry/exporter";
 import type { Field } from "../../src/registry/fields";
 import { fakeVault } from "./fake-vault";
@@ -116,13 +117,16 @@ describe("exportFigure", () => {
 
   test("bad requests are refused before anything is exported", async () => {
     const { t, spy } = target();
-    await expect(exportFigure(t, { format: "gif" })).rejects.toThrow('export: there is no format "gif" (spy)');
-    await expect(exportFigure(t, { format: "spy", dpi: 50 })).rejects.toThrow("export: the resolution must be a number from 72 to 1200 dpi");
+    await expect(exportFigure(t, { format: "gif" })).rejects.toThrow('api.export: there is no format "gif" (spy)');
+    await expect(exportFigure(t, { format: "spy", dpi: 50 })).rejects.toThrow("api.export: the resolution must be a number from 72 to 1200 dpi");
     await expect(exportFigure(t, { format: "spy", dpi: Number.NaN })).rejects.toThrow(/resolution/);
-    await expect(exportFigure(t, { format: "spy", pages: ["nope"] })).rejects.toThrow('export: there is no page "nope"');
-    await expect(exportFigure(t, { format: "spy", pages: [] })).rejects.toThrow("export: no pages to export");
-    await expect(exportFigure(t, { format: "spy", pages: "some" as never })).rejects.toThrow('export: pages must be "current", "all" or a list of page ids');
-    await expect(exportFigure(t, { format: "spy", options: { level: 1 } })).rejects.toThrow('unknown option "level"');
+    await expect(exportFigure(t, { format: "spy", pages: ["nope"] })).rejects.toThrow('api.export: there is no page "nope"');
+    await expect(exportFigure(t, { format: "spy", pages: [] })).rejects.toThrow("api.export: no pages to export");
+    await expect(exportFigure(t, { format: "spy", pages: "some" as never })).rejects.toThrow('api.export: pages must be "current", "all" or a list of page ids');
+    await expect(exportFigure(t, { format: "spy", options: { level: 1 } })).rejects.toThrow('api.export: spy: unknown option "level"');
+    // Every refusal is a CommandError naming api.export.
+    await expect(exportFigure(t, { format: "gif" })).rejects.toBeInstanceOf(CommandError);
+    await expect(exportFigure(t, { format: "spy", options: { level: 1 } })).rejects.toBeInstanceOf(CommandError);
     expect(spy.runs).toEqual([]);
   });
 
@@ -300,12 +304,12 @@ describe("exportInBackground", () => {
   test("a bad request, or a path that is no figure, is refused without opening a tab", async () => {
     const b = background();
     const refused = async (request: object, path = b.t.figurePath) => exportInBackground(b.host, path, request as never);
-    await expect(refused({ format: "gif" })).rejects.toThrow('export: there is no format "gif" (spy)');
-    await expect(refused({ format: "spy", dpi: 5000 })).rejects.toThrow("export: the resolution must be a number from 72 to 1200 dpi");
+    await expect(refused({ format: "gif" })).rejects.toThrow('api.export: there is no format "gif" (spy)');
+    await expect(refused({ format: "spy", dpi: 5000 })).rejects.toThrow("api.export: the resolution must be a number from 72 to 1200 dpi");
     await expect(refused({ format: "spy", options: { level: 1 } })).rejects.toThrow('unknown option "level"');
-    await expect(refused({ format: "spy", pages: "some" })).rejects.toThrow('export: pages must be "current", "all" or a list of page ids');
-    await expect(refused({ format: "spy", pages: [] })).rejects.toThrow("export: no pages to export");
-    await expect(refused({ format: "spy", pages: ["nope"] })).rejects.toThrow('export: there is no page "nope"');
+    await expect(refused({ format: "spy", pages: "some" })).rejects.toThrow('api.export: pages must be "current", "all" or a list of page ids');
+    await expect(refused({ format: "spy", pages: [] })).rejects.toThrow("api.export: no pages to export");
+    await expect(refused({ format: "spy", pages: ["nope"] })).rejects.toThrow('api.export: there is no page "nope"');
     await expect(refused({ format: "spy" }, "figs/Other.lnkfig.md")).rejects.toThrow('there is no file "figs/Other.lnkfig.md"');
     expect(b.host.open).not.toHaveBeenCalled();
     expect(b.events).toEqual([]);

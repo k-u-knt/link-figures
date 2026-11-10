@@ -307,7 +307,7 @@ export interface NodeType<N extends Node = Node> {
   pageTies?: true;
   /**
    * The pages the node is tied to by itself (a connector's page ends). Deleting one of these pages deletes the node with
-   * it, in the same undo step, and a node tied to a page is never exported.
+   * it, in the same undo step. Such a node is not exported, as it is drawn from a card (see `isExported`).
    */
   tiedPages?(node: N): PageId[];
   /**
@@ -391,16 +391,15 @@ export function nodeTypeFor(registries: { nodeTypes: NodeTypeRegistry }, node: P
 }
 
 /**
- * Whether an export draws `node`: not when its type is not `exportable` (a card), nor when it is tied to a page
- * (`tiedPages`: an association), nor when it is drawn from a node that is not exportable (`dependsOn`: a connector with
- * an end on a card). A node no registered type can be asked about is left to the exporter, which skips it with its own
+ * Whether an export draws `node`: not when its type is not `exportable` (a card), nor when it is drawn from a node that
+ * is not exportable (`dependsOn`: a connector with an end on a card, an association among them, as only a card may be
+ * tied to a page). A node no registered type can be asked about is left to the exporter, which skips it with its own
  * warning.
  */
 export function isExported(doc: Document, registries: { nodeTypes: NodeTypeRegistry }, node: Node, unreadable?: ReadonlySet<NodeId>): boolean {
   const type = nodeTypeFor(registries, node, unreadable);
   if (!type) return true;
   if (type.exportable === false) return false;
-  if ((type.tiedPages?.(node).length ?? 0) > 0) return false;
   for (const id of type.dependsOn?.(node) ?? []) {
     const other = doc.nodes.find((n) => n.id === id);
     // Asked of its type even when its plugin could not read it: the flag is the type's, not the node's.

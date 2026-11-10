@@ -163,6 +163,8 @@ test("a connector to a card its plugin could not read is still not exported", ()
   const doc = figure(r);
   const kc = doc.nodes.find((n) => n.id === "kc")!;
   expect(isExported(doc, r, kc, new Set(["c"]))).toBe(false);
+  const assoc = doc.nodes.find((n) => n.id === "assoc")!;
+  expect(isExported(doc, r, assoc, new Set(["c"]))).toBe(false);
 });
 
 

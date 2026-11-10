@@ -1,10 +1,11 @@
 import { MarkdownView, Notice, type App, type TFile, type WorkspaceLeaf } from "obsidian";
-import { FILE_SUFFIX, FRONTMATTER_KEY, VIEW_TYPE } from "../constants";
+import { FILE_SUFFIX, VIEW_TYPE } from "../constants";
+import { hasMarker } from "../format/figure-file";
 import type LinkFiguresPlugin from "../main";
 
 /** True when the metadata cache has seen the `link-figures` frontmatter key on the file. */
 export function hasFigureMarker(app: App, file: TFile): boolean {
-  return app.metadataCache.getFileCache(file)?.frontmatter?.[FRONTMATTER_KEY] !== undefined;
+  return hasMarker(app.metadataCache.getFileCache(file)?.frontmatter);
 }
 
 /**

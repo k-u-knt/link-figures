@@ -20,7 +20,8 @@ import { BlockIdQueue, writableEditor, type NoteHost } from "./links/note-block-
 import { EditorDragTracker, PopoutDragListeners, listenForEditorDrags } from "./links/editor-drag";
 import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
-import { FILE_SUFFIX, VIEW_TYPE } from "./constants";
+import { VIEW_TYPE } from "./constants";
+import { isFigure } from "./format/figure-file";
 import { viewExportTarget } from "./export/export-modal";
 import { closeBackgroundTab, exportFigure, exportInBackground, takeBackgroundLeaf, type BackgroundFigure, type ExportOutcome, type ExportRequest, type TabWorkspace } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
@@ -301,7 +302,7 @@ export default class LinkFiguresPlugin extends Plugin {
     const { vault, metadataCache } = this.app;
     return {
       registries: this.registries,
-      figurePaths: () => vault.getMarkdownFiles().filter((f) => f.path.endsWith(FILE_SUFFIX) || hasFigureMarker(this.app, f)).map((f) => f.path),
+      figurePaths: () => vault.getMarkdownFiles().filter((f) => isFigure(f.path, metadataCache.getFileCache(f)?.frontmatter)).map((f) => f.path),
       openFigure: (path) => {
         const views = this.app.workspace
           .getLeavesOfType(VIEW_TYPE)

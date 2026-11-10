@@ -44,6 +44,8 @@ const file = (path: string, mtime = 0): FakeFile => {
 const files = [file("Projects/analysis.md", 3), file("anatomy.md", 2), file("zebra.md", 1), file("plots/analysis plot.png", 0)];
 /** A figure file, whose cache and text are those of the note (blocks in it, two with ids). */
 const FIGURE = file("figs/plate.lnkfig.md", -1);
+/** A figure marked only by its front matter (no `.lnkfig.md` suffix), with the note's blocks too. */
+const MARKED = file("figs/marked.md", -2);
 
 /** The note `Projects/analysis.md`: lines 0-18, with the sections and list items its cache gives. */
 const NOTE = [
@@ -71,7 +73,8 @@ const NOTE_CACHE = {
   blocks: { item2: { id: "item2", position: at(7) }, code1: { id: "code1", position: at(18) } },
 };
 
-const hasNote = (f: FakeFile) => f.path === "Projects/analysis.md" || f === FIGURE;
+const hasNote = (f: FakeFile) => f.path === "Projects/analysis.md" || f === FIGURE || f === MARKED;
+const MARKED_CACHE = { ...NOTE_CACHE, frontmatter: { "link-figures": "0.4.0" } };
 function fakeApp(lastOpen: string[] = [], extra: FakeFile[] = []) {
   const all = [...files, ...extra];
   return {
@@ -85,7 +88,7 @@ function fakeApp(lastOpen: string[] = [], extra: FakeFile[] = []) {
       getFirstLinkpathDest: (linkpath: string) =>
         all.find((f) => f.basename === linkpath || f.path === linkpath || f.path === `${linkpath}.md` || f.name === linkpath) ?? null,
       fileToLinktext: vi.fn((f: FakeFile) => (f.extension === "md" ? f.basename : f.name)),
-      getFileCache: (f: FakeFile) => (hasNote(f) ? NOTE_CACHE : {}),
+      getFileCache: (f: FakeFile) => (f === MARKED ? MARKED_CACHE : hasNote(f) ? NOTE_CACHE : {}),
     },
   };
 }
@@ -262,6 +265,18 @@ describe("link suggestions in a card's editor", () => {
     expect(titles()).toEqual(["second item", "print(1)"]);
     key(area, "Enter");
     expect(area.value).toBe("[[plate.lnkfig#^item2]]");
+    expect(blockId).not.toHaveBeenCalled();
+  });
+
+  test("a figure marked only by its front matter is a figure too: no id is ever written into it", async () => {
+    const area = textarea();
+    const blockId = vi.fn(async () => ({ id: "fig-ab12", subpath: "#^fig-ab12" }));
+    attachLinkSuggest(area, fakeApp([], [MARKED]) as never, "fig.lnkfig.md", { blockId });
+    typeInto(area, "[[marked^");
+    await settle();
+    expect(titles()).toEqual(["second item", "print(1)"]);
+    key(area, "Enter");
+    expect(area.value).toBe("[[marked#^item2]]");
     expect(blockId).not.toHaveBeenCalled();
   });
 

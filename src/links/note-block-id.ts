@@ -1,4 +1,4 @@
-import { FILE_SUFFIX } from "../constants";
+import { isFigure, type FrontMatter } from "../format/figure-file";
 import { CommandError } from "../registry/command";
 import {
   blockAt,
@@ -67,8 +67,9 @@ export interface NoteHost {
   process(path: string, edit: (text: string) => string): Promise<void>;
 }
 
-/** What is read of a note's metadata cache (`CachedMetadata`): its blocks, block ids, headings and embeds. */
+/** What is read of a note's metadata cache (`CachedMetadata`): its front matter, blocks, block ids, headings and embeds. */
 export type NoteCache = BlocksCache & {
+  frontmatter?: Record<string, unknown>;
   blocks?: Record<string, BlockLike>;
   headings?: { heading: string; level: number; position: LinePos }[];
   embeds?: { link: string; position: LinePos }[];
@@ -78,11 +79,12 @@ export type NoteCache = BlocksCache & {
 export const REINDEX_TIMEOUT_MS = 2000;
 
 /**
- * A figure file (`.lnkfig.md`) is never given a block id: its text is the plugin's, written by the figure, and an id
- * written into it would not survive the figure's next save. Throws a `CommandError` naming `note.block-id`.
+ * A figure file (`.lnkfig.md`, or one whose `frontmatter` carries the figure marker: `isFigure`) is never given a block
+ * id: its text is the plugin's, written by the figure, and an id written into it would not survive the figure's next
+ * save. Throws a `CommandError` naming `note.block-id`.
  */
-export function refuseFigure(path: string): void {
-  if (path.endsWith(FILE_SUFFIX)) throw new CommandError(`note.block-id: "${path}" is a figure, not a note`);
+export function refuseFigure(path: string, frontmatter?: FrontMatter): void {
+  if (isFigure(path, frontmatter)) throw new CommandError(`note.block-id: "${path}" is a figure, not a note`);
 }
 
 const result = (id: string): BlockIdResult => ({ id, subpath: `#^${id}` });
@@ -121,7 +123,8 @@ async function findOrWriteBlockId(host: NoteHost, notePath: string, line: number
   if (!Number.isInteger(line) || line < 0) throw new Error(`blockId: "line" must be a whole number from 0, not ${String(line)}`);
   const path = host.resolve(notePath);
   if (path === null) throw new Error(`blockId: there is no note "${notePath}"`);
-  refuseFigure(path);
+  // A figure without the suffix is known by its front matter, as the cache read it.
+  refuseFigure(path, host.cache(path)?.frontmatter);
 
   /** The block at `line` by the cache as it is now, checked against `text`; and the cache's id for it, if any. */
   const locate = (text: string): { block: Block; cache: NoteCache; cached: string | null } => {

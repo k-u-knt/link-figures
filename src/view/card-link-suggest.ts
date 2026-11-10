@@ -1,5 +1,5 @@
 import { Notice, prepareFuzzySearch, stripHeadingForLink, type App, type TFile } from "obsidian";
-import { FILE_SUFFIX } from "../constants";
+import { isFigure } from "../format/figure-file";
 import { blockAt, existingBlockId, idPlacement, type Block } from "../links/block-id";
 import type { NoteCache } from "../links/note-block-id";
 import { codeRanges } from "../model/card-links";
@@ -179,7 +179,7 @@ async function blockSuggestions(app: LinkSuggestApp, file: TFile, linktext: stri
   if (!cache) return [];
   const lines = (await app.vault.cachedRead(file)).split(/\r?\n/);
   // A figure's text is the plugin's: an id is never written into it, so only its blocks that have one are offered.
-  const writer = file.path.endsWith(FILE_SUFFIX) ? undefined : blockId;
+  const writer = isFigure(file.path, cache.frontmatter) ? undefined : blockId;
   const giveId = async (line: number): Promise<string> => {
     try {
       return (await writer!(file.path, line)).subpath;

@@ -114,6 +114,18 @@ describe("noteBlockId", () => {
     expect(s.files.get("Figs/plate.lnkfig.md")).toBe(TEXT);
   });
 
+  test("a figure marked only by its front matter (no `.lnkfig.md` suffix) is refused too, never written", async () => {
+    const s = setup();
+    s.files.set("Figs/marked.md", TEXT);
+    s.setCache({ ...cacheOf(TEXT), frontmatter: { "link-figures": "0.4.0" } } as Cache);
+    await expect(noteBlockId(s.host, "Figs/marked", 2, "fig", s.random)).rejects.toThrow(new CommandError('note.block-id: "Figs/marked.md" is a figure, not a note'));
+    // Through the queue, as `api.blockId` writes, the same.
+    await expect(new BlockIdQueue(() => s.host, () => "fig", s.random).blockId("Figs/marked.md", 2)).rejects.toBeInstanceOf(CommandError);
+    expect(s.process).not.toHaveBeenCalled();
+    expect(s.editor).toBeNull();
+    expect(s.files.get("Figs/marked.md")).toBe(TEXT);
+  });
+
   test("a block without an id gets a new one, written into the file when the note is not open", async () => {
     const s = setup();
     const result = await noteBlockId(s.host, "Notes/a.md", 2, "fig", s.random);

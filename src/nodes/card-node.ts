@@ -68,6 +68,13 @@ function within(el: HTMLElement, target: EventTarget | null | undefined): boolea
   return !!node && typeof node.nodeType === "number" && el.contains(node);
 }
 
+/** The part of Obsidian's metadata cache a note card's label uses. */
+interface MetadataCacheLike {
+  getCache?(path: string): unknown;
+  on?(name: "changed", callback: (file: { path?: unknown } | null | undefined) => void): unknown;
+  offref?(ref: unknown): void;
+}
+
 /** A note card's live embed (see `openEmbed`): of which file object (kept across a rename) and subpath. */
 interface Live {
   embed: LiveEmbed;
@@ -92,8 +99,9 @@ interface Live {
  * another note, or its note goes. Without the embed (`openEmbed` gives null), the card shows its section read-only, as
  * a text card is shown. The pointer controller leaves presses and keys in an editor to it (`isEditing`).
  *
- * A note card has a label above it (`CardLabel`), as Canvas's file card does: where its note lives, `Folder › Note ›
- * Heading` (`cardLabel`), or the link as stored, greyed out, when the note is missing. A click on it opens the note at
+ * A note card has a label above it (`CardLabel`), exactly as Canvas's file card has: `Note › Heading` (`cardLabel`), with
+ * the note's full vault path as its tooltip, drawn again when Obsidian's cache of the note changes; or the link as
+ * stored, greyed out after an alert icon, when the note is missing. A click on it opens the note at
  * that place in a new tab beside the figure, as Open source does; a drag from it moves the card.
  */
 class CardNodeRenderer implements NodeRenderer {
@@ -101,6 +109,10 @@ class CardNodeRenderer implements NodeRenderer {
   private readonly el: HTMLElement;
   private readonly body: HTMLElement;
   private readonly label: CardLabel;
+  /** The vault path the label shows (null: none, or a missing note), whose cache changes draw it again (`watchCache`). */
+  private labelPath: string | null = null;
+  /** Stops listening to the metadata cache (`watchCache`); a no-op when not listening. */
+  private unwatchCache: () => void = () => {};
   private shown: CardBody | null = null;
   /** What the body was drawn from (the content and what was resolved for it), so an update that leaves it alone draws nothing. */
   private drawnFrom: { key: string; resolved: Resolved | undefined } | null = null;
@@ -122,6 +134,7 @@ class CardNodeRenderer implements NodeRenderer {
     this.el = host.createDiv({ cls: ["lf-node", "lf-card"] });
     this.body = this.el.createDiv({ cls: "lf-card-body" });
     this.label = new CardLabel(this.el, (ev) => this.openNote(ev));
+    this.watchCache();
     // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
@@ -152,6 +165,8 @@ class CardNodeRenderer implements NodeRenderer {
     this.editor = null;
     this.detachSuggest();
     this.dropLive();
+    this.unwatchCache();
+    this.unwatchCache = () => {};
     this.shown?.release();
     this.shown = null;
     this.el.remove();
@@ -209,23 +224,45 @@ class CardNodeRenderer implements NodeRenderer {
   private drawLabel(): void {
     const n = this.node;
     if (n.file === undefined) {
+      this.labelPath = null;
       this.label.hide();
       return;
     }
     const subpath = n.subpath ?? "";
     const resolved = this.ctx.resolved(n.id);
+    this.labelPath = null;
     if (resolved?.kind === "missing" && !this.live) {
-      this.label.show([joinLinktext(n.file, subpath)], true);
+      const linktext = joinLinktext(n.file, subpath);
+      this.label.show([linktext], linktext, true);
       return;
     }
     const livePath = (this.live?.file as { path?: unknown } | undefined)?.path;
     const path = typeof livePath === "string" ? livePath : resolved?.kind === "content" ? resolved.file.path : n.file;
-    this.label.show(cardLabel(path, subpath, this.noteCache(path)), false);
+    this.labelPath = path;
+    this.label.show(cardLabel(path, subpath, this.noteCache(path)), path, false);
+  }
+
+  /** Obsidian's metadata cache, as far as the label uses it; undefined when the app has none. */
+  private metadataCache(): MetadataCacheLike | undefined {
+    return (this.ctx.app as { metadataCache?: MetadataCacheLike } | undefined)?.metadataCache;
+  }
+
+  /**
+   * Draws the label again when Obsidian's cache of its note changes (a heading renamed, a block moved under another),
+   * even while the card's embed follows the note itself and the stage leaves the card alone.
+   */
+  private watchCache(): void {
+    const cache = this.metadataCache();
+    if (typeof cache?.on !== "function" || typeof cache.offref !== "function") return;
+    const ref = cache.on("changed", (file: { path?: unknown } | null | undefined) => {
+      if (this.labelPath !== null && file?.path === this.labelPath) this.drawLabel();
+    });
+    this.unwatchCache = () => cache.offref!(ref);
   }
 
   /** Obsidian's cached headings and blocks of the note at `path`, or null when there is no cache to ask. */
   private noteCache(path: string): LabelCache | null {
-    const cache = (this.ctx.app as { metadataCache?: { getCache?: (path: string) => unknown } } | undefined)?.metadataCache;
+    const cache = this.metadataCache();
     if (typeof cache?.getCache !== "function") return null;
     try {
       return (cache.getCache(path) as LabelCache | null) ?? null;

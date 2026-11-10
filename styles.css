@@ -640,7 +640,7 @@
   border-radius: inherit;
 }
 
-/* The label above a note card (see `view/card-label.ts`), as Canvas draws it above a file card: grey interface text at
+/* The label above a note card (see `view/card-label.ts`), as Canvas draws it above a file card (`Note › Heading`): grey interface text at
    the card's top left. It is in the zoomed viewport, so it is scaled back by --lf-zoom to keep its size on screen; its
    width is the card's on screen. It is never exported: exports draw from the model, not from the stage. */
 .lf-card-label {
@@ -657,6 +657,14 @@
   color: var(--lf-ui-faint, var(--text-faint));
   cursor: pointer;
   user-select: none;
+  --icon-size: 1em;
+}
+
+/* Obsidian's alert icon before a missing note's link, placed as Canvas places it. */
+.lf-card-label-icon svg {
+  position: relative;
+  top: 2px;
+  margin-right: var(--size-4-1, 4px);
 }
 
 .lf-card-label:hover {

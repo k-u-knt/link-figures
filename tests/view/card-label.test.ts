@@ -9,6 +9,7 @@ import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import type { RenderContext } from "../../src/registry/node-type";
 import { cardLabel, LABEL_SEPARATOR } from "../../src/view/card-label";
 
+const setIcon = vi.hoisted(() => vi.fn((el: HTMLElement, icon: string) => el.setAttribute("data-icon", icon)));
 vi.mock("obsidian", () => ({
   Component: class {
     addChild() {}
@@ -16,7 +17,7 @@ vi.mock("obsidian", () => ({
   },
   MarkdownRenderer: { render: async () => {} },
   Keymap: { isModEvent: () => false },
-  setIcon: () => {},
+  setIcon: (el: HTMLElement, icon: string) => setIcon(el, icon),
 }));
 
 beforeAll(() => {
@@ -40,8 +41,8 @@ beforeAll(() => {
 const at = (line: number) => ({ start: { line, col: 0, offset: 0 }, end: { line, col: 0, offset: 0 } });
 
 describe("cardLabel: the breadcrumb segments", () => {
-  test("a whole note: its folders, then the note's name without .md", () => {
-    expect(cardLabel("Notes/Legends/Fig2.md", "", null)).toEqual(["Notes", "Legends", "Fig2"]);
+  test("a whole note: the note's name without .md, with no folders (as Canvas)", () => {
+    expect(cardLabel("Notes/Legends/Fig2.md", "", null)).toEqual(["Fig2"]);
   });
 
   test("a note at the vault's root: only its name", () => {
@@ -49,11 +50,11 @@ describe("cardLabel: the breadcrumb segments", () => {
   });
 
   test("a heading: the segments end with the heading", () => {
-    expect(cardLabel("Notes/Legends/Fig2.md", "#Figure 2 legend", null)).toEqual(["Notes", "Legends", "Fig2", "Figure 2 legend"]);
+    expect(cardLabel("Notes/Legends/Fig2.md", "#Figure 2 legend", null)).toEqual(["Fig2", "Figure 2 legend"]);
   });
 
-  test("a nested heading subpath: each heading in turn", () => {
-    expect(cardLabel("Fig2.md", "#Results#Figure 2", null)).toEqual(["Fig2", "Results", "Figure 2"]);
+  test("a nested heading subpath: the subpath after its first #, as Canvas shows it", () => {
+    expect(cardLabel("Fig2.md", "#Results#Figure 2", null)).toEqual(["Fig2", "Results#Figure 2"]);
   });
 
   test("a block with no heading above it: the note, then ^id", () => {
@@ -72,7 +73,7 @@ describe("cardLabel: the breadcrumb segments", () => {
       ],
       blocks: { abc: { id: "abc", position: at(7) } },
     };
-    expect(cardLabel("Notes/Fig2.md", "#^abc", cache)).toEqual(["Notes", "Fig2", "Legend"]);
+    expect(cardLabel("Notes/Fig2.md", "#^abc", cache)).toEqual(["Fig2", "Legend"]);
   });
 
   test("emoji and dots in names and headings are kept as written (as Canvas shows them)", () => {
@@ -82,8 +83,9 @@ describe("cardLabel: the breadcrumb segments", () => {
     ]);
   });
 
-  test("a file that is not a note keeps its extension (Obsidian's short name)", () => {
-    expect(cardLabel("Data/plot.pdf", "", null)).toEqual(["Data", "plot.pdf"]);
+  test("a file that is not a note keeps its extension (Obsidian's short name), and no subpath (as Canvas)", () => {
+    expect(cardLabel("Data/plot.pdf", "", null)).toEqual(["plot.pdf"]);
+    expect(cardLabel("Data/plot.pdf", "#page=2", null)).toEqual(["plot.pdf"]);
   });
 
   test("the separator is Canvas's", () => {
@@ -115,9 +117,12 @@ describe("the label above a note card", () => {
   }
   const content = (path: string): Resolved => ({ kind: "content", file: { path, extension: "md" }, markdown: "Body", deps: [path] });
 
-  test("a note card shows Folder › Note › Heading above it", () => {
+  test("a note card shows Note › Heading above it, with the full vault path as its tooltip", () => {
     const { label } = mount({ file: "Notes/Legends/Fig2.md", subpath: "#Figure 2 legend" }, content("Notes/Legends/Fig2.md"));
-    expect(label()?.textContent).toBe("Notes › Legends › Fig2 › Figure 2 legend");
+    expect(label()?.textContent).toBe("Fig2 › Figure 2 legend");
+    expect(label()?.getAttribute("aria-label")).toBe("Notes/Legends/Fig2.md");
+    expect(label()?.title).toBe("Notes/Legends/Fig2.md");
+    expect(label()?.querySelector("[data-icon]")).toBeNull();
     expect(label()?.classList.contains("is-missing")).toBe(false);
   });
 
@@ -125,7 +130,32 @@ describe("the label above a note card", () => {
     const cache = { headings: [{ heading: "Legend", level: 2, position: at(1) }], blocks: { abc: { id: "abc", position: at(3) } } };
     const app = { metadataCache: { getCache: (p: string) => (p === "Notes/Fig2.md" ? cache : null) } };
     const { label } = mount({ file: "Notes/Fig2.md", subpath: "#^abc" }, content("Notes/Fig2.md"), app);
-    expect(label()?.textContent).toBe("Notes › Fig2 › Legend");
+    expect(label()?.textContent).toBe("Fig2 › Legend");
+  });
+
+  test("the label is drawn again when Obsidian's metadata cache changes for its note, and not for another", () => {
+    let cache: Record<string, unknown> = { headings: [{ heading: "Old", level: 2, position: at(1) }], blocks: { abc: { id: "abc", position: at(3) } } };
+    const handlers: ((file: { path: string }) => void)[] = [];
+    const offref = vi.fn();
+    const ref = {};
+    const metadataCache = {
+      getCache: () => cache,
+      on: (name: string, fn: (file: { path: string }) => void) => {
+        expect(name).toBe("changed");
+        handlers.push(fn);
+        return ref;
+      },
+      offref,
+    };
+    const { renderer, label } = mount({ file: "Notes/Fig2.md", subpath: "#^abc" }, content("Notes/Fig2.md"), { metadataCache });
+    expect(label()?.textContent).toBe("Fig2 › Old");
+    cache = { headings: [{ heading: "New", level: 2, position: at(1) }], blocks: { abc: { id: "abc", position: at(3) } } };
+    handlers.forEach((fn) => fn({ path: "Other.md" }));
+    expect(label()?.textContent).toBe("Fig2 › Old");
+    handlers.forEach((fn) => fn({ path: "Notes/Fig2.md" }));
+    expect(label()?.textContent).toBe("Fig2 › New");
+    renderer.unmount();
+    expect(offref).toHaveBeenCalledWith(ref);
   });
 
   test("a text card has no label", () => {
@@ -144,6 +174,11 @@ describe("the label above a note card", () => {
     const { label } = mount({ file: "Old/Gone", subpath: "#Legend" }, { kind: "missing", reason: "file", deps: [] });
     expect(label()?.textContent).toBe("Old/Gone#Legend");
     expect(label()?.classList.contains("is-missing")).toBe(true);
+    // Obsidian's alert icon first, as Canvas shows a missing file.
+    const icon = label()!.firstElementChild as HTMLElement;
+    expect(icon.getAttribute("data-icon")).toBe("alert-triangle");
+    expect(icon.classList.contains("lf-card-label-icon")).toBe(true);
+    expect(label()!.title).toBe("Old/Gone#Legend");
   });
 
   test("a click on the label opens the note at that place in a new tab", () => {

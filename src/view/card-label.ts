@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { NODE_GRIP } from "../constants";
 
 /** What separates the label's segments: Canvas's own (`Note › Heading` above a file card). */
@@ -15,22 +16,22 @@ export interface LabelCache {
 }
 
 /**
- * The breadcrumb segments of a note card's label, for the vault file at `path` and the card's `subpath`: the folders the
- * file is in, then its name (without `.md`, as Obsidian's short name has it), then where in it the card shows:
- * - a heading subpath (`#A`, `#A#B`): each heading in it;
+ * The segments of a note card's label, as Canvas labels a file card, for the vault file at `path` and the card's
+ * `subpath`: the file's short name (a note's name without `.md`; another file's full name), then, for a note with a
+ * subpath, where in it the card shows:
+ * - a heading subpath: the subpath after its `#` (`#A#B` gives `A#B`, as Canvas shows it);
  * - a block (`#^id`): the heading it is under in `cache` (the note's cached metadata), or `^id` when there is none.
  *
- * Canvas's label is `Note › subpath`; the folders are added so the label says where the note lives.
+ * The folders are not shown, as in Canvas: the full path is the label's tooltip.
  */
 export function cardLabel(path: string, subpath: string, cache: LabelCache | null | undefined): string[] {
-  const parts = path.split("/").filter((p) => p !== "");
-  const name = parts.pop() ?? path;
-  const segments = [...parts, name.toLowerCase().endsWith(".md") ? name.slice(0, -3) : name];
-  const refs = subpath.split("#").filter((p) => p !== "");
-  const block = refs.length === 1 && refs[0].startsWith("^") ? refs[0] : null;
-  if (block === null) return [...segments, ...refs];
-  const heading = headingAbove(cache, block.slice(1));
-  return [...segments, heading ?? block];
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const isNote = name.toLowerCase().endsWith(".md");
+  const short = isNote ? name.slice(0, -3) : name;
+  const place = subpath.replace(/^#/, "");
+  if (!isNote || place === "") return [short];
+  if (!/^\^[^#]*$/.test(place)) return [short, place];
+  return [short, headingAbove(cache, place.slice(1)) ?? place];
 }
 
 /** The heading the block `id` is under in `cache`: the last heading starting on or before its line, or null. */
@@ -60,15 +61,27 @@ export class CardLabel {
     private readonly open: (ev: MouseEvent) => void,
   ) {}
 
-  /** Shows `segments` joined by `LABEL_SEPARATOR`; `missing`: greyed out, as for a note that is not in the vault. */
-  show(segments: string[], missing: boolean): void {
+  /**
+   * Shows `segments` joined by `LABEL_SEPARATOR`, with `tooltip` (the note's full vault path) as its title. `missing`:
+   * greyed out after Obsidian's alert icon, as Canvas shows a file that is not in the vault.
+   */
+  show(segments: string[], tooltip: string, missing: boolean): void {
     const el = this.el ?? this.make();
     const text = segments.join(LABEL_SEPARATOR);
-    if (text !== this.shown) {
-      el.textContent = text;
-      this.shown = text;
+    const key = JSON.stringify([text, missing]);
+    if (key !== this.shown) {
+      el.textContent = "";
+      if (missing) {
+        const icon = el.ownerDocument.createElement("span");
+        icon.classList.add("lf-card-label-icon");
+        setIcon(icon, "alert-triangle");
+        el.appendChild(icon);
+      }
+      el.appendChild(el.ownerDocument.createTextNode(text));
+      this.shown = key;
     }
-    el.title = text;
+    el.title = tooltip;
+    el.setAttribute("aria-label", tooltip);
     el.classList.toggle("is-missing", missing);
   }
 

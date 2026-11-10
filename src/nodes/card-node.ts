@@ -256,7 +256,7 @@ class CardNodeRenderer implements NodeRenderer {
     const cache = this.metadataCache();
     if (typeof cache?.on !== "function" || typeof cache.offref !== "function") return;
     const ref = cache.on("changed", (file: { path?: unknown } | null | undefined) => {
-      if (this.labelPath !== null && file?.path === this.labelPath) this.drawLabel();
+      if (this.labelPath !== null && (file === this.live?.file || file?.path === this.labelPath)) this.drawLabel();
     });
     this.unwatchCache = () => cache.offref!(ref);
   }

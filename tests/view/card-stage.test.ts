@@ -86,6 +86,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => render.mockClear());
+afterEach(() => vi.restoreAllMocks());
 
 const CARD_W = mmToPx(60);
 const CARD_H = mmToPx(40);
@@ -223,11 +224,11 @@ function setup(armed: string | null = null) {
 }
 
 /** A card mounted in a host element, drawn again on every change of the store as the node host draws it. */
-function mountCard(s: ReturnType<typeof setup>, id: string, resolved: (id: string) => Resolved | undefined = () => undefined) {
+function mountCard(s: ReturnType<typeof setup>, id: string, resolved: (id: string) => Resolved | undefined = () => undefined, app: object = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const ctx = {
-    app: {},
+    app,
     registries: s.r,
     figurePath: "fig.lnkfig.md",
     doc: () => s.store.doc,
@@ -795,13 +796,16 @@ describe("note cards", () => {
     expect(entry(["C"])).toMatchObject({ disabled: true });
   });
 
-  test("a note card mounted where there is no vault or embed registry (as in these tests) prints no fallback warning", async () => {
-    const warn = vi.spyOn(console, "warn");
+  test("a note card whose app has the note but no embed registry shows the read-only rendering and prints no warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const s = setup();
     const content: Resolved = { kind: "content", file: { path: "Notes/a.md", extension: "md" }, markdown: "## Legend\nBody", deps: ["Notes/a.md"] };
-    mountCard(s, "N", () => content);
-    expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
+    const { host } = mountCard(s, "N", () => content, { vault: { getFileByPath: () => ({ path: "Notes/a.md", extension: "md", basename: "a" }) } });
+    // openEmbed was reached (the file was found), found no registry and warned (silenced here); the body is the read-only rendering.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".lf-card-embed")).toBeNull();
+    expect(render).toHaveBeenCalledWith(expect.anything(), "## Legend\nBody", expect.anything(), "Notes/a.md", expect.anything());
+    expect(host.querySelector(".lf-card-body")?.textContent).toContain("## Legend");
   });
 
   test("a note card's link is resolved as a content panel's is", async () => {

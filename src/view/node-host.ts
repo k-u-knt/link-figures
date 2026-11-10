@@ -186,7 +186,7 @@ export class NodeHost {
    * The watcher says files that `ids` depend on changed: each node that resolves a link (`linkTarget`) is resolved
    * again, which draws it; any other is drawn again from scratch (`NodeRenderer.refresh`). Both track their linked
    * files afresh, as what an embedded note embeds may have changed. A node whose renderer follows its file by itself
-   * (`NodeRenderer.followsFile`: a note card's live embed) is left alone, so an edit in it is never drawn over; it is
+   * (`NodeRenderer.followsFile`: a note card's live embed) keeps its embed (only its label is drawn again), so an edit in it is never drawn over; it is
    * resolved again once it no longer does (its note deleted).
    */
   async invalidate(ids: NodeId[]): Promise<void> {
@@ -198,7 +198,15 @@ export class NodeHost {
       if (!node) continue;
       const entry = this.entries.get(id);
       // A drawing that follows its file itself (a note's live embed) is not drawn over: an edit in it may be under way.
-      if (this.follows(id, entry)) continue;
+      // Its renderer only draws what the embed does not (the label, after a rename), and keeps the embed.
+      if (this.follows(id, entry)) {
+        try {
+          entry?.renderer.refresh?.();
+        } catch (error) {
+          console.error(`Link Figures: could not redraw node ${id}`, error);
+        }
+        continue;
+      }
       this.linked.delete(id);
       if (this.asFile(node, doc)) {
         toResolve.push(id);

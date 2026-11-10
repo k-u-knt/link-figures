@@ -646,7 +646,7 @@
 .lf-card-label {
   position: absolute;
   left: 0;
-  top: calc(-1 * var(--size-4-1, 4px) / var(--lf-zoom, 1));
+  top: calc(-1 * var(--size-4-2, 8px) / var(--lf-zoom, 1));
   transform: translateY(-100%) scale(calc(1 / var(--lf-zoom, 1)));
   transform-origin: bottom left;
   max-width: calc(100% * var(--lf-zoom, 1));

@@ -328,6 +328,22 @@ describe("Review Focus", () => {
     expect(s.el("N").textContent).toContain("Note not found");
   });
 
+  test("2b: in a read-only view, a renamed note's card redraws its label and keeps its live embed", async () => {
+    const s = await setup();
+    s.view.readOnly = true;
+    const embed = s.embedOf("N");
+    expect(s.el("N").querySelector(".lf-card-label")?.textContent).toBe("a › Legend");
+    const file = s.tfiles.get("Notes/a.md")!;
+    file.path = "Notes/b.md";
+    s.tfiles.delete("Notes/a.md");
+    s.tfiles.set("Notes/b.md", file);
+    await s.nodeHost.invalidate(["N"]);
+    expect(s.el("N").querySelector(".lf-card-label")?.textContent).toBe("b › Legend");
+    expect(embed.unloaded).toBe(false);
+    expect(s.embeds).toHaveLength(2);
+    expect(s.embedOf("N")).toBe(embed);
+  });
+
   test("3: flushAll writes what was typed in every open editor", async () => {
     const s = await setup();
     const embed = s.embedOf("N");

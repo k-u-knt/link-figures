@@ -190,6 +190,19 @@ describe("the label above a note card", () => {
     expect(openLink).toHaveBeenCalledWith("Notes/Fig2.md#Legend", ev, "tab");
   });
 
+  test("the second click of a double-click opens nothing more", () => {
+    const { label, openLink } = mount({ file: "Notes/Fig2.md", subpath: "#Legend" }, content("Notes/Fig2.md"));
+    label()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    label()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 2 }));
+    expect(openLink).toHaveBeenCalledTimes(1);
+  });
+
+  test("the label sits above the card clear of a resize handle's grab radius (6px) and a 2px gap", () => {
+    const css = readFileSync(join(process.cwd(), "styles.css"), "utf8");
+    const rule = css.match(/\.lf-card-label \{[^}]*\}/)![0];
+    expect(rule).toContain("top: calc(-1 * var(--size-4-2, 8px) / var(--lf-zoom, 1));");
+  });
+
   test("a middle-click on the label opens the note in a new tab too", () => {
     const { label, openLink } = mount({ file: "Notes/Fig2.md", subpath: "#Legend" }, content("Notes/Fig2.md"));
     const ev = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });

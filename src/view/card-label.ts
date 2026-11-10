@@ -101,7 +101,15 @@ export class CardLabel {
       ev.stopPropagation();
       this.open(ev);
     };
-    el.addEventListener("click", open);
+    // The second click of a double-click opens nothing more.
+    el.addEventListener("click", (ev) => {
+      if (ev.detail > 1) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      open(ev);
+    });
     el.addEventListener("auxclick", (ev) => {
       if (ev.button === 1) open(ev);
     });

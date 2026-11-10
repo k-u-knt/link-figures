@@ -200,14 +200,14 @@ function readableCard(ctx: CommandContext, id: NodeId): CardNode | undefined {
   return node?.type === "card" && !unreadableIn(ctx)?.has(id) ? (node as CardNode) : undefined;
 }
 
-/** Whether `id` is a card holding text (not a 0.4.0 note card) that may be changed. */
+/** Whether `id` is a card holding text (not a note card) that may be changed. */
 function editableTextCard(ctx: CommandContext, id: NodeId): boolean {
   const card = readableCard(ctx, id);
   return !!card && card.file === undefined && !isLocked(ctx.store.doc, id);
 }
 
-/** Whether `id` is a 0.4.0 note card that may be changed: what "Convert to text" is offered on. */
-function editableNoteCard(ctx: CommandContext, id: NodeId): boolean {
+/** Whether `id` is a note card that may be changed: what "Convert to text" is offered on. */
+function changeableNoteCard(ctx: CommandContext, id: NodeId): boolean {
   const card = readableCard(ctx, id);
   return !!card && typeof card.file === "string" && card.file !== "" && !isLocked(ctx.store.doc, id);
 }
@@ -259,7 +259,7 @@ export function cardCommands(): Command[] {
       params: { id: { type: "string", required: true } },
       itemBar: CARD_BAR,
       itemBarOrder: 40,
-      itemBarShows: editableNoteCard,
+      itemBarShows: changeableNoteCard,
       applies: () => true,
       run: (ctx, args) => convertCard(ctx, args as { id: string }),
     },

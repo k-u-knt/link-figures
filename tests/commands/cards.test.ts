@@ -455,3 +455,24 @@ describe("review fixes", () => {
   });
 });
 
+
+describe("open-source", () => {
+  test("opens a note card's section, and a file panel's target, in a new tab beside the figure", () => {
+    const doc = figure(false, (d) => [
+      { ...cardNodeDefaults(d.pages[0], -300, 0), id: "nc", text: undefined, file: "Notes/Legend", subpath: "#Fig 2" } as Node,
+      { id: "fp", type: "file", page: d.pages[0].id, x: 10, y: 10, width: 50, height: 50, z: 1, rotation: 0, opacity: 1, locked: false, file: "Notes/Plot.png", subpath: "", show: "image" } as unknown as Node,
+    ]);
+    const { r, store } = setup(doc);
+    const openLink = vi.fn();
+    const command = r.commands.get("open-source")!;
+    for (const id of ["nc", "fp"]) {
+      const ctx = { app: {} as never, registries: r, view: { openLink } as never, store, selection: [id], page: undefined } as CommandContext;
+      expect(command.applies!(ctx)).toBe(true);
+      command.run(ctx, undefined as never);
+    }
+    expect(openLink.mock.calls).toEqual([
+      ["Notes/Legend#Fig 2", "tab"],
+      ["Notes/Plot.png", "tab"],
+    ]);
+  });
+});

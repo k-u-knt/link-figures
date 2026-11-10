@@ -1,3 +1,4 @@
+import type { PaneType } from "obsidian";
 import { resolveConnector } from "../connectors/geometry";
 import { DEFAULT_PAGE_LIMIT_MM, MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
@@ -25,7 +26,7 @@ const DUPLICATE_OFFSET_MM = 5;
  */
 export interface EditorView extends FigureViewLike {
   /** Opens a link target (`file`, `file#subpath`) from the figure's own place in the vault, as the badge on a node does. */
-  openLink(linktext: string, newLeaf?: boolean): void;
+  openLink(linktext: string, newLeaf?: PaneType | boolean): void;
   /** The natural size of the image a node shows, once it has loaded; rejects for a node that shows no image. */
   imageSize(id: NodeId): Promise<{ width: number; height: number }>;
   /** The natural size of the image a node shows if it has loaded, else null (a command that cannot wait asks this). */
@@ -612,7 +613,8 @@ function builtinCommands(): Command[] {
       applies: (ctx) => selectedLink(ctx) !== undefined,
       run(ctx) {
         const link = selectedLink(ctx);
-        if (link) editor(ctx).openLink(joinLinktext(link.file, link.subpath));
+        // In a new tab beside the figure, which stays open: for a card and a content or image panel alike.
+        if (link) editor(ctx).openLink(joinLinktext(link.file, link.subpath), "tab");
       },
     },
     lockCommand("lock", "Lock", "lock", true),

@@ -1,5 +1,5 @@
 import { setIcon } from "obsidian";
-import { EDITING_CLASS, EDITING_EVENT } from "../constants";
+import { EDITING_CLASS, EDITING_EVENT, NODE_GRIP } from "../constants";
 import { nodeWorldRect, type Pt } from "../model/geometry";
 import type { Document, Node, NodeId } from "../model/types";
 import type { Registries } from "../registry";
@@ -157,6 +157,8 @@ export class ItemBar {
     const far = view.viewport.toScreen({ x: box.x + box.width, y: box.y + box.height });
     if (width > 0 && height > 0 && (far.x <= 0 || corner.x >= width || far.y <= 0 || corner.y >= height)) return false;
     const top = view.viewport.toScreen({ x: box.x + box.width / 2, y: box.y });
+    // Above whatever the item draws over its box (a note card's label): the bar must not cover it.
+    top.y = Math.min(top.y, this.gripTop(view, node.id) ?? top.y);
     const below = top.y < this.el.offsetHeight + GAP_PX;
     const at = below ? view.viewport.toScreen({ x: box.x + box.width / 2, y: box.y + box.height }) : top;
     this.el.classList.toggle("is-below", below);
@@ -170,6 +172,24 @@ export class ItemBar {
     this.el.style.left = `${x}px`;
     this.el.style.top = `${y}px`;
     return true;
+  }
+
+  /**
+   * The top on the stage (in stage px) of the highest grip the item's element holds (`NODE_GRIP`: a part drawn outside
+   * its box, such as a note card's label), measured; null when it holds none that is drawn.
+   */
+  private gripTop(view: ItemBarHost, id: NodeId): number | null {
+    const el = view.nodeHost.elementFor(id);
+    const stage = this.el.parentElement;
+    if (!el || !stage || typeof el.querySelectorAll !== "function") return null;
+    const origin = stage.getBoundingClientRect().top;
+    let top: number | null = null;
+    for (const grip of Array.from(el.querySelectorAll(`.${NODE_GRIP}`))) {
+      const rect = grip.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      top = Math.min(top ?? Infinity, rect.top - origin);
+    }
+    return top;
   }
 
   /** Empties the bar: no entries, nothing built. */

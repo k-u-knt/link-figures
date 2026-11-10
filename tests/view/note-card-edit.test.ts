@@ -452,4 +452,24 @@ describe("the label above a note card", () => {
     expect(nodeWorldRect(s.store.doc, s.node("N")).x).toBeCloseTo(before.x + 40, 5);
     expect(nodeWorldRect(s.store.doc, s.node("N")).y).toBeCloseTo(before.y + 30, 5);
   });
+
+  test("a grip wins over the box under it: a drag from a card's label over another card moves the label's card", async () => {
+    const s = await setup();
+    // M's label lies over N's box: M's top is inside N.
+    s.view.runCommandById("node.update", { id: "M", patch: { y: s.node("N").y + 60 } });
+    await s.settled();
+    const { at, target } = onLabel(s, "M");
+    const box = nodeWorldRect(s.store.doc, s.node("N"));
+    expect(at[1]).toBeGreaterThan(box.y);
+    expect(at[1]).toBeLessThan(box.y + box.height);
+    const beforeN = nodeWorldRect(s.store.doc, s.node("N"));
+    const beforeM = nodeWorldRect(s.store.doc, s.node("M"));
+    s.pointer("pointerdown", at, target);
+    s.pointerHeld("pointermove", [at[0] + 40, at[1]], target);
+    s.pointerHeld("pointerup", [at[0] + 40, at[1]], target);
+    await s.settled();
+    expect(s.view.selection.ids).toEqual(["M"]);
+    expect(nodeWorldRect(s.store.doc, s.node("M")).x).toBeCloseTo(beforeM.x + 40, 5);
+    expect(nodeWorldRect(s.store.doc, s.node("N")).x).toBeCloseTo(beforeN.x, 5);
+  });
 });

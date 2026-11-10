@@ -606,6 +606,38 @@ describe("the item bar", () => {
     expect(below(200)).toBe(false);
   });
 
+  test("the bar goes above a grip drawn above its item (a note card's label), measured, whatever the item's type", () => {
+    const s = setup();
+    Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(s.bar.el, "offsetWidth", { configurable: true, value: 200 });
+    Object.defineProperty(s.bar.el, "offsetHeight", { configurable: true, value: 30 });
+    // The item's element holds a grip whose top is 20 px above the item's box on screen (the stage's top is at 0).
+    const el = document.createElement("div");
+    const grip = el.appendChild(document.createElement("div"));
+    grip.className = "lf-node-grip";
+    let gripTop = 0;
+    grip.getBoundingClientRect = () => ({ top: gripTop, bottom: gripTop + 16, left: 0, right: 50, width: 50, height: 16, x: 0, y: gripTop, toJSON() {} }) as DOMRect;
+    s.elements.set("C", el);
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const place = (top: number) => {
+      gripTop = top - 20;
+      s.view.viewport.tx = 400 - (card.x + card.width / 2);
+      s.view.viewport.ty = top - card.y;
+      s.view.applyViewport();
+      return { top: parseFloat(s.bar.el.style.top), below: s.bar.el.classList.contains("is-below") };
+    };
+    // Above the grip, not over it.
+    expect(place(300)).toEqual({ top: 280, below: false });
+    // The bar and its gap need 38 px above the grip: 57 px above the card leaves 37, so it goes below.
+    expect(place(57).below).toBe(true);
+    expect(place(58)).toEqual({ top: 38, below: false });
+    // A grip that is not drawn (no size) or not above the box changes nothing.
+    grip.getBoundingClientRect = () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    expect(place(300).top).toBe(300);
+  });
+
   test("the bar hides while its card is off the stage, and shows again when the card is back", () => {
     const s = setup();
     Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 800 });

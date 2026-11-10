@@ -134,7 +134,6 @@ class CardNodeRenderer implements NodeRenderer {
     this.el = host.createDiv({ cls: ["lf-node", "lf-card"] });
     this.body = this.el.createDiv({ cls: "lf-card-body" });
     this.label = new CardLabel(this.el, (ev) => this.openNote(ev));
-    this.watchCache();
     // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
@@ -142,6 +141,8 @@ class CardNodeRenderer implements NodeRenderer {
     // In the capture phase: before Obsidian's own handlers in a rendered embed, so a link opens once (`openCardLink`).
     for (const type of ["click", "auxclick"] as const) this.body.addEventListener(type, (ev) => void openCardLink(ev, this.ctx), { capture: true });
     this.update(node);
+    // Once the card is drawn: from now on, a change in Obsidian's cache of its note draws its label again.
+    this.watchCache();
   }
 
   update(node: Node): void {

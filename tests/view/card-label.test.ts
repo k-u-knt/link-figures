@@ -121,7 +121,8 @@ describe("the label above a note card", () => {
     const { label } = mount({ file: "Notes/Legends/Fig2.md", subpath: "#Figure 2 legend" }, content("Notes/Legends/Fig2.md"));
     expect(label()?.textContent).toBe("Fig2 › Figure 2 legend");
     expect(label()?.getAttribute("aria-label")).toBe("Notes/Legends/Fig2.md");
-    expect(label()?.title).toBe("Notes/Legends/Fig2.md");
+    // One tooltip: Obsidian's, from aria-label; no native title as well.
+    expect(label()?.hasAttribute("title")).toBe(false);
     expect(label()?.querySelector("[data-icon]")).toBeNull();
     expect(label()?.classList.contains("is-missing")).toBe(false);
   });
@@ -178,7 +179,7 @@ describe("the label above a note card", () => {
     const icon = label()!.firstElementChild as HTMLElement;
     expect(icon.getAttribute("data-icon")).toBe("alert-triangle");
     expect(icon.classList.contains("lf-card-label-icon")).toBe(true);
-    expect(label()!.title).toBe("Old/Gone#Legend");
+    expect(label()!.getAttribute("aria-label")).toBe("Old/Gone#Legend");
   });
 
   test("a click on the label opens the note at that place in a new tab", () => {
@@ -187,6 +188,16 @@ describe("the label above a note card", () => {
     label()!.dispatchEvent(ev);
     expect(openLink).toHaveBeenCalledTimes(1);
     expect(openLink).toHaveBeenCalledWith("Notes/Fig2.md#Legend", ev, "tab");
+  });
+
+  test("a middle-click on the label opens the note in a new tab too", () => {
+    const { label, openLink } = mount({ file: "Notes/Fig2.md", subpath: "#Legend" }, content("Notes/Fig2.md"));
+    const ev = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    label()!.dispatchEvent(ev);
+    expect(openLink).toHaveBeenCalledWith("Notes/Fig2.md#Legend", ev, "tab");
+    // Another button (a right-click's auxclick) opens nothing.
+    label()!.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 2 }));
+    expect(openLink).toHaveBeenCalledTimes(1);
   });
 
   test("the label is a grip of the card (a drag from it moves the card), outside the body", () => {

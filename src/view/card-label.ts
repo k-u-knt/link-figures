@@ -62,7 +62,7 @@ export class CardLabel {
   ) {}
 
   /**
-   * Shows `segments` joined by `LABEL_SEPARATOR`, with `tooltip` (the note's full vault path) as its title. `missing`:
+   * Shows `segments` joined by `LABEL_SEPARATOR`, with `tooltip` (the note's full vault path) as its tooltip. `missing`:
    * greyed out after Obsidian's alert icon, as Canvas shows a file that is not in the vault.
    */
   show(segments: string[], tooltip: string, missing: boolean): void {
@@ -80,7 +80,7 @@ export class CardLabel {
       el.appendChild(el.ownerDocument.createTextNode(text));
       this.shown = key;
     }
-    el.title = tooltip;
+    // Obsidian shows an element's aria-label as its tooltip (as the item bar's buttons have it): no native title too.
     el.setAttribute("aria-label", tooltip);
     el.classList.toggle("is-missing", missing);
   }
@@ -95,10 +95,15 @@ export class CardLabel {
   private make(): HTMLElement {
     const el = this.card.ownerDocument.createElement("div");
     el.classList.add("lf-card-label", NODE_GRIP);
-    el.addEventListener("click", (ev) => {
+    // A click, or a middle-click (`auxclick` with the middle button), opens the note.
+    const open = (ev: MouseEvent) => {
       ev.preventDefault();
       ev.stopPropagation();
       this.open(ev);
+    };
+    el.addEventListener("click", open);
+    el.addEventListener("auxclick", (ev) => {
+      if (ev.button === 1) open(ev);
     });
     // Before the body, so the body stays the card's last child and is drawn over nothing of the label.
     this.card.insertBefore(el, this.card.firstChild);

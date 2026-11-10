@@ -470,14 +470,13 @@ export class PointerController {
   }
 
   /**
-   * The drawn node at `world`, or else the node whose grip (a note card's label, outside its box) the event's `target`
-   * is in; null when there is neither.
+   * The node whose grip (a note card's label, outside its box) the event's `target` is in, which wins over any box
+   * under it (the grip is drawn over it); else the drawn node at `world`; null when there is neither.
    */
   private nodeUnder(doc: Document, world: Pt, target: EventTarget | null): NodeId | null {
-    const hit = hitTest(this.itemsOnAllPages(doc), world);
-    if (hit !== null) return hit;
     const gripped = gripNode(target);
-    return gripped !== null && doc.nodes.some((n) => n.id === gripped) ? gripped : null;
+    if (gripped !== null && doc.nodes.some((n) => n.id === gripped)) return gripped;
+    return hitTest(this.itemsOnAllPages(doc), world);
   }
 
   private press(ev: PointerEvent, world: Pt, intent: Intent, collapseTo: NodeId | null, edit: Pressed["edit"] = null): void {

@@ -366,7 +366,8 @@ export interface NodeType<N extends Node = Node> {
    * The vault links the node's drawing reads besides its own `linkTarget` (a text card's links and embeds; the links in
    * the section a note card shows), each with the file it is resolved from. When one of their files changes, or a note
    * embedded in one (however deep), the stage resolves the node again if it has a `linkTarget`, and otherwise draws it
-   * again (`NodeRenderer.refresh`); when a file appears while one of them finds none, too. Absent: nothing besides.
+   * again (`NodeRenderer.refresh`); when a file appears that one of them finds, too. Absent: nothing besides. It is
+   * asked again only when the node's `text`, `file` or `subpath`, or its resolution (`ctx.resolved`), changes.
    */
   linkedPaths?(node: N, ctx: LinkedPathsContext): LinkedPath[];
   /**

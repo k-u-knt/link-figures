@@ -743,14 +743,33 @@ describe("a card follows the files it links and embeds", () => {
     expect(view.index.nodesFor("Notes/b.md").sort()).toEqual(["C", "N"]);
     expect(view.index.nodesFor("Notes/c.md")).toEqual(["C"]);
     expect(view.index.nodesFor("Notes/d.md")).toEqual([]);
-    // A link that finds no file yet is mended by a file that appears: the card is among those to look at again then.
+    // A link that finds no file yet may be mended by a file that appears: the card is looked at again only once one of
+    // its links finds a file it did not find before, not on every file made in the vault.
+    expect(nodeHost.unresolvedLinkers()).toEqual([]);
+    access["vault"].files["Elsewhere.md"] = "unrelated";
+    expect(nodeHost.unresolvedLinkers()).toEqual([]);
+    access["vault"].files["Nope.md"] = "now here";
     expect(nodeHost.unresolvedLinkers()).toEqual(["C"]);
+    delete access["vault"].files["Nope.md"];
+
+    // A move (every frame of a drag) changes nothing the card reads: its links are not listed again.
+    const listed = vi.spyOn(cardNodeType, "linkedPaths");
+    try {
+      await s.call("node.move", { ids: ["C"], dx: 5, dy: 0 });
+      nodeHost.applyChange(s.store.doc, new Set(["C"]));
+      expect(listed).not.toHaveBeenCalled();
+      await s.call("node.update", { id: "C", patch: { text: "Fig ![[Notes/a#Legend]], [[Notes/c|c]], `[[Notes/d]]` and [[Nope]] edited" } });
+      nodeHost.applyChange(s.store.doc, new Set(["C"]));
+      expect(listed).toHaveBeenCalledTimes(1);
+    } finally {
+      listed.mockRestore();
+    }
 
     // The watcher says a note changed: the text card is drawn again (its embeds rendered afresh)...
     render.mockClear();
     await nodeHost.invalidate(["C"]);
     expect(render).toHaveBeenCalledTimes(1);
-    expect(render).toHaveBeenLastCalledWith({}, "Fig ![[Notes/a#Legend]], [[Notes/c|c]], `[[Notes/d]]` and [[Nope]]", expect.anything(), "fig.lnkfig.md", expect.anything());
+    expect(render).toHaveBeenLastCalledWith({}, "Fig ![[Notes/a#Legend]], [[Notes/c|c]], `[[Notes/d]]` and [[Nope]] edited", expect.anything(), "fig.lnkfig.md", expect.anything());
     // ...and the note card's section is read again and drawn from what it says now.
     access["vault"].files["Notes/a.md"] = "# A\n## Legend\nNew body";
     render.mockClear();

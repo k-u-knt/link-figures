@@ -13,6 +13,24 @@ import { nodeTypeFor, type ImageState, type LinkedPath, type LinkRename, type No
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
+/** What a node's linked files were last tracked from, and what they were (see `NodeHost.trackLinked`). */
+interface LinkedState {
+  inputs: unknown[];
+  key: string;
+  links: LinkedPath[];
+  paths: string[];
+  unresolved: boolean;
+}
+
+/**
+ * What `NodeType.linkedPaths` reads a node's links from: its content fields (`text`, `file`, `subpath`, compared by
+ * value) and what the stage resolved for it (compared by identity: a new resolution is a new object).
+ */
+function linkedInputs(node: Node, resolved: Resolved | undefined): unknown[] {
+  const fields = node as unknown as Record<string, unknown>;
+  return [fields.text, fields.file, fields.subpath, resolved];
+}
+
 /** A renderer that shows an image can say how big that image is by itself. */
 interface MeasuringRenderer extends NodeRenderer {
   naturalSize(): Promise<{ width: number; height: number }>;
@@ -101,10 +119,10 @@ export class NodeHost {
    */
   private readonly askedKeys = new Map<NodeId, { key: string; identity: string }>();
   /**
-   * For each node whose type lists the links its drawing reads (`NodeType.linkedPaths`), what they were when its files
-   * were last tracked (on the index's `"linked"` channel); a node whose links are unchanged is not tracked again.
+   * For each node whose type lists the links its drawing reads (`NodeType.linkedPaths`), what they were read from, what
+   * they were and the files they found when last tracked (on the index's `"linked"` channel); see `trackLinked`.
    */
-  private readonly linkedKeys = new Map<NodeId, string>();
+  private readonly linked = new Map<NodeId, LinkedState>();
   /** Nodes with a link among those that finds no file: a file that appears may be it (see `unresolvedLinkers`). */
   private readonly unresolvedLinks = new Set<NodeId>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
@@ -144,7 +162,7 @@ export class NodeHost {
     for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
     this.entries.clear();
     const present = new Set(doc.nodes.map((n) => n.id));
-    for (const id of [...this.linkedKeys.keys()]) if (!present.has(id)) this.forgetLinked(id);
+    for (const id of [...this.linked.keys()]) if (!present.has(id)) this.forgetLinked(id);
     // The same page ids survive an external reload, so what the old nodes left in their hosts is cleared explicitly.
     for (const page of doc.pages) this.hostFor(page.id)?.replaceChildren();
 
@@ -161,7 +179,7 @@ export class NodeHost {
   reset(): void {
     this.samplesDecoded.clear();
     for (const id of this.knownIds()) this.forgetResolution(id);
-    for (const id of [...this.linkedKeys.keys()]) this.forgetLinked(id);
+    for (const id of [...this.linked.keys()]) this.forgetLinked(id);
   }
 
   /**
@@ -176,7 +194,7 @@ export class NodeHost {
     for (const id of new Set(ids)) {
       const node = byId.get(id);
       if (!node) continue;
-      this.linkedKeys.delete(id);
+      this.linked.delete(id);
       if (this.asFile(node, doc)) {
         toResolve.push(id);
         continue;
@@ -192,9 +210,18 @@ export class NodeHost {
     await this.resolve(toResolve);
   }
 
-  /** The nodes with a link their drawing reads that finds no file (see `NodeType.linkedPaths`): a new file may mend them. */
+  /**
+   * The nodes with a link their drawing reads that found no file (see `NodeType.linkedPaths`) and now finds one: a file
+   * that appeared mended them. Asked when a file appears; a node whose links find what they found before is left alone,
+   * so a file made anywhere in the vault does not redraw every card with a dangling link.
+   */
   unresolvedLinkers(): NodeId[] {
-    return [...this.unresolvedLinks];
+    return [...this.unresolvedLinks].filter((id) => {
+      const state = this.linked.get(id);
+      if (!state) return true;
+      const now = linkedFiles(state.links, this.view.plugin.access);
+      return now.unresolved !== state.unresolved || now.paths.join("\n") !== state.paths.join("\n");
+    });
   }
 
   /** Resolves the file nodes of the view's document whose link has not been resolved yet, or has changed since. */
@@ -488,11 +515,16 @@ export class NodeHost {
 
   /**
    * Tracks the files `node`'s drawing reads (see `NodeType.linkedPaths` and `linkedFiles`) on the index's `"linked"`
-   * channel, so the watcher finds the node when one of them changes. Nothing is done while its links are what they were.
+   * channel, so the watcher finds the node when one of them changes. Nothing is done while what the links are read from
+   * (`linkedInputs`: the node's content fields and its resolution) is unchanged, as on every frame of a drag; nor, the
+   * links listed again, while they are what they were.
    */
   private trackLinked(node: Node): void {
     const type = nodeTypeFor(this.registries, node, this.view.unreadableNodes);
     if (!type?.linkedPaths) return;
+    const inputs = linkedInputs(node, this.view.resolvedCache.get(node.id));
+    const state = this.linked.get(node.id);
+    if (state && state.inputs.length === inputs.length && state.inputs.every((v, i) => v === inputs[i])) return;
     let links: LinkedPath[];
     try {
       links = type.linkedPaths(node, { figurePath: this.ctx.figurePath, resolved: (id) => this.view.resolvedCache.get(id) });
@@ -501,16 +533,19 @@ export class NodeHost {
       links = [];
     }
     const key = JSON.stringify(links);
-    if (this.linkedKeys.get(node.id) === key) return;
-    this.linkedKeys.set(node.id, key);
+    if (state && state.key === key) {
+      state.inputs = inputs;
+      return;
+    }
     const { paths, unresolved } = linkedFiles(links, this.view.plugin.access);
+    this.linked.set(node.id, { inputs, key, links, paths, unresolved });
     this.view.index.track(node.id, paths, "linked");
     if (unresolved) this.unresolvedLinks.add(node.id);
     else this.unresolvedLinks.delete(node.id);
   }
 
   private forgetLinked(id: NodeId): void {
-    this.linkedKeys.delete(id);
+    this.linked.delete(id);
     this.unresolvedLinks.delete(id);
     this.view.index.track(id, [], "linked");
   }

@@ -1,7 +1,7 @@
 import { FENCE_LANG, FORMAT_VERSION, FRONTMATTER_KEY } from "../constants";
 import type { Document } from "../model/types";
 import { emitLinksSection, type LinkEntry } from "./links-section";
-import { linktextOf, withoutLink } from "./node-links";
+import { isLinkedType, linktextOf, withoutLink } from "./node-links";
 import type { ParsedFigureFile } from "./parse";
 
 const MARKER = `${FRONTMATTER_KEY}: ${FORMAT_VERSION}`;
@@ -23,12 +23,16 @@ function ensureMarker(frontmatter: string): string {
 
 /**
  * Writes the file: the parts of `parsed` outside the Links and Figure sections are kept as they are;
- * the Links section and the JSON are regenerated from `doc`. Link targets live only in the Links section.
+ * the Links section and the JSON are regenerated from `doc`. Link targets live only in the Links section. A node whose
+ * type does not keep a link here (see `isLinkedType`) keeps the entry `parsed` read for it, verbatim.
  */
 export function serializeFigureFile(doc: Document, parsed: ParsedFigureFile): string {
   const entries: LinkEntry[] = [];
+  // The entries the file had for nodes whose type is not known here (a missing plugin's): kept as they are, so such a
+  // node is saved unchanged.
+  const foreign = new Map(parsed.links.map((e) => [e.id, e.linktext]));
   const nodes = doc.nodes.map((n) => {
-    const linktext = linktextOf(n);
+    const linktext = isLinkedType(n.type) ? linktextOf(n) : (foreign.get(n.id) ?? "");
     if (linktext !== "") entries.push({ id: n.id, linktext });
     return withoutLink(n);
   });

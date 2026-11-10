@@ -41,3 +41,22 @@ test("a type that does not opt in keeps its file key in the JSON", () => {
   expect(text).not.toContain("- y-1:");
   expect(text).toContain('"file": "keep.md"');
 });
+
+test("file panels and cards keep their links in the Links section before any type is registered", () => {
+  const base = { page: "pg", x: 0, y: 0, width: 1, height: 1, z: 0, rotation: 0, opacity: 1, locked: false };
+  expect(linkOf({ ...base, id: "c", type: "card", file: "a.md", subpath: "#H" } as unknown as Node)).toEqual({ file: "a.md", subpath: "#H" });
+  expect(linkOf({ ...base, id: "t", type: "card", text: "x" } as unknown as Node)).toBeNull();
+  expect(linkOf({ ...base, id: "f", type: "file", file: "", subpath: "" } as unknown as Node)).toEqual({ file: "", subpath: "" });
+});
+
+test("a Links entry of a node whose type is not known (a missing plugin's) is kept verbatim and round-trips", () => {
+  const doc = createDocument("a4-portrait");
+  doc.nodes.push({ id: "f-1", type: "z.missing", page: doc.pages[0].id, x: 0, y: 0, width: 1, height: 1, z: 0, rotation: 0, opacity: 1, locked: false, mode: 2 } as unknown as Node);
+  const text = serializeFigureFile(doc, emptyParsed()).replace("## Links\n", "## Links\n- f-1: ![[Notes/x.md#Methods]] ^f-1\n");
+  const loaded = loadDocument(text);
+  expect(serializeFigureFile(loaded.doc, loaded.parsed)).toBe(text);
+  const withRegistries = loadDocument(text, createRegistries());
+  expect(serializeFigureFile(withRegistries.doc, withRegistries.parsed)).toBe(text);
+  // The node itself is untouched by its entry.
+  expect("file" in loaded.doc.nodes[0]).toBe(false);
+});

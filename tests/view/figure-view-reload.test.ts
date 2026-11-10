@@ -819,3 +819,48 @@ describe("the right-click menu and the commands it runs", () => {
     expect(t.view.store.doc.nodes[0].x).not.toBe(40);
   });
 });
+
+describe("a linked type registered after the figure was loaded", () => {
+  test("its nodes take their links from the file's Links entries, so the next save keeps them", async () => {
+    const { createRegistries } = await import("../../src/registry");
+    const type = "late.excerpt";
+    const doc = createDocument("nature-double");
+    const base = { page: doc.pages[0].id, x: 0, y: 0, width: 10, height: 10, z: 0, rotation: 0, opacity: 1, locked: false };
+    doc.nodes.push({ ...base, id: "x-1", type, quote: true } as never, { ...base, id: "x-2", type, z: 1 } as never);
+    // The file as the type's plugin wrote it: the link in the Links section only.
+    const text = serializeFigureFile(doc, { ...emptyParsed(), links: [{ id: "x-1", linktext: "Notes/a.md#Results" }] });
+    expect(text).toContain("- x-1: ![[Notes/a.md#Results]] ^x-1");
+    const t = setup(createDocument("nature-double"));
+    t.view.data = text;
+    t.view.setViewData(text, true);
+    expect(t.view.store.doc.nodes.find((n) => n.id === "x-1")).not.toHaveProperty("file");
+    // Unknown, its entry is kept verbatim.
+    expect(t.view.getViewData()).toContain("- x-1: ![[Notes/a.md#Results]] ^x-1");
+
+    const registries = createRegistries();
+    registries.nodeTypes.register({ type, name: "Excerpt", icon: "quote", linkField: { always: false }, mount: () => ({ update() {}, unmount() {} }), bounds: (n: never) => n, inspector: () => [], toSvg: () => "" } as never);
+    t.rewatch();
+    t.resetCalls();
+    t.view.typeRegistered(registries.nodeTypes.get(type)!);
+    expect(t.view.store.doc.nodes.find((n) => n.id === "x-1")).toMatchObject({ file: "Notes/a.md", subpath: "#Results", quote: true });
+    expect(t.view.store.doc.nodes.find((n) => n.id === "x-2")).not.toHaveProperty("file");
+    // Taken up as a links change: no save, no history step, the changed node resolved.
+    expect(t.events.map((e) => [e.kind, e.label])).toEqual([["replace", "links"]]);
+    const saved = t.view.getViewData();
+    expect(saved).toContain("- x-1: ![[Notes/a.md#Results]] ^x-1");
+    expect(saved).not.toContain("x-2: ");
+    expect(saved.slice(saved.indexOf("## Figure"))).not.toContain("Notes/a.md");
+  });
+
+  test("the registry tells its listeners of each type registered, until they unsubscribe", async () => {
+    const { createRegistries } = await import("../../src/registry");
+    const registries = createRegistries();
+    const seen: string[] = [];
+    const off = registries.nodeTypes.onRegister((t) => void seen.push(t.type));
+    const stub = (type: string) => ({ type, name: type, icon: "x", mount: () => ({ update() {}, unmount() {} }), bounds: (n: never) => n, inspector: () => [], toSvg: () => "" }) as never;
+    registries.nodeTypes.register(stub("a.one"));
+    off();
+    registries.nodeTypes.register(stub("a.two"));
+    expect(seen).toEqual(["a.one"]);
+  });
+});

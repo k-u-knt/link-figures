@@ -368,10 +368,28 @@ export class NodeTypeRegistry {
   // Re-registering a type replaces it in place and keeps its position.
   private readonly types = new Map<string, NodeType<any>>();
 
+  private readonly listeners = new Set<(t: NodeType<any>) => void>();
+
   register(t: NodeType<any>): void {
     this.types.set(t.type, t);
     // The file format reads which types keep a link without the registries.
     registerLinkedType(t.type, t.linkField);
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(t);
+      } catch (error) {
+        console.error(`Link Figures: a listener for the registration of "${t.type}" failed`, error);
+      }
+    }
+  }
+
+  /**
+   * Calls `listener` with each type registered from now on (a type a plugin registers after figures were opened, say:
+   * see `LinkFiguresView.typeRegistered`). Gives the function that stops it.
+   */
+  onRegister(listener: (t: NodeType<any>) => void): () => void {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
   }
 
   get(type: string): NodeType<any> | undefined {

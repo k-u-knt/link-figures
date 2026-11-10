@@ -6,7 +6,7 @@ import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
-import { applyLinkEntries, classifyReload } from "../format/links-reload";
+import { applyLinkEntries, applyLinkEntriesOfType, classifyReload } from "../format/links-reload";
 import { hookFailureReports, loadDocument } from "../format/load";
 import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
@@ -23,7 +23,7 @@ import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, NodeId, Page, PageId } from "../model/types";
 import type { Command, CommandContext, DragTargets, MenuPlace, ToolPreview, UndoStep } from "../registry/command";
-import type { ImageState } from "../registry/node-type";
+import type { ImageState, NodeType } from "../registry/node-type";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { settlesWithin } from "../util/event-loop";
 import { showContextMenu } from "./context-menu";
@@ -411,6 +411,17 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.parsed = { ...this.parsed, links };
     const { doc, changedIds } = applyLinkEntries(this.store.doc, links);
     // The store tells the node host, which resolves just these nodes, and the view does not save: the file already says this.
+    if (changedIds.length > 0) this.store.replace(doc, "links", { keepHistory: true });
+  }
+
+  /**
+   * A node type was registered (`NodeTypeRegistry.onRegister`). One that keeps its link in the Links section
+   * (`linkField`), registered after this figure was loaded, found its nodes read without their links: they take them
+   * from the file's Links entries now (`applyLinkEntriesOfType`), as a links reload does, so the next save keeps them.
+   */
+  typeRegistered(type: Pick<NodeType, "type" | "linkField">): void {
+    if (!this.loaded || this.readOnly || !type.linkField) return;
+    const { doc, changedIds } = applyLinkEntriesOfType(this.store.doc, this.parsed.links, type.type);
     if (changedIds.length > 0) this.store.replace(doc, "links", { keepHistory: true });
   }
 

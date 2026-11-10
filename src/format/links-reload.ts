@@ -28,6 +28,26 @@ export function applyLinkEntries(doc: Document, entries: LinkEntry[]): { doc: Do
 }
 
 /**
+ * `doc` with each node of `type` that has an entry in `entries` given that link (`withLink`), and the ids of those whose
+ * link changed: for a type that keeps its link in the Links section (`NodeType.linkField`) registered after the figure
+ * was loaded, whose nodes were read without their links. A node of the type without an entry is left as it is, so a
+ * `file` key it was read with (the type kept none in the Links section then) is not lost. Nodes that did not change
+ * are kept as the same objects; when none did, so is the document.
+ */
+export function applyLinkEntriesOfType(doc: Document, entries: LinkEntry[], type: string): { doc: Document; changedIds: NodeId[] } {
+  const linktexts = new Map(entries.map((e) => [e.id, e.linktext]));
+  const changedIds: NodeId[] = [];
+  const nodes = doc.nodes.map((node) => {
+    if (node.type !== type || !linktexts.has(node.id)) return node;
+    const next = withLink(node, linktexts.get(node.id));
+    if (next === node || linktextOf(next) === linktextOf(node)) return node;
+    changedIds.push(node.id);
+    return next;
+  });
+  return changedIds.length === 0 ? { doc, changedIds } : { doc: { ...doc, nodes }, changedIds };
+}
+
+/**
  * What a figure file that has just been read amounts to, compared with the figure that is open:
  * `same` for no difference, `links` when the link targets of linked nodes (file panels, note cards) are the only difference (what Obsidian does to
  * the Links section when a source is renamed), `other` for anything else. Both sides are compared as the plugin would

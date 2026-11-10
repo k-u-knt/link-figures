@@ -96,6 +96,12 @@ export default class LinkFiguresPlugin extends Plugin {
     this.registries.nodeTypes.register(connectorNodeType);
     this.registries.nodeTypes.register(groupNodeType);
     this.registries.nodeTypes.register(cardNodeType);
+    // A type registered later (another plugin's) may keep links in the Links section: open figures take theirs up.
+    this.register(
+      this.registries.nodeTypes.onRegister((type) => {
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof LinkFiguresView) leaf.view.typeRegistered(type);
+      }),
+    );
     this.registries.exporters.register(svgExporter);
     this.registries.exporters.register(pdfExporter);
     this.registries.exporters.register(pngExporter);

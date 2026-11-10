@@ -98,8 +98,11 @@ export interface NodeRenderer {
    * the sheet it is on moves and its iframe would reload). Nothing when not editing.
    */
   stopEditing?(): void;
-  /** Writes what an editor in place holds and has not saved yet (a note card's note), before something reads it. */
-  flush?(): Promise<void>;
+  /**
+   * Writes what an editor in place holds and has not saved yet (a note card's note), before something reads it. Gives
+   * the vault paths it wrote (none: nothing was waiting), so what is drawn from them can be drawn again.
+   */
+  flush?(): Promise<string[] | void>;
   /**
    * Whether the renderer keeps what it shows in step with its file by itself (an Obsidian embed of a note, which
    * follows the note's changes): the watcher then leaves it alone, so an edit under way is never drawn over.

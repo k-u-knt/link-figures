@@ -26,6 +26,8 @@ export const NUDGE_MM = 0.5;
 export const NUDGE_LARGE_MM = 5;
 export const COALESCE_MS = 300;
 export const RESOLVE_DEBOUNCE_MS = 300;
+/** How long, at most, to wait for Obsidian's metadata cache to catch up with a note just written (`VaultAccess.settled`). */
+export const METADATA_SETTLE_MS = 2000;
 
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
 export const PANEL_EXTENSIONS = [...IMAGE_EXTENSIONS, "pdf", "tif", "tiff"];

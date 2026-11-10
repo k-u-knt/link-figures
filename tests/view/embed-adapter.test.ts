@@ -73,10 +73,10 @@ describe("openEmbed", () => {
     const embed = embeds[0];
     live.edit();
     embed.type("typed");
-    await live.flush();
+    expect(await live.flush()).toBe(true);
     expect(embed.writes).toEqual(["typed"]);
     // Nothing queued: nothing written.
-    await live.flush();
+    expect(await live.flush()).toBe(false);
     expect(embed.writes).toEqual(["typed"]);
     embed.type("more");
     live.unload();

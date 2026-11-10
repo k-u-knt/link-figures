@@ -27,6 +27,12 @@ export interface VaultAccess {
    * or absent when unknown, which caches nothing.
    */
   stat?(file: FileRef): { mtime: number; size: number } | null;
+  /**
+   * Resolves once what is known of the file at `path` (its headings and blocks, which `sectionRange` reads) is of the
+   * file as it is now: after a write, once Obsidian's metadata cache has caught up, or a bounded wait. Never rejects.
+   * Absent: known at once.
+   */
+  settled?(path: string): Promise<void>;
 }
 
 export type SourceKind = "raster" | "svg" | "pdf" | "tiff";

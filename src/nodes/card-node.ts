@@ -191,8 +191,11 @@ class CardNodeRenderer implements NodeRenderer {
     return live.embed.editing();
   }
 
-  flush(): Promise<void> {
-    return this.live?.embed.flush() ?? Promise.resolve();
+  async flush(): Promise<string[]> {
+    const live = this.live;
+    if (!live || !(await live.embed.flush())) return [];
+    const path = (live.file as { path?: unknown }).path;
+    return typeof path === "string" ? [path] : [];
   }
 
   /**

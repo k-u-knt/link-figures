@@ -19,8 +19,11 @@ export interface LiveEmbed {
   /** Ends the edit, saving what was typed, and shows the rendered note again. Nothing when not editing. */
   stopEditing(): void;
   editing(): boolean;
-  /** Writes a save that is waiting (typing is saved a moment later), and waits for any write under way. */
-  flush(): Promise<void>;
+  /**
+   * Writes a save that is waiting (typing is saved a moment later), and waits for any write under way. True when the
+   * note was (or was being) written.
+   */
+  flush(): Promise<boolean>;
   /** Ends any edit (with a save) and unloads the embed. Once. */
   unload(): void;
   /** Settles once the note has been read into the embed, or failed to be. Never rejects. */
@@ -148,8 +151,14 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
     },
     editing: () => !!embed.editMode,
     async flush() {
-      await embed.requestSave.run();
-      while (embed.savePromise) await embed.savePromise.catch(() => {});
+      const saving = embed.requestSave.run();
+      let wrote = saving !== undefined && saving !== null;
+      await saving;
+      while (embed.savePromise) {
+        wrote = true;
+        await embed.savePromise.catch(() => {});
+      }
+      return wrote;
     },
     unload() {
       if (unloaded) return;

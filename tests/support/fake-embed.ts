@@ -26,6 +26,8 @@ export class FakeEmbed {
   readonly editorEl: HTMLElement;
   /** What was written to the note, in order. */
   readonly writes: string[] = [];
+  /** Told of each write, as the vault would be. */
+  onWrite: ((text: string) => void) | null = null;
   /** Every `showEditor` call's argument. */
   readonly editorCalls: unknown[] = [];
   readonly calls: string[] = [];
@@ -122,6 +124,7 @@ export class FakeEmbed {
     if (this.text === this.lastSaved) return Promise.resolve();
     this.lastSaved = this.text;
     this.writes.push(this.text);
+    this.onWrite?.(this.text);
     return Promise.resolve();
   }
 }

@@ -8,12 +8,13 @@ import { EDITING_CLASS } from "../../src/constants";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { InvalidationIndex } from "../../src/links/invalidation";
 import type { Resolved } from "../../src/links/types";
-import { createDocument, shapeNodeDefaults } from "../../src/model/defaults";
+import { createDocument, fileNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
 import { nodeWorldRect } from "../../src/model/geometry";
 import { createFigureStore } from "../../src/model/normalise";
 import type { CardNode, Document, Node } from "../../src/model/types";
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import { connectorNodeType } from "../../src/nodes/connector-node";
+import { fileNodeType } from "../../src/nodes/file-node";
 import { groupNodeType } from "../../src/nodes/group-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { builtinPaintTypes } from "../../src/paint/builtin";
@@ -71,6 +72,7 @@ function registries(): Registries {
   r.nodeTypes.register(connectorNodeType);
   r.nodeTypes.register(cardNodeType);
   r.nodeTypes.register(groupNodeType);
+  r.nodeTypes.register(fileNodeType);
   for (const kind of builtinShapeKinds) r.shapes.register(kind);
   for (const route of builtinRoutes) r.routes.register(route);
   for (const cap of builtinCapKinds) r.caps.register(cap);
@@ -96,6 +98,13 @@ function figure(): Document {
   return doc;
 }
 
+/** `figure()` with a content panel P on the paper, showing the section N and M show. */
+function figureWithPanel(): Document {
+  const doc = figure();
+  doc.nodes.push({ ...fileNodeDefaults(doc.pages[0], { file: "Notes/a.md", subpath: "#Legend", show: "content", x: 200, y: 200, width: 200, height: 100 }, doc.nodes.map((n) => n.id)), id: "P" });
+  return doc;
+}
+
 class FakeStage {
   private readonly listeners = new Map<string, ((ev: any) => void)[]>();
   addEventListener(type: string, fn: (ev: any) => void): void {
@@ -110,10 +119,10 @@ class FakeStage {
   focus = () => {};
 }
 
-async function setup(options: { registry?: boolean } = {}) {
+async function setup(options: { registry?: boolean; panel?: boolean } = {}) {
   const r = registries();
   let controller: { commitTime(): number } | null = null;
-  const store = createFigureStore(figure(), r, () => controller?.commitTime() ?? Date.now());
+  const store = createFigureStore(options.panel ? figureWithPanel() : figure(), r, () => controller?.commitTime() ?? Date.now());
   const pending: Promise<unknown>[] = [];
   const { registry, embeds } = fakeEmbedRegistry();
   // The vault's files, by path: one object per file, which a rename keeps (as Obsidian's TFile).
@@ -394,6 +403,39 @@ describe("Review Focus", () => {
     await s.nodeHost.flushAll();
     expect(embed.writes).toEqual(["Just typed"]);
     expect(embed.editMode).not.toBeNull();
+  });
+
+  test("3b: after flushAll, the nodes drawn from a written note are drawn again before drawn() settles (an export snapshots them)", async () => {
+    const s = await setup({ panel: true });
+    const resolvedText = () => {
+      const r = s.view.resolvedCache.get("P");
+      return r?.kind === "content" ? r.markdown : null;
+    };
+    expect(resolvedText()).toContain("Body");
+    const embed = s.embedOf("N");
+    // The embed's save writes the note, as Obsidian's does; the watcher, debounced, has not heard of it yet.
+    embed.onWrite = (text) => void (s.vaultFiles["Notes/a.md"] = `# A\n## Legend\n${text}`);
+    // Obsidian's metadata cache catches up with the write a moment later: the panel is resolved again only after that.
+    let settle!: () => void;
+    const settled = vi.fn((_path: string) => new Promise<void>((resolve) => (settle = resolve)));
+    (s.view.plugin.access as { settled?: (path: string) => Promise<void> }).settled = settled;
+    await s.click("N");
+    await s.click("N");
+    embed.type("X1 typed");
+    let flushed = false;
+    const flushing = s.nodeHost.flushAll().then(() => (flushed = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(embed.writes).toEqual(["X1 typed"]);
+    expect(settled).toHaveBeenCalledWith("Notes/a.md");
+    expect(flushed).toBe(false);
+    settle();
+    await flushing;
+    await s.nodeHost.drawn();
+    expect(resolvedText()).toContain("X1 typed");
+    // Nothing written: nothing waited for, nothing drawn again.
+    settled.mockClear();
+    await s.nodeHost.flushAll();
+    expect(settled).not.toHaveBeenCalled();
   });
 
   test("4: two cards on one note each have their own embed; the watcher leaves both alone while they follow the note", async () => {

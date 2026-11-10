@@ -1,5 +1,15 @@
 import { resolveSubpath, type App, type TFile } from "obsidian";
+import { METADATA_SETTLE_MS } from "../constants";
 import type { FileRef, Range, VaultAccess } from "./types";
+
+/**
+ * The parts of Obsidian's metadata cache (not in its typings) that tell whether it has caught up with a file: per path,
+ * the modification time, size and content hash it last read (`fileCache`), and the metadata by hash (`metadataCache`).
+ */
+interface CacheInternals {
+  fileCache?: Record<string, { mtime?: number; size?: number; hash?: string } | undefined>;
+  metadataCache?: Record<string, unknown>;
+}
 
 /** `VaultAccess` over a live Obsidian vault. Thin by design; the resolver holds the logic. */
 export class ObsidianVaultAccess implements VaultAccess {
@@ -44,6 +54,35 @@ export class ObsidianVaultAccess implements VaultAccess {
   stat(file: FileRef): { mtime: number; size: number } | null {
     const stat = this.fileOf(file)?.stat;
     return stat ? { mtime: stat.mtime, size: stat.size } : null;
+  }
+
+  /**
+   * Resolves once Obsidian's metadata cache has the note at `path` as it is on disk now (it reads a written note a moment
+   * later, then says "changed"), or after `METADATA_SETTLE_MS`. At once for a file that is not a note or not there.
+   */
+  settled(path: string, timeoutMs: number = METADATA_SETTLE_MS): Promise<void> {
+    const file = this.app.vault.getFileByPath(path);
+    if (!file || file.extension !== "md" || this.cacheCurrent(file)) return Promise.resolve();
+    const cache = this.app.metadataCache;
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        cache.offref(ref);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const ref = cache.on("changed", (changed) => {
+        if (changed.path === path) done();
+      });
+      const timer = window.setTimeout(done, timeoutMs);
+    });
+  }
+
+  /** Whether the metadata cache was made from the file as it is now (same time and size, its metadata there); false when it cannot tell. */
+  private cacheCurrent(file: TFile): boolean {
+    const internals = this.app.metadataCache as unknown as CacheInternals;
+    const entry = internals.fileCache?.[file.path];
+    if (!entry || typeof entry.hash !== "string" || entry.hash === "") return false;
+    return entry.mtime === file.stat.mtime && entry.size === file.stat.size && internals.metadataCache?.[entry.hash] !== undefined;
   }
 
   private fileOf(ref: FileRef): TFile | null {

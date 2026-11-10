@@ -35,6 +35,7 @@ import { PageLayer } from "./page-layer";
 import { isEditable, PointerController } from "./pointer";
 import { SelectionState } from "./selection";
 import { Toolbar } from "./toolbar";
+import { scrollsUnderWheel } from "./wheel";
 import { focusPageOf, nearestPage, pageInFocus, pageWorldRect, Viewport } from "./viewport";
 
 /** What stands in for a document while none is loaded, so `store` is never undefined. It is never written to a file. */
@@ -971,6 +972,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   private onWheel(ev: WheelEvent): void {
     if (this.errorEl) return; // the error text scrolls
+    // A zoom is always the canvas's; a card's editor (or any box that scrolls) takes the wheel while it has room to.
+    if (!ev.ctrlKey && !ev.metaKey && scrollsUnderWheel(ev.target, this.stageEl, ev.deltaX, ev.deltaY)) return;
     ev.preventDefault();
     if (ev.ctrlKey || ev.metaKey) this.viewport.zoomAt(this.stagePoint(ev), Math.exp(-ev.deltaY * WHEEL_ZOOM_RATE));
     else this.viewport.panBy(-ev.deltaX, -ev.deltaY);

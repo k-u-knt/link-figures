@@ -31,12 +31,19 @@ vi.mock("obsidian", () => ({
   Platform: { isMacOS: false },
   normalizePath: (p: string) => p,
   setIcon: () => {},
+  // For the figure view's module, whose `runCommand` the fake view runs.
+  TextFileView: class {},
+  TFile: class {},
+  Modal: class {},
+  Setting: class {},
+  PluginSettingTab: class {},
 }));
 
 const { PointerController } = await import("../../src/view/pointer");
 const { SelectionState } = await import("../../src/view/selection");
 const { Viewport } = await import("../../src/view/viewport");
 const { ItemBar, wireItemBar } = await import("../../src/view/item-bar");
+const { LinkFiguresView } = await import("../../src/view/figure-view");
 
 beforeAll(() => {
   const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
@@ -99,6 +106,13 @@ class FakeStage {
   focus = () => {};
 }
 
+/** The figure view's methods that run commands, called on the fake view below. */
+const real = LinkFiguresView.prototype as unknown as {
+  runCommandById(this: unknown, id: string, args?: Record<string, unknown>, step?: UndoStep): void;
+  runCommand(this: unknown, command: Command): void;
+  attempt(this: unknown, command: Command, action: () => unknown): void;
+};
+
 function setup(extra: Command[] = []) {
   const r = registries(extra);
   let controller: { commitTime(): number } | null = null;
@@ -130,18 +144,16 @@ function setup(extra: Command[] = []) {
     addChild: vi.fn(),
     removeChild: vi.fn(),
     commandContext: (): CommandContext => ({ app: {} as never, registries: r, view, store, selection: view.selectedIds(), page: store.doc.pages[0] }),
-    runCommandById: vi.fn((id: string, args?: Record<string, unknown>, step?: UndoStep) => {
-      if (args === undefined) {
-        const command = r.commands.get(id)!;
-        const ctx = view.commandContext();
-        // As the figure view's `runCommand`: read-only runs only what is marked safe there.
-        if ((view.readOnly && !command.readOnlySafe) || !command.applies(ctx)) return;
-        pending.push(Promise.resolve(command.run(ctx)));
-        return;
-      }
-      if (view.readOnly) return;
-      pending.push(runCall(store, view.commandContext(), prepareCall(r, { id, args }), step).catch((error) => (view.failures.push(error), null)));
-    }),
+    // The figure view's own `runCommandById` and `runCommand`, gates and all (read-only runs only `readOnlySafe`
+    // commands); its `attempt` too, with what it runs recorded so that a test can wait for it and see a failure.
+    runCommandById: vi.fn((id: string, args?: Record<string, unknown>, step?: UndoStep) => real.runCommandById.call(view, id, args, step)),
+    runCommand: real.runCommand,
+    attempt: (command: Command, action: () => unknown) =>
+      real.attempt.call(view, command, () => {
+        const result = action();
+        pending.push(Promise.resolve(result).catch((error) => (view.failures.push(error), null)));
+        return result;
+      }),
     failures: [] as unknown[],
   };
   const stage = new FakeStage();
@@ -223,6 +235,35 @@ describe("the item bar", () => {
     expect(s.buttons()).toEqual(["Open source"]);
     s.select(["A"]);
     expect(s.bar.el.hidden).toBe(true);
+  });
+
+  test("in a read-only view the figure view's runCommandById runs only readOnlySafe commands", async () => {
+    const mark = vi.fn();
+    const extra: Command = { id: "other.mark", name: "Mark", group: "edit", hidden: true, itemBar: ["card"], applies: () => true, run: mark };
+    const s = setup([extra]);
+    s.view.openLink = vi.fn();
+    s.view.readOnly = true;
+    s.select(["C"]);
+    const before = JSON.stringify(s.store.doc);
+    // Not safe: refused by the view, with or without arguments, whatever a bar or a script asks.
+    for (const id of ["delete", "other.mark", "card.convert"]) s.view.runCommandById(id);
+    s.view.runCommandById("card.tie", { id: "C", page: "pg-2" });
+    s.view.runCommandById("node.update", { id: "C", patch: { text: "x" } });
+    await s.settled();
+    expect(mark).not.toHaveBeenCalled();
+    expect(JSON.stringify(s.store.doc)).toBe(before);
+    expect(s.r.commands.get("delete")!.readOnlySafe).toBeFalsy();
+    // Safe: Open source runs.
+    expect(s.r.commands.get("open-source")!.readOnlySafe).toBe(true);
+    s.view.runCommandById("open-source");
+    expect(s.view.openLink).toHaveBeenCalledWith("Notes/a", "tab");
+    // Writable again, the same calls run.
+    s.view.readOnly = false;
+    s.view.runCommandById("other.mark");
+    expect(mark).toHaveBeenCalledTimes(1);
+    s.view.runCommandById("delete");
+    await s.settled();
+    expect(s.store.doc.nodes.some((n) => n.id === "C")).toBe(false);
   });
 
   test("the bar is hidden for a multi-selection, during a drag, during a resize and while editing", async () => {

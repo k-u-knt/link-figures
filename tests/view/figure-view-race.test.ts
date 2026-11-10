@@ -210,6 +210,12 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
       return texts.get(f.path)!;
     }),
     cachedRead: vi.fn(async (f: FakeFile) => texts.get(f.path)!),
+    /** Obsidian's: `<path>.<ext>`, else `<path> 1.<ext>`, `<path> 2.<ext>`… whichever is free. */
+    getAvailablePath: (path: string, ext: string) => {
+      let candidate = `${path}.${ext}`;
+      for (let n = 1; texts.has(candidate); n++) candidate = `${path} ${n}.${ext}`;
+      return candidate;
+    },
     create: vi.fn(async (path: string, text: string) => {
       if (hooks.createFails || texts.has(path)) throw new Error(`cannot create "${path}"`);
       texts.set(path, text);
@@ -693,7 +699,7 @@ describe("a rename's link update in Obsidian, and the view's own save", () => {
     expect(notices.some((n) => n.includes("repaired") && n.includes(t.writes[backup].path))).toBe(true);
   });
 
-  test("a damaged file that cannot be backed up is never overwritten: it is shown as it is", async () => {
+  test("a damaged file that cannot be backed up is never overwritten: the intact figure is kept open, held", async () => {
     const t = setup(twoNoteCards(), { linkQueue: false });
     await t.opened();
     t.hooks.createFails = true;
@@ -710,8 +716,98 @@ describe("a rename's link update in Obsidian, and the view's own save", () => {
     expect(damaged).toBeGreaterThanOrEqual(0);
     expect(t.writes.slice(damaged + 1)).toEqual([]);
     expect(parses(t.disk.text)).toBe(false);
-    expect(t.view.hasDocument()).toBe(false);
-    expect(notices.some((n) => n.includes("could not be backed up"))).toBe(true);
+    // The intact figure stays open, held: read-only, never saved.
+    expect(t.view.hasDocument()).toBe(true);
+    expect(t.view.readOnly).toBe(true);
+    expect(t.view.store.doc.nodes.map((n) => n.id)).toEqual(["c-1"]);
+    expect(notices).toContain(
+      `Link Figures: "${PATH}" was damaged on disk and could not be backed up; it is kept open here and not saved. Copy what you need, or fix the folder and reopen.`,
+    );
+    // Neither a later save nor closing writes over the damaged file.
+    t.view.requestSave();
+    await vi.advanceTimersByTimeAsync(3000);
+    const closing = t.view.onUnloadFile(t.view.file!);
+    await vi.advanceTimersByTimeAsync(100);
+    await closing;
+    expect(t.writes.slice(damaged + 1)).toEqual([]);
+  });
+
+  test("a backup name that is taken gets the next free one; a taken name is no failed backup", async () => {
+    const t = setup(twoNoteCards(), { linkQueue: false });
+    await t.opened();
+    // Every name the backup could have in the next minute is taken already.
+    const start = new Date();
+    const two = (n: number) => String(n).padStart(2, "0");
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(start.getTime() + i * 1000);
+      t.texts.set(`Notes/M2i OpenN (damaged ${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}).md`, "taken");
+    }
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    await vi.advanceTimersByTimeAsync(300);
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    await vi.advanceTimersByTimeAsync(3000);
+    answer();
+    await vi.advanceTimersByTimeAsync(1000);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(3000);
+    const backup = t.writes.find((w) => w.by === "create");
+    expect(backup?.path).toMatch(/^Notes\/M2i OpenN \(damaged [\d -]+\) 1\.md$/);
+    expect(parses(t.disk.text)).toBe(true);
+    expect(ids(t.disk.text)).toEqual(["c-1"]);
+  });
+
+  test("a figure closed while its damaged text is being backed up waits, then is repaired and saved with its edits", async () => {
+    const t = setup(twoNoteCards(), { linkQueue: false });
+    await t.opened();
+    let release!: () => void;
+    const createReal = t.vault.create.getMockImplementation()!;
+    t.vault.create.mockImplementation(async (path: string, text: string) => {
+      await new Promise<void>((r) => (release = r));
+      return createReal(path, text);
+    });
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    await vi.advanceTimersByTimeAsync(300);
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    await vi.advanceTimersByTimeAsync(3000);
+    answer();
+    await vi.advanceTimersByTimeAsync(1000);
+    await renaming;
+    // The damage is in; the backup is under way. An edit, then the figure closes.
+    expect(parses(t.disk.text)).toBe(false);
+    await t.api.run(PATH, "shape.create", t.shape("late", 40, t.writes[0].text));
+    // As Obsidian's FileView: once the save that closes it is done, the view has no file.
+    const closing = t.view.onUnloadFile(t.view.file!).then(() => (t.view.file = null));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(parses(t.disk.text)).toBe(false);
+    release();
+    await vi.advanceTimersByTimeAsync(100);
+    await closing;
+    const backup = t.writes.findIndex((w) => w.by === "create");
+    const repaired = t.writes.findIndex((w, i) => i > backup && w.by === "view");
+    expect(backup).toBeGreaterThan(-1);
+    expect(repaired).toBeGreaterThan(backup);
+    expect(ids(t.disk.text)).toEqual(["c-1", "late"]);
+    expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
+  });
+
+  test("a save asked for while the Update links prompt stays open waits for it, then lands", async () => {
+    const t = setup(twoNoteCards());
+    await t.opened();
+    await t.api.run(PATH, "shape.create", t.shape("s-1", 10, t.disk.text));
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    // The save comes due (2 s) and waits through 10 s of an open prompt.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(t.writes).toEqual([]);
+    answer();
+    await vi.advanceTimersByTimeAsync(5000);
+    await renaming;
+    expect(t.writes[0].by).toBe("process");
+    expect(t.writes.some((w) => w.by === "view")).toBe(true);
+    expect(ids(t.disk.text)).toEqual(["c-0", "c-1", "s-1"]);
+    expect(linkOf(t.disk.text, "c-0")).toBe("Notes/Cards legend 2");
   });
 
   test('"Do not update" closes the window: a damaged file that comes later is left alone', async () => {

@@ -162,8 +162,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
   private linkUpdateEndQueued = false;
   /** Damaged texts already repaired or being repaired: the same text delivered again (a late reload) is not news. */
   private readonly repairedTexts = new Set<string>();
-  /** A damaged text is being backed up: nothing is saved over the file until that is done (`repair`). */
-  private backingUp = false;
+  /** A damaged text is being backed up and the figure readied to replace it: a save waits for it (`repair`). */
+  private repairing: Promise<boolean> | null = null;
   /** The file text as `setViewData` received it. */
   private rawText = "";
   /** What the loaded document serialises to, to tell whether it has changed since the file was read. */
@@ -307,8 +307,10 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** `save`'s work, once no link update is under way. */
   private async saveNow(clear?: boolean): Promise<void> {
-    // Nothing over a damaged file before its backup is written: the repair saves once it is (`repair`).
-    if (this.readOnly || this.backingUp) return;
+    // Nothing over a damaged file before its backup is written: the save waits for it, then writes the repaired
+    // figure, or nothing when the figure is held (no backup: `repair`).
+    if (this.repairing) await this.repairing;
+    if (this.readOnly) return;
     if (!this.loaded) return super.save(clear);
     if (await this.takeUpBeforeSave(clear)) return;
     const text = this.getViewData();
@@ -412,11 +414,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     try {
       loaded = loadDocument(data, this.plugin.registries);
     } catch (error) {
-      if (!clear && this.loaded && !this.readOnly) {
-        // A damaged text already being repaired, read again: the open figure stays.
-        if (this.repairedTexts.has(data)) return;
-        if (this.repairLinkUpdate(data, error)) return;
-      }
+      // A damaged text already being repaired (or held over), read again: the open figure stays.
+      if (!clear && this.loaded && this.repairedTexts.has(data)) return;
+      if (!clear && this.loaded && !this.readOnly && this.repairLinkUpdate(data, error)) return;
       // Refuse to open, and with it to save: the file is shown as it is and never replaced by a default document.
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
@@ -537,31 +537,44 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /**
    * `repairLinkUpdate`'s work: the damaged text is written to `<figure> (damaged <date time>).md` beside the figure,
-   * and only then is the figure saved over it, the user told where the damaged text is. A file that cannot be backed
-   * up is never overwritten: it is shown as it is, as any text that does not load is, and the user told.
+   * and only then is the figure saved over it, the user told where the damaged text is. A save asked for meanwhile
+   * (closing the figure included) waits for this (`repairing`), so unsaved edits are not lost. A file that cannot be
+   * backed up is never overwritten: the intact figure is kept open but held (read-only, never saved), and the user
+   * told.
    */
   private async repair(damaged: string, error: unknown, renames: ReadonlyMap<string, string>): Promise<void> {
+    const work = this.backUpAndTakeOver(damaged, error, renames);
+    this.repairing = work;
+    let repaired = false;
+    try {
+      repaired = await work;
+    } finally {
+      if (this.repairing === work) this.repairing = null;
+    }
+    if (repaired) void this.save();
+  }
+
+  /** `repair` up to its save: true when the view now holds what is to be saved over the damaged file. */
+  private async backUpAndTakeOver(damaged: string, error: unknown, renames: ReadonlyMap<string, string>): Promise<boolean> {
     const file = this.file;
-    if (!file) return;
-    const what = `"${file.path}" was damaged by a link update after a rename (${describeLoadError(error)})`;
-    this.backingUp = true;
+    if (!file) return false;
     let backup: string | null = null;
     try {
       backup = await this.writeBackup(file, damaged);
     } catch (failure) {
       console.error(`Link Figures: could not back up the damaged "${file.path}"`, failure);
-    } finally {
-      this.backingUp = false;
     }
-    if (this.file !== file || !this.loaded || this.readOnly) return;
+    if (this.file !== file || !this.loaded || this.readOnly) return false;
     if (backup === null) {
-      const message = `Link Figures: ${what}; it could not be backed up, so it was left as it is.`;
-      console.error(message);
+      // Held: the figure stays as it is in memory, for the user to copy from, and nothing writes the file.
+      this.readOnly = true;
+      this.rawText = damaged;
+      this.disarmTool();
+      this.renderChrome();
+      const message = `Link Figures: "${file.path}" was damaged on disk and could not be backed up; it is kept open here and not saved. Copy what you need, or fix the folder and reopen.`;
+      console.error(message, describeLoadError(error));
       new Notice(message);
-      this.setDocument(blankDocument(), emptyParsed());
-      this.loaded = false;
-      this.showError(describeLoadError(error), damaged);
-      return;
+      return false;
     }
     const doc = this.store.doc;
     const nodes = doc.nodes.map((n) => renamedLink(n, renames));
@@ -571,20 +584,27 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.serializedAtLoad = "";
     this.diskText = damaged;
     this.unsaved = true;
-    const message = `Link Figures: ${what}; it was repaired from the open figure. The damaged text is in "${backup}".`;
+    const message = `Link Figures: "${file.path}" was damaged by a link update after a rename (${describeLoadError(error)}); it was repaired from the open figure. The damaged text is in "${backup}".`;
     console.error(message);
     new Notice(message);
-    void this.save();
+    return true;
   }
 
-  /** Writes `text` to a new file beside `file`, `<name> (damaged <yyyy-mm-dd hh-mm-ss>).md`, and gives its path. */
+  /**
+   * Writes `text` to a new file beside `file`, `<name> (damaged <yyyy-mm-dd hh-mm-ss>).md` (or the next free name, as
+   * Obsidian's `getAvailablePath` gives it: a name that is taken is no reason to fail), and gives its path.
+   */
   private async writeBackup(file: TFile, text: string): Promise<string> {
     const base = file.name.endsWith(FILE_SUFFIX) ? file.name.slice(0, -FILE_SUFFIX.length) : file.name.replace(/\.md$/i, "");
     const d = new Date();
     const two = (n: number) => String(n).padStart(2, "0");
     const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`;
     const folder = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/") + 1) : "";
-    const path = `${folder}${base} (damaged ${stamp}).md`;
+    const stem = `${folder}${base} (damaged ${stamp})`;
+    const vault = this.app.vault as typeof this.app.vault & { getAvailablePath?(path: string, extension: string): string };
+    const taken = (path: string) => this.app.vault.getAbstractFileByPath(path) !== null;
+    let path = typeof vault.getAvailablePath === "function" ? vault.getAvailablePath(stem, "md") : `${stem}.md`;
+    for (let n = 1; typeof vault.getAvailablePath !== "function" && taken(path); n++) path = `${stem} ${n}.md`;
     await this.app.vault.create(path, text);
     return path;
   }

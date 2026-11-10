@@ -133,7 +133,7 @@ const { files, warnings } = await api.export("Notes/My figure.lnkfig.md", { form
 
 Calls on one figure run one after another, so a script need not await each. With the figure open, an edit that arrives while it has an unsaved change of its own lands in the open view, as one undo step, and the unsaved change is kept.
 
-A call that writes a file (a closed figure, or a note's block id), and the open figure's own save, waits while Obsidian is updating links after a rename, including while its "Update links" prompt is open: Obsidian writes the new links at the places the files had when the rename began, so nothing of the plugin's may land in between. Such a call resolves once the prompt is answered. A call made from inside a plugin's own rename callback (`fileManager.runAsyncLinkUpdate`) runs at once instead.
+A call that writes a file (a closed figure, or a note's block id), and the open figure's own save, waits while Obsidian is updating links after a rename, including while its "Update links" prompt is open: Obsidian writes the new links at the places the files had when the rename began, so nothing of the plugin's may land in between. Such a call resolves once the prompt is answered. A call made from inside a plugin's own rename callback (`fileManager.runAsyncLinkUpdate`) runs at once instead. An open figure's links that are not saved yet (a card or panel added or relinked since the last save) take a renamed file's new name whatever the answer to the prompt, as Obsidian does not know of them; after "Do not update", the saved ones keep the old name.
 
 **Commands that draw and edit.**
 

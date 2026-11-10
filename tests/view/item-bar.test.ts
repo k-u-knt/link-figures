@@ -477,6 +477,53 @@ describe("the item bar", () => {
     expect(place(400 - middle, 10 - card.y).top).toBeCloseTo(10 + card.height, 6);
   });
 
+  test("the bar goes below the card when there is less room above it than the bar's height and its gap", () => {
+    const s = setup();
+    Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(s.bar.el, "offsetWidth", { configurable: true, value: 200 });
+    Object.defineProperty(s.bar.el, "offsetHeight", { configurable: true, value: 50 });
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const below = (top: number) => {
+      s.view.viewport.tx = 400 - (card.x + card.width / 2);
+      s.view.viewport.ty = top - card.y;
+      s.view.applyViewport();
+      return s.bar.el.classList.contains("is-below");
+    };
+    // A 50 px bar and its 8 px gap need 58 px above the card.
+    expect(below(57)).toBe(true);
+    expect(below(58)).toBe(false);
+    expect(below(200)).toBe(false);
+  });
+
+  test("the bar hides while its card is off the stage, and shows again when the card is back", () => {
+    const s = setup();
+    Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 600 });
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const at = (left: number, top: number) => {
+      s.view.viewport.tx = left - card.x;
+      s.view.viewport.ty = top - card.y;
+      s.view.applyViewport();
+      return s.bar.el.hidden;
+    };
+    expect(at(300, 300)).toBe(false);
+    // Wholly above, below, left of or right of the stage.
+    expect(at(300, -card.height - 1)).toBe(true);
+    expect(at(300, 601)).toBe(true);
+    expect(at(-card.width - 1, 300)).toBe(true);
+    expect(at(801, 300)).toBe(true);
+    // Partly in: shown.
+    expect(at(-card.width + 10, 300)).toBe(false);
+    expect(at(300, 590)).toBe(false);
+    // A stage not yet laid out (no size) hides nothing.
+    Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 0 });
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 0 });
+    expect(at(5000, 5000)).toBe(false);
+  });
+
   test("the wheel is not stopped on the bar, so zoom and pan work over it", () => {
     const s = setup();
     s.select(["C"]);

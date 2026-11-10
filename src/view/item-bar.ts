@@ -6,9 +6,10 @@ import type { Registries } from "../registry";
 import type { Command, CommandContext, ItemBarChoice } from "../registry/command";
 import { commandApplies } from "./menu-model";
 
-/** Under this many stage px of room above the item, the bar goes below it. */
-const ROOM_ABOVE_PX = 40;
-/** The gap between the bar and the item, in stage px (the CSS translate in `.lf-item-bar` uses the same). */
+/**
+ * The gap between the bar and the item, in stage px (the CSS translate in `.lf-item-bar` uses the same). With less room
+ * above the item than the bar's height and this gap, the bar goes below it.
+ */
 const GAP_PX = 8;
 
 /** What the item bar needs of the figure view. */
@@ -81,7 +82,8 @@ const MIXED = "mixed";
  * zoomed viewport), so it keeps its size when zoomed; it is never exported. Its entries are commands that opt in by
  * node type (`Command.itemBar`), run through the view (`runCommandById`) as a script runs them. It shows only for
  * exactly one item selected at the current group level (in a read-only view with only what changes nothing, see
- * `Command.readOnlySafe`), and hides for a multi-selection, during a drag or a resize (`gestureUnderWay`) and while the item is edited in place (`EDITING_CLASS`). Its entries are
+ * `Command.readOnlySafe`), and hides for a multi-selection, during a drag or a resize (`gestureUnderWay`), while the item is edited in place (`EDITING_CLASS`) and while the item
+ * is off the stage. Its entries are
  * rebuilt whenever what they show changes (a page added, renamed or deleted, a tie made), so a dropdown never offers
  * a page that has gone; a choice that lands after its page went is refused by its command.
  */
@@ -99,7 +101,7 @@ export class ItemBar {
     this.el.hidden = true;
     parent.appendChild(this.el);
     // The bar's presses are its own: the stage must not take them as a press on the canvas (which deselects).
-        // The wheel goes on to the stage, so zoom and pan work over the bar too.
+    // The wheel goes on to the stage, so zoom and pan work over the bar too.
     for (const type of ["pointerdown", "mousedown", "dblclick", "contextmenu", "keydown"] as const) {
       this.el.addEventListener(type, (ev) => ev.stopPropagation());
     }
@@ -118,8 +120,9 @@ export class ItemBar {
     const signature = JSON.stringify([node.id, entries]);
     if (rebuild || signature !== this.built || this.item !== node.id) this.build(node.id, entries, signature);
     this.item = node.id;
+    // Shown before it is placed, so that it can be measured; hidden again while its item is off the stage.
     this.el.hidden = false;
-    this.place(view, node);
+    if (!this.place(view, node)) this.el.hidden = true;
   }
 
   /** Removes the bar from the stage. */
@@ -127,17 +130,25 @@ export class ItemBar {
     this.el.remove();
   }
 
-  private place(view: ItemBarHost, node: Node): void {
+  /**
+   * Places the bar at the item: above it, or below it when there is not room above for the bar and its gap. False when
+   * the item's box on screen is wholly off the stage (panned away), where the bar is not shown; a stage not yet laid
+   * out (no size) is taken to show everything.
+   */
+  private place(view: ItemBarHost, node: Node): boolean {
     const box = nodeWorldRect(view.store.doc, node);
+    const stage = this.el.parentElement;
+    const width = stage?.clientWidth ?? 0;
+    const height = stage?.clientHeight ?? 0;
+    const corner = view.viewport.toScreen({ x: box.x, y: box.y });
+    const far = view.viewport.toScreen({ x: box.x + box.width, y: box.y + box.height });
+    if (width > 0 && height > 0 && (far.x <= 0 || corner.x >= width || far.y <= 0 || corner.y >= height)) return false;
     const top = view.viewport.toScreen({ x: box.x + box.width / 2, y: box.y });
-    const below = top.y < ROOM_ABOVE_PX;
+    const below = top.y < this.el.offsetHeight + GAP_PX;
     const at = below ? view.viewport.toScreen({ x: box.x + box.width / 2, y: box.y + box.height }) : top;
     this.el.classList.toggle("is-below", below);
     // Kept inside the stage: its middle at least half its width from either side, and, below the item, its bottom in.
     // A stage not yet laid out (no size) is not clamped to.
-    const stage = this.el.parentElement;
-    const width = stage?.clientWidth ?? 0;
-    const height = stage?.clientHeight ?? 0;
     const half = this.el.offsetWidth / 2;
     let x = at.x;
     let y = at.y;
@@ -145,6 +156,7 @@ export class ItemBar {
     if (below && height > 0) y = Math.min(y, height - this.el.offsetHeight - GAP_PX);
     this.el.style.left = `${x}px`;
     this.el.style.top = `${y}px`;
+    return true;
   }
 
   private build(id: NodeId, entries: ItemBarEntry[], signature: string): void {

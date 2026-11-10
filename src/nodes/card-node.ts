@@ -6,7 +6,7 @@ import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
 import { cardLinks, firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
 import { joinLinktext } from "../format/links-section";
-import type { LinkedPath, LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { OPEN_TAB, type LinkedPath, type LinkRename, type NodeRenderer, type NodeType, type RenderContext, type UpdateContext } from "../registry/node-type";
 import { CardLabel, cardLabel, type LabelCache } from "../view/card-label";
 import { attachLinkSuggest, type BlockIdWriter } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
@@ -101,8 +101,9 @@ interface Live {
  *
  * A note card has a label above it (`CardLabel`), exactly as Canvas's file card has: `Note › Heading` (`cardLabel`), with
  * the note's full vault path as its tooltip, drawn again when Obsidian's cache of the note changes; or the link as
- * stored, greyed out after an alert icon, when the note is missing. A click on it opens the note at
- * that place in a new tab beside the figure, as Open source does; a drag from it moves the card.
+ * stored, greyed out after an alert icon, when the note is missing. A click on it shows the note at
+ * that place: in a tab that already shows it, else in a new tab beside the figure, as Open source does; a drag from it
+ * moves the card.
  */
 class CardNodeRenderer implements NodeRenderer {
   private node: CardNode;
@@ -275,10 +276,14 @@ class CardNodeRenderer implements NodeRenderer {
     }
   }
 
-  /** The label was clicked: the note opens at the card's place in it, in a new tab beside the figure (as Open source). */
+  /**
+   * The label was clicked: the note is shown at the card's place in it, in the tab that already shows it if there is one
+   * (focused), else in a new tab beside the figure (as Open source).
+   */
   private openNote(ev: MouseEvent): void {
     const n = this.node;
-    if (n.file !== undefined) this.ctx.openLink(joinLinktext(n.file, n.subpath ?? ""), ev, "tab");
+    // A middle-click asks for a new tab, as on any link.
+    if (n.file !== undefined) this.ctx.openLink(joinLinktext(n.file, n.subpath ?? ""), ev, ev.type === "auxclick" ? "tab" : OPEN_TAB);
   }
 
   /**

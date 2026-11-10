@@ -1,4 +1,4 @@
-import { Notice, TextFileView, TFile, type Menu, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { Notice, parseLinktext, TextFileView, TFile, type Menu, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
 import { LOADING_WAIT_MS } from "../api";
@@ -27,7 +27,8 @@ import { createFigureStore } from "../model/normalise";
 import { DocumentStore } from "../model/store";
 import type { Document, Node as FigureNode, NodeId, Page, PageId } from "../model/types";
 import type { Command, CommandContext, DragTargets, MenuPlace, ToolPreview, UndoStep } from "../registry/command";
-import type { ImageState, LinkRename, NodeType } from "../registry/node-type";
+import { OPEN_TAB, type ImageState, type LinkRename, type NodeType } from "../registry/node-type";
+import { focusOpenTab } from "./open-tab";
 import { DEFAULT_SETTINGS } from "../settings/settings";
 import { settlesWithin } from "../util/event-loop";
 import { showContextMenu } from "./context-menu";
@@ -1103,9 +1104,20 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     new Notice(`Pages are limited to ${limitMm} mm on a side (Settings → Link Figures → Maximum page size).`);
   }
 
-  /** Opens a link target from this figure's place in the vault, in a new tab when asked to (the badge on a node, and the Open source command). */
-  openLink(linktext: string, newLeaf: PaneType | boolean = false): void {
-    void this.app.workspace.openLinkText(linktext, this.file?.path ?? "", newLeaf);
+  /**
+   * Opens a link target from this figure's place in the vault, in a new tab when asked to (the badge on a node, and the
+   * Open source command). `OPEN_TAB` (a click on a note card's label): a tab that already shows the note is focused, at
+   * the link's place, and only without one is a new tab opened.
+   */
+  openLink(linktext: string, newLeaf: PaneType | boolean | typeof OPEN_TAB = false): void {
+    const from = this.file?.path ?? "";
+    if (newLeaf === OPEN_TAB) {
+      const { path, subpath } = parseLinktext(linktext);
+      const file = this.app.metadataCache.getFirstLinkpathDest(path, from);
+      if (file && focusOpenTab(this.app.workspace, file, subpath)) return;
+      newLeaf = "tab";
+    }
+    void this.app.workspace.openLinkText(linktext, from, newLeaf);
   }
 
   /** Builds `.lf-view` once; `onOpen`, `showError` and `setDocument` all call it because `setViewData` may run before `onOpen`. */

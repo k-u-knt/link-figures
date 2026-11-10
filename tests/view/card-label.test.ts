@@ -6,7 +6,7 @@ import type { Resolved } from "../../src/links/types";
 import { createDocument } from "../../src/model/defaults";
 import type { CardNode } from "../../src/model/types";
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
-import type { RenderContext } from "../../src/registry/node-type";
+import { OPEN_TAB, type RenderContext } from "../../src/registry/node-type";
 import { cardLabel, LABEL_SEPARATOR, labelClearancePx } from "../../src/view/card-label";
 
 const setIcon = vi.hoisted(() => vi.fn((el: HTMLElement, icon: string) => el.setAttribute("data-icon", icon)));
@@ -182,12 +182,12 @@ describe("the label above a note card", () => {
     expect(label()!.getAttribute("aria-label")).toBe("Old/Gone#Legend");
   });
 
-  test("a click on the label opens the note at that place in a new tab", () => {
+  test("a click on the label shows the note at that place: in a tab already showing it, else a new tab", () => {
     const { label, openLink } = mount({ file: "Notes/Fig2.md", subpath: "#Legend" }, content("Notes/Fig2.md"));
     const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
     label()!.dispatchEvent(ev);
     expect(openLink).toHaveBeenCalledTimes(1);
-    expect(openLink).toHaveBeenCalledWith("Notes/Fig2.md#Legend", ev, "tab");
+    expect(openLink).toHaveBeenCalledWith("Notes/Fig2.md#Legend", ev, OPEN_TAB);
   });
 
   test("the second click of a double-click opens nothing more", () => {

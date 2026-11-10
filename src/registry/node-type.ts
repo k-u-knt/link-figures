@@ -20,6 +20,9 @@ export interface LinkTarget extends Partial<Omit<FileNode, "file" | "subpath" | 
   show: FileNode["show"];
 }
 
+/** `RenderContext.openLink`'s choice of a tab that already shows the note, else a new tab. */
+export const OPEN_TAB = "open-tab";
+
 export interface RenderContext {
   app: App;
   /** The plugin's registries: what a node type draws with (shape kinds, paints…). */
@@ -29,10 +32,11 @@ export interface RenderContext {
   doc(): Document;
   resolved(id: NodeId): Resolved | undefined;
   /**
-   * Opens `linktext` from the figure's place in the vault: in a new tab when `newLeaf` says so, else as the event asks
-   * (a modifier key opens a new tab).
+   * Opens `linktext` from the figure's place in the vault: in a new tab when `newLeaf` is `"tab"`; with `"open-tab"`, in
+   * a tab that already shows the note (focused, at the link's place), else a new one; else as the event asks (a modifier
+   * key opens a new tab).
    */
-  openLink(linktext: string, evt: MouseEvent, newLeaf?: "tab"): void;
+  openLink(linktext: string, evt: MouseEvent, newLeaf?: "tab" | typeof OPEN_TAB): void;
   component: Component;
   /**
    * The nodes their plugin could not read (see `DocumentStore.unreadable`): handled as placeholders, so none of their

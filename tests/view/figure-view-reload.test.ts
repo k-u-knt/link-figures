@@ -6,6 +6,7 @@ import type { ChangeEvent } from "../../src/model/store";
 import type { Document, FileNode } from "../../src/model/types";
 import type { Command, CommandContext } from "../../src/registry/command";
 import { LinkFiguresView } from "../../src/view/figure-view";
+import { OPEN_TAB } from "../../src/registry/node-type";
 import { missingNodeIds } from "../../src/links/invalidation";
 import { TFile } from "obsidian";
 
@@ -33,6 +34,10 @@ vi.mock("obsidian", () => {
   }
   return {
     TextFileView,
+    parseLinktext: (linktext: string) => {
+      const at = linktext.indexOf("#");
+      return at < 0 ? { path: linktext, subpath: "" } : { path: linktext.slice(0, at), subpath: linktext.slice(at) };
+    },
     Notice: class {},
     TFile: class {},
     Component: class {},
@@ -865,5 +870,33 @@ describe("a linked type registered after the figure was loaded", () => {
     off();
     registries.nodeTypes.register(stub("a.two"));
     expect(seen).toEqual(["a.one"]);
+  });
+});
+
+describe("openLink with OPEN_TAB (a click on a note card's label)", () => {
+  function withTabs(shown: object | null) {
+    const t = setup();
+    const note = { path: "Notes/a.md" };
+    const leaf = { view: { file: shown, getViewType: () => "markdown" }, openFile: vi.fn(async () => {}) };
+    const workspace = { iterateAllLeaves: (fn: (l: typeof leaf) => void) => fn(leaf), setActiveLeaf: vi.fn(), openLinkText: vi.fn(async () => {}) };
+    Object.assign(t.view.app as object, { workspace });
+    Object.assign((t.view.app as { metadataCache: object }).metadataCache, { getFirstLinkpathDest: (path: string) => (path === "Notes/a.md" ? note : null) });
+    return { view: t.view, note, leaf, workspace };
+  }
+
+  test("focuses the tab that already shows the note, at the link's place", () => {
+    const { view, note, leaf, workspace } = withTabs(null);
+    leaf.view.file = note;
+    view.openLink("Notes/a.md#Legend", OPEN_TAB);
+    expect(workspace.setActiveLeaf).toHaveBeenCalledWith(leaf, { focus: true });
+    expect(leaf.openFile).toHaveBeenCalledWith(note, { active: true, eState: { subpath: "#Legend" } });
+    expect(workspace.openLinkText).not.toHaveBeenCalled();
+  });
+
+  test("opens a new tab when none shows it", () => {
+    const { view, workspace } = withTabs({ path: "Other.md" });
+    view.openLink("Notes/a.md#Legend", OPEN_TAB);
+    expect(workspace.setActiveLeaf).not.toHaveBeenCalled();
+    expect(workspace.openLinkText).toHaveBeenCalledWith("Notes/a.md#Legend", expect.any(String), "tab");
   });
 });

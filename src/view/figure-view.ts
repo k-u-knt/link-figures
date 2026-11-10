@@ -7,12 +7,14 @@ import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
 import { applyLinkEntries, applyLinkEntriesOfType, classifyReload } from "../format/links-reload";
+import { isLinkedType, linkOf, linktextOf, withLink } from "../format/node-links";
 import { hookFailureReports, loadDocument } from "../format/load";
 import { parseFigureFile, type ParsedFigureFile } from "../format/parse";
 import { emptyParsed, serializeFigureFile } from "../format/serialize";
 import { Intake } from "../links/intake";
 import type { Plane } from "../links/decoders/tiff-convert";
 import { InvalidationIndex, missingNodeIds } from "../links/invalidation";
+import { afterLinkUpdates } from "../links/link-updates";
 import { renamedLinkFiles } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import { LinkWatcher } from "../links/watcher";
@@ -137,6 +139,17 @@ export class LinkFiguresView extends TextFileView implements EditorView {
 
   /** The view has edits that no save has taken yet (an edit, undo or redo since the last load or save). */
   private unsaved = false;
+  /**
+   * The text the file has as far as the view knows: what it last took up from the file, or last saved. A text read
+   * from the file that differs from it only in its links is a link update (a rename), which the view's unsaved edits
+   * survive (see `adoptLinkUpdate`).
+   */
+  private diskText = "";
+  /**
+   * The renames of files the open figure links to since its file was last read, as `renamedLinkFiles` gives them:
+   * what Obsidian's link update for them meant to write, should what it wrote not load (see `repairLinkUpdate`).
+   */
+  private renamesSinceRead = new Map<string, string>();
   /** The file text as `setViewData` received it. */
   private rawText = "";
   /** What the loaded document serialises to, to tell whether it has changed since the file was read. */
@@ -272,7 +285,16 @@ export class LinkFiguresView extends TextFileView implements EditorView {
    */
   async save(clear?: boolean): Promise<void> {
     if (this.readOnly) return;
+    // After Obsidian's link updates under way (a rename whose "Update links" prompt is open): they splice their links
+    // in at the offsets the file had when they began, and a save landing in between would leave those offsets stale.
+    return afterLinkUpdates(this.app, () => this.saveNow(clear));
+  }
+
+  /** `save`'s work, once no link update is under way. */
+  private async saveNow(clear?: boolean): Promise<void> {
+    if (this.readOnly) return;
     if (!this.loaded) return super.save(clear);
+    if (await this.takeUpBeforeSave(clear)) return;
     const text = this.getViewData();
     const problem = unreadableReason(text, this.plugin.registries);
     if (problem !== null) {
@@ -291,7 +313,36 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     } finally {
       this.savingText = null;
     }
+    if (!clear) this.diskText = text;
     if (!clear && file) await this.checkAfterSave(file, text);
+  }
+
+  /**
+   * Takes up a change of the file the view has not seen yet, before a save writes over it: Obsidian's link update,
+   * which the save waited for (see `save`), lands just before it, while Obsidian's own reload of the view is still
+   * reading the file. Taken up as any reload is (a link update keeps the unsaved edits: `adoptLinkUpdate`). True when
+   * this save is then not to write: the edits that are left are saved by a later save (`requestSave`), once that
+   * reload has come and found the view up to date, as a write now would be followed by the reload's stale text. A
+   * save that closes the view writes at once.
+   */
+  private async takeUpBeforeSave(clear?: boolean): Promise<boolean> {
+    const file = this.file;
+    // Only after a rename of something the figure links to, which the view has not seen the file's update for yet.
+    if (!file || this.renamesSinceRead.size === 0) return false;
+    let disk: string;
+    try {
+      disk = await this.app.vault.read(file);
+    } catch {
+      return false;
+    }
+    if (this.file !== file || !this.loaded || this.readOnly || disk === this.diskText) return false;
+    const internals = this as unknown as { lastSavedData?: string | null };
+    if ("lastSavedData" in internals) internals.lastSavedData = disk;
+    this.data = disk;
+    this.setViewData(disk, false);
+    if (clear || !this.loaded || this.readOnly) return false;
+    if (this.unsaved) this.requestSave();
+    return true;
   }
 
   /**
@@ -345,6 +396,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     try {
       loaded = loadDocument(data, this.plugin.registries);
     } catch (error) {
+      if (!clear && this.loaded && !this.readOnly && this.repairLinkUpdate(data, error)) return;
       // Refuse to open, and with it to save: the file is shown as it is and never replaced by a default document.
       this.setDocument(blankDocument(), emptyParsed());
       this.loaded = false;
@@ -354,6 +406,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     // The same file read again (not a different one, which comes with `clear`): when only link targets differ, the open figure is kept as it is.
     const reload = !clear && this.loaded && !this.readOnly;
     if (reload && this.adoptReload(data, loaded)) return;
+    if (reload && this.unsaved && this.adoptLinkUpdate(data, loaded)) return;
     // The file's version replaces the open figure: edits not yet saved are gone, and the user is told, whoever wrote it
     // (the plugin's own calls go to the view, so its write landing here is unexpected too).
     if (reload && this.unsaved && this.file) {
@@ -373,6 +426,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     }
     this.setDocument(loaded.doc, loaded.parsed, reload, loaded.unreadable);
     this.rawText = data;
+    this.diskText = data;
+    this.renamesSinceRead.clear();
     // The store's document, normalised: a file that only the normalisers would change is not rewritten by opening it
     // (and closing it, which saves), as a headless call does not rewrite it.
     this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
@@ -391,7 +446,69 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     if (kind === "links") this.reloadLinks(data);
     // The file is what the figure is now, so an untouched figure goes back byte for byte as it was read.
     this.rawText = data;
+    this.diskText = data;
+    this.renamesSinceRead.clear();
     this.serializedAtLoad = serializeFigureFile(this.store.doc, this.parsed);
+    return true;
+  }
+
+  /**
+   * Takes up `data` over unsaved edits when it differs from the text the view last knew the file to have
+   * (`diskText`) only in link targets: Obsidian's link update for a rename, landing before the view's save. The nodes
+   * whose link it changed take the new link, and the edits stay, to be saved; nothing else is read. False for any
+   * other change, which the caller loads over the edits (and says so).
+   */
+  private adoptLinkUpdate(data: string, loaded: ReturnType<typeof loadDocument>): boolean {
+    let base: ReturnType<typeof loadDocument>;
+    try {
+      base = loadDocument(this.diskText, this.plugin.registries);
+    } catch {
+      return false;
+    }
+    const kind = classifyReload(base, loaded);
+    if (kind === "other") return false;
+    const was = new Map(base.doc.nodes.map((n) => [n.id, linktextOf(n)]));
+    const now = new Map(loaded.doc.nodes.filter((n) => was.has(n.id) && was.get(n.id) !== linktextOf(n)).map((n) => [n.id, linktextOf(n)]));
+    // A node of a type not known here keeps its entry as the file has it.
+    const entries = new Map(loaded.parsed.links.map((e) => [e.id, e]));
+    this.parsed = { ...this.parsed, links: this.parsed.links.map((e) => (now.has(e.id) || !isLinkedType(this.store.doc.nodes.find((n) => n.id === e.id)?.type ?? "") ? (entries.get(e.id) ?? e) : e)) };
+    const doc = this.store.doc;
+    const nodes = doc.nodes.map((n) => (now.has(n.id) ? withLink(n, now.get(n.id)) : n));
+    if (nodes.some((n, i) => n !== doc.nodes[i])) this.store.replace({ ...doc, nodes }, "links", { keepHistory: true });
+    this.rawText = data;
+    this.diskText = data;
+    this.renamesSinceRead.clear();
+    this.serializedAtLoad = serializeFigureFile(createFigureStore(loaded.doc, this.plugin.registries, undefined, loaded.unreadable).doc, loaded.parsed);
+    return true;
+  }
+
+  /**
+   * The file was rewritten into a text that does not load (`error`) after a file the figure links to was renamed:
+   * Obsidian's link update spliced its links in at offsets that a write since had made stale (a write it did not wait
+   * for: see `save`). The open figure is still whole, so it is written back over the damage, with the renamed links
+   * the update meant to write; the damaged text goes to the console, and the user is told. False when no such rename
+   * came since the file was read, for the caller to show the file as it is.
+   */
+  private repairLinkUpdate(damaged: string, error: unknown): boolean {
+    if (this.renamesSinceRead.size === 0) return false;
+    const renames = new Map(this.renamesSinceRead);
+    this.renamesSinceRead.clear();
+    const doc = this.store.doc;
+    const nodes = doc.nodes.map((n) => {
+      const link = linkOf(n);
+      const file = link ? renames.get(link.file) : undefined;
+      return file === undefined ? n : ({ ...n, file } as typeof n);
+    });
+    if (nodes.some((n, i) => n !== doc.nodes[i])) this.store.replace({ ...doc, nodes }, "links", { keepHistory: true });
+    // Whatever the view holds is written: never the damaged text, nor the text as first read. The damaged text is
+    // what the file has, so the save does not take it up again (`takeUpBeforeSave`).
+    this.serializedAtLoad = "";
+    this.diskText = damaged;
+    this.unsaved = true;
+    const message = `Link Figures: "${this.file?.path ?? "the figure"}" was damaged by a link update after a rename (${describeLoadError(error)}); it was repaired from the open figure. The damaged text is in the console.`;
+    console.error(message, damaged);
+    new Notice(message);
+    void this.save();
     return true;
   }
 
@@ -437,6 +554,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       this.app.metadataCache.fileToLinktext(file, figurePath, omitMd),
     );
     this.store.rebasePaths(renames);
+    // Kept for a link update that leaves the file unreadable (`repairLinkUpdate`): only renames of what it links to.
+    const linked = new Set(this.store.doc.nodes.flatMap((n) => linkOf(n)?.file ?? []));
+    for (const [from, to] of renames) if (linked.has(from)) this.renamesSinceRead.set(from, to);
   }
 
   /** The figure file was modified. Whoever wrote it, if it was not this view, its Links section may have been rewritten. */
@@ -460,6 +580,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.loaded = false;
     this.readOnly = false;
     this.rawText = "";
+    this.diskText = "";
+    this.renamesSinceRead.clear();
     this.serializedAtLoad = "";
     this.unsaved = false;
     // A file is about to be loaded (or none): whichever comes next starts from a fitted page, an edit reload of the same file does not.

@@ -1,6 +1,7 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { createApi, type LinkFiguresApi } from "./api";
 import { readHeadlessFigure, type FigureFiles } from "./commands/headless";
+import { afterLinkUpdates } from "./links/link-updates";
 import { displayAdjustment } from "./adjust/display";
 import { builtinLuts } from "./adjust/luts";
 import { arrangeCommands } from "./commands/arrange";
@@ -65,7 +66,8 @@ export default class LinkFiguresPlugin extends Plugin {
   /** Figure files by vault path, as the API and an export of a closed figure read them; every write is in `figureWrites`. */
   private readonly figureFiles: FigureFiles = this.figureWrites.wrap({
     read: (path) => this.app.vault.read(this.vaultFile(path)),
-    process: async (path, edit) => void (await this.app.vault.process(this.vaultFile(path), edit)),
+    // After Obsidian's link updates under way, whose offsets a write landing in between would make stale (`afterLinkUpdates`).
+    process: (path, edit) => afterLinkUpdates(this.app, async () => void (await this.app.vault.process(this.vaultFile(path), edit))),
   });
   /** The API for other plugins and scripts (the Obsidian CLI's `eval`): see `LinkFiguresApi`. */
   api: LinkFiguresApi = createApi({
@@ -280,7 +282,8 @@ export default class LinkFiguresPlugin extends Plugin {
         return indexed;
       },
       nextIndex,
-      process: async (path, edit) => void (await vault.process(this.vaultFile(path), edit)),
+      // A note may hold links too: after Obsidian's link updates under way, as a figure file's writes are.
+      process: (path, edit) => afterLinkUpdates(this.app, async () => void (await vault.process(this.vaultFile(path), edit))),
     };
   }
 

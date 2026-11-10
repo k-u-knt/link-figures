@@ -10,6 +10,10 @@ import { shapeNodeDefaults } from "../../src/model/defaults";
 import { connectorNodeType } from "../../src/nodes/connector-node";
 import { shapeNodeType } from "../../src/nodes/shape-node";
 import { createRegistries } from "../../src/registry";
+import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
+import { createDocument } from "../../src/model/defaults";
+import { emptyParsed } from "../../src/format/serialize";
+import { TFile } from "obsidian";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { LinkFiguresView } from "../../src/view/figure-view";
 
@@ -148,11 +152,12 @@ const parses = (text: string): boolean => {
 const ids = (text: string) => loadDocument(text).doc.nodes.map((n) => n.id).sort();
 
 /** A vault holding one figure file, as Obsidian's behaves for what the view and the API do with it. */
-function setup(initialText = newFigureText("a4-portrait", 1)) {
+function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQueue?: boolean } = {}) {
   const registries = createRegistries();
   registerBuiltinCommands({ registries, addCommand: () => undefined, activeFigureView: () => null } as never);
   registries.nodeTypes.register(shapeNodeType);
   registries.nodeTypes.register(connectorNodeType);
+  registries.nodeTypes.register(cardNodeType);
   for (const kind of builtinShapeKinds) registries.shapes.register(kind);
   for (const route of builtinRoutes) registries.routes.register(route);
   for (const cap of builtinCapKinds) registries.caps.register(cap);
@@ -225,8 +230,18 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
       return after;
     }),
   };
-  const metadataCache = { on: () => ({}), fileToLinktext: () => "" };
-  const app = { vault, metadataCache, workspace: {} };
+  const metadataCache = { on: () => ({}), fileToLinktext: (f: { path: string }) => f.path.replace(/\.md$/, "") };
+  /** Obsidian's queue of link updates (`FileManager.updateQueue`), as 1.15 has it. */
+  const updateQueue = {
+    promise: Promise.resolve() as Promise<unknown>,
+    queue(job: () => Promise<unknown>) {
+      const next = this.promise.then(job, job);
+      this.promise = next;
+      return next;
+    },
+  };
+  const fileManager: Record<string, unknown> = options.linkQueue === false ? {} : { updateQueue, inProgressUpdates: null };
+  const app = { vault, metadataCache, workspace: {}, fileManager };
   const figureWrites = new FigureWrites();
   const plugin = { app, registries, access: { resolveLink: () => null }, decoders: {}, figureWrites, settings: undefined };
 
@@ -299,7 +314,34 @@ function setup(initialText = newFigureText("a4-portrait", 1)) {
     await opening;
     return view!;
   };
-  return { api, files, figureWrites, registries, disk, texts, fileAt, writes, vault, hooks, openFile, switchTo, opened, externalWrite, shape, get view() { return view!; } };
+  /**
+   * `fileManager.renameFile(note, to)` as Obsidian 1.15 does it for the figure file (read from its app.js:
+   * `runAsyncLinkUpdate`, `updateAllLinks`, `updateInternalLinks`, `ux`): one job of the update queue that collects each
+   * link to the note in the figure's text as it is now, with its offsets; renames (the vault's `rename` event, which
+   * the view takes as it does from `vault.on("rename")`); waits for `prompt` (the "Update links" dialog); then splices
+   * the new links in at the offsets it collected, into the text the file has then, checking nothing.
+   */
+  const renameNote = (from: string, to: string, prompt: Promise<void>): Promise<unknown> => {
+    const job = async () => {
+      const name = from.replace(/\.md$/, "");
+      const refs = [...disk.text.matchAll(/\[\[([^\]|#]*)([^\]]*)\]\]/g)]
+        .filter((m) => m[1] === name)
+        .map((m) => ({ start: m.index!, end: m.index! + m[0].length, text: `[[${to.replace(/\.md$/, "")}${m[2]}]]` }));
+      fileManager.inProgressUpdates = [];
+      const note = Object.assign(new TFile(), { path: to, name: to.split("/").pop() });
+      (view as unknown as { onVaultRename(f: unknown, old: string): void } | null)?.onVaultRename(note, from);
+      fileManager.inProgressUpdates = null;
+      await prompt;
+      if (refs.length === 0) return;
+      await vault.process(file, (text) => {
+        let out = text;
+        for (const r of [...refs].sort((a, b) => b.start - a.start)) out = out.slice(0, r.start) + r.text + out.slice(r.end);
+        return out;
+      });
+    };
+    return options.linkQueue === false ? job() : updateQueue.queue(job);
+  };
+  return { api, files, figureWrites, registries, disk, texts, fileAt, writes, vault, hooks, openFile, switchTo, opened, externalWrite, shape, renameNote, get view() { return view!; } };
 }
 
 beforeEach(() => {
@@ -577,5 +619,77 @@ describe("loading, switching and saving", () => {
     await saving;
     expect(serialize).toHaveBeenCalledTimes(1);
     expect(ids(t.disk.text)).toEqual(["a1"]);
+  });
+});
+
+describe("a rename's link update in Obsidian, and the view's own save", () => {
+  const LEGEND = "Notes/Cards legend";
+  /** A figure with two note cards on the legend, `c-0` (its Links entry first) and `c-1`. */
+  const twoNoteCards = (): string => {
+    const doc = createDocument("a4-portrait");
+    const page = doc.pages[0];
+    const card = (id: string, y: number) => ({ ...cardNodeDefaults(page, -300, y), id, text: undefined, file: LEGEND, subpath: "#Fig 2" });
+    doc.nodes.push(card("c-0", 0) as never, card("c-1", 200) as never);
+    return serializeFigureFile(doc, emptyParsed());
+  };
+  const linkOf = (text: string, id: string) => (loadDocument(text).doc.nodes.find((n) => n.id === id) as { file?: string } | undefined)?.file;
+
+  test("a card deleted 300 ms before a rename whose prompt stays open: the save waits for the link update, the file stays a figure", async () => {
+    const t = setup(twoNoteCards());
+    await t.opened();
+    expect(linkOf(t.disk.text, "c-1")).toBe(LEGEND);
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    await vi.advanceTimersByTimeAsync(300);
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    // The view's save comes due while the prompt is open.
+    await vi.advanceTimersByTimeAsync(3000);
+    answer();
+    await vi.advanceTimersByTimeAsync(1000);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(3000);
+
+    for (const w of t.writes) expect(parses(w.text), `a write by ${w.by} must parse:\n${w.text}`).toBe(true);
+    expect(ids(t.disk.text)).toEqual(["c-1"]);
+    expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
+    // The deleted card is not brought back by the link update.
+    expect(notices).toEqual([]);
+  });
+
+  test("without Obsidian's queue to wait on, a link update spliced at stale offsets is repaired, not left in the file", async () => {
+    const t = setup(twoNoteCards(), { linkQueue: false });
+    await t.opened();
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    await vi.advanceTimersByTimeAsync(300);
+    let answer!: () => void;
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", new Promise<void>((r) => (answer = r)));
+    await vi.advanceTimersByTimeAsync(3000);
+    answer();
+    await vi.advanceTimersByTimeAsync(1000);
+    await renaming;
+    await vi.advanceTimersByTimeAsync(3000);
+
+    // The splice did damage the file (the model is right), and the view wrote its figure back over it.
+    expect(t.writes.some((w) => !parses(w.text))).toBe(true);
+    expect(parses(t.disk.text)).toBe(true);
+    expect(ids(t.disk.text)).toEqual(["c-1"]);
+    expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
+    expect(t.view.hasDocument()).toBe(true);
+    expect(notices.some((n) => n.includes("repaired"))).toBe(true);
+  });
+
+  test("a link update that lands while the view has an unsaved edit keeps the edit and takes the new links", async () => {
+    const t = setup(twoNoteCards());
+    await t.opened();
+    await t.api.run(PATH, "delete", { ids: ["c-0"] });
+    // Renamed at once, the prompt answered at once: the update lands before the view's save.
+    const renaming = t.renameNote(`${LEGEND}.md`, "Notes/Cards legend 2.md", Promise.resolve());
+    await vi.advanceTimersByTimeAsync(500);
+    await renaming;
+    expect(linkOf(t.disk.text, "c-0")).toBe("Notes/Cards legend 2");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ids(t.disk.text)).toEqual(["c-1"]);
+    expect(linkOf(t.disk.text, "c-1")).toBe("Notes/Cards legend 2");
+    expect(notices).toEqual([]);
   });
 });

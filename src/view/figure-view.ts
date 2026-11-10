@@ -299,7 +299,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     // What the note cards' editors hold is written to their notes, then their embeds are let go of (an edit is ended
     // with a save).
     if (this.nodeHost) {
-      await this.nodeHost.flushAll();
+      // Nothing is to be drawn again: closing waits only for the writes.
+      await this.nodeHost.flushAll({ redraw: false });
       this.nodeHost.unmountAll();
     }
   }

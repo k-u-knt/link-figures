@@ -53,17 +53,24 @@ export function isEditable(target: EventTarget | null): boolean {
 }
 
 /**
- * The controls Obsidian draws in rendered Markdown that act on their own click, as they do in a Canvas card: a foldable
- * callout's title, a heading's or list's collapse indicator, a task's checkbox, a button, a `<details>` summary.
+ * The controls Obsidian draws in a note card's live embed (`.lf-card-embed`) that act on their own click, as they do in a
+ * Canvas card: a foldable callout's title, a heading's or list's collapse indicator, a task's checkbox, a button, a
+ * `<details>` summary. In a text card's read-only rendering they are the card's, as any press on it.
  */
-const RENDERED_CONTROLS = [".callout.is-collapsible > .callout-title", ".collapse-indicator", ".task-list-item-checkbox", "button", "summary"];
+const EMBED_CONTROLS = [".callout.is-collapsible > .callout-title", ".collapse-indicator", ".task-list-item-checkbox", "button", "summary"];
 
-/** Those controls (`RENDERED_CONTROLS`) and links, inside what a node renders whose links are live (`LIVE_LINKS`). */
-const LIVE_CONTROLS = ["a", ...RENDERED_CONTROLS].map((c) => `.${LIVE_LINKS} ${c}`).join(", ");
+/** Links inside what a node renders whose links are live (`LIVE_LINKS`), and the controls of a live embed (`EMBED_CONTROLS`). */
+const LIVE_CONTROLS = [`.${LIVE_LINKS} a`, ...EMBED_CONTROLS.map((c) => `.lf-card-embed ${c}`)].join(", ");
+
+/** A task's checkbox in a node's read-only rendering (not a live embed's): a press on it is a press on the node. */
+function isRenderedCheckbox(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  return typeof el?.closest === "function" && el.closest(".task-list-item-checkbox") === el && el.closest(".lf-card-embed") === null && el.closest(".lf-node") !== null;
+}
 
 /**
  * Whether a press on `target` is the target's own, not the stage's: a node's link badge, a link, a control (a callout's
- * fold, a collapse indicator, a checkbox: `RENDERED_CONTROLS`) or an embed's open icon (`.markdown-embed-link`) in what
+ * fold, a collapse indicator, a checkbox in a live embed: `EMBED_CONTROLS`) or an embed's open icon (`.markdown-embed-link`) in what
  * a node renders whose links are live (`LIVE_LINKS`, a card's text or note), or a node's grip (`NODE_GRIP`, a note
  * card's label), which opens on its click. Capturing the pointer would send that click to the stage.
  */
@@ -362,7 +369,8 @@ export class PointerController {
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     // Not while a tool is armed: its press is the tool's wherever it lands (the Connector tool from a card's link).
     const target = ev.target as Element | null;
-    if (isEditable(target) || this.inEditor(target)) return;
+    // A checkbox drawn in a read-only rendering is not typed into: the press is the card's.
+    if ((isEditable(target) && !isRenderedCheckbox(target)) || this.inEditor(target)) return;
     if (!this.view.armedTool && isOwnClick(target)) {
       // A press on a link waits: let go where it is, it is the link's click; moved on, it is a press on the card (see
       // `onPointerMove`). The pointer is not captured meanwhile, so the click reaches the link.

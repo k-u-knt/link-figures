@@ -305,6 +305,19 @@ describe("a note card's body is Obsidian's editable embed", () => {
     expect(embed.editMode).toBeNull();
   });
 
+  test("a checkbox in a text card's read-only rendering is not the card's own control: a press on it selects the card", async () => {
+    const s = await setup();
+    const content = s.el("C").querySelector(".lf-card-content")!;
+    const checkbox = content.appendChild(document.createElement("input"));
+    checkbox.type = "checkbox";
+    checkbox.className = "task-list-item-checkbox";
+    const { at } = s.inside("C");
+    s.pointer("pointerdown", at, checkbox);
+    s.pointer("pointerup", at, checkbox);
+    await s.settled();
+    expect(s.view.selection.ids).toEqual(["C"]);
+  });
+
   test("keys inside the editor do not reach the stage", async () => {
     const s = await setup();
     await s.click("N");
@@ -457,6 +470,22 @@ describe("Review Focus", () => {
     settled.mockClear();
     await s.nodeHost.flushAll();
     expect(settled).not.toHaveBeenCalled();
+  });
+
+  test("3c: flushAll({ redraw: false }) (the figure closing) writes, and waits for no redraw", async () => {
+    const s = await setup({ panel: true });
+    const embed = s.embedOf("N");
+    embed.onWrite = (text) => void (s.vaultFiles["Notes/a.md"] = `# A\n## Legend\n${text}`);
+    const settled = vi.fn(() => new Promise<void>(() => {}));
+    (s.view.plugin.access as { settled?: (path: string) => Promise<void> }).settled = settled;
+    const invalidate = vi.spyOn(s.nodeHost, "invalidate");
+    await s.click("N");
+    await s.click("N");
+    embed.type("Closing");
+    await s.nodeHost.flushAll({ redraw: false });
+    expect(embed.writes).toEqual(["Closing"]);
+    expect(settled).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   test("4: two cards on one note each have their own embed; the watcher leaves both alone while they follow the note", async () => {

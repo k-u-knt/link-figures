@@ -231,6 +231,23 @@ describe("edit at a point: the caret goes where the rendered note was clicked", 
     expect(cursor).toEqual([20 + "Second **leg".length]);
   });
 
+  test("an editor without offsetToPos or setCursor is given the point after all, so the caret is placed", () => {
+    const { live, embed, second } = rendered();
+    const showEditor = embed.showEditor.bind(embed);
+    embed.showEditor = (at?: unknown) => {
+      showEditor(at);
+      (embed.editMode as Record<string, unknown>).editor = { offsetToPos: (o: number) => o };
+    };
+    const text = second.firstChild!;
+    (document as unknown as { caretRangeFromPoint: unknown }).caretRangeFromPoint = () => {
+      const range = document.createRange();
+      range.setStart(text, 2);
+      return range;
+    };
+    live.edit({ x: 7, y: 8 });
+    expect(embed.editorCalls).toEqual([undefined, { x: 7, y: 8 }]);
+  });
+
   test("a point that is not in a section of the rendering goes to the embed as before", () => {
     const { live, embed, cursor } = rendered();
     (document as unknown as { caretRangeFromPoint: unknown }).caretRangeFromPoint = () => null;

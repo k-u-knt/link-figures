@@ -362,9 +362,9 @@ export class NodeHost {
    * Writes what every editor in place holds and has not saved yet (`NodeRenderer.flush`), then has every node drawn from
    * a file written resolved again, once the vault's view of it has caught up (`VaultAccess.settled`), without waiting
    * for the watcher's debounce: a `drawn()` after this settles only once they show what was written (an export
-   * snapshots them). Never rejects.
+   * snapshots them). With `redraw: false` (the figure closing) only the writes are waited for. Never rejects.
    */
-  async flushAll(): Promise<void> {
+  async flushAll(options: { redraw?: boolean } = {}): Promise<void> {
     const written = new Set<string>();
     await Promise.all(
       [...this.entries].map(async ([id, { renderer }]) => {
@@ -375,7 +375,7 @@ export class NodeHost {
         }
       }),
     );
-    if (written.size === 0) return;
+    if (written.size === 0 || options.redraw === false) return;
     const access = this.view.plugin.access;
     await Promise.all([...written].map((path) => access.settled?.(path).catch(() => {})));
     await this.invalidate([...written].flatMap((path) => this.view.index.nodesFor(path)));

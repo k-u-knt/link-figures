@@ -21,7 +21,8 @@ import type { App, TFile } from "obsidian";
  * (`previewMode.renderer.sections`: each block's element and its offsets in the embed's `text`, which is what the
  * editor holds), and traced back into the Markdown (`sourceOffset`); the editor is opened without the point, the caret
  * put there (`editMode.editor`), and the editor scrolled so the clicked line stays where it was clicked, as far as it
- * can. Any of that missing, the point goes to `showEditor` as before.
+ * can. Any of that missing (the editor too: without `offsetToPos` and `setCursor` it is given the point after all), the
+ * point goes to `showEditor` as before.
  */
 export interface LiveEmbed {
   /** Opens the editor, with the caret at `at` (client px) when given. Nothing when `canEdit` says no. */
@@ -142,12 +143,12 @@ const HOLD_LINE_MS = 400;
  * after `showEditor`, in the editor's window), and scrolls it so that line is at `at.y` (client px), the height at
  * which the rendered text was clicked, as far as the editor scrolls. The editor restores its own scroll as it settles
  * (on its first resizes), so the line is held there, frame by frame, for `HOLD_LINE_MS`, or until the user scrolls,
- * types or presses in it.
+ * types or presses in it. False, and nothing done, when the open editor has no `offsetToPos` and `setCursor`.
  */
-function placeCaret(embed: MarkdownEmbed, offset: number, at: { x: number; y: number }): void {
+function placeCaret(embed: MarkdownEmbed, offset: number, at: { x: number; y: number }): boolean {
   const open = embed.editMode as (MarkdownEmbed["editMode"] & CaretEditor) | null | undefined;
   const editor = open?.editor;
-  if (typeof editor?.offsetToPos !== "function" || typeof editor.setCursor !== "function") return;
+  if (typeof editor?.offsetToPos !== "function" || typeof editor.setCursor !== "function") return false;
   const win = (open?.iframeEl?.ownerDocument?.defaultView ?? globalThis) as Pick<Window, "setTimeout" | "requestAnimationFrame">;
   /** Scrolls the caret's line to the click's height; false when it cannot be measured. */
   const hold = (): boolean => {
@@ -195,6 +196,7 @@ function placeCaret(embed: MarkdownEmbed, offset: number, at: { x: number; y: nu
     };
     win.requestAnimationFrame(frame);
   }, 0);
+  return true;
 }
 
 type EmbedCreator = (ctx: { app: App; linktext: string; sourcePath: string; containerEl: HTMLElement; depth: number }, file: TFile, subpath: string) => unknown;
@@ -286,7 +288,8 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
       }
       // Else the point, a copy: the embed converts it into the iframe's in place.
       embed.showEditor(at && offset === null ? { x: at.x, y: at.y } : undefined);
-      if (at && offset !== null) placeCaret(embed, offset, at);
+      // An editor that cannot be told where its caret goes is given the point after all: the caret is never left unplaced.
+      if (at && offset !== null && embed.editMode && !placeCaret(embed, offset, at)) embed.showEditor({ x: at.x, y: at.y });
       // Read afresh: `showEditor` made it (or did not, for an embed that is not editable).
       const editor = embed.editMode as MarkdownEmbed["editMode"];
       if (!editor) return;

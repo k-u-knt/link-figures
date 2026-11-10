@@ -426,6 +426,25 @@ describe("in-app check fixes (34, 35)", () => {
     for (const notes of plain) expect(notes).not.toMatch(/\^(own-id|cl-par|list-id)/);
   });
 
+  test("an embed of a section that starts with a heading, mid-line, is put on lines of its own: a heading in the Markdown, and `Fig 1` (no `#`) in the notes text", async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "Fig: ![[Legend#Fig 1]] and [[Other|the other]]" });
+    tie(doc, c, doc.pages[0]);
+    const { vault } = await exportCards(doc, { files: { "Notes/Legend.md": "# Fig 1\n\nPanel **A**\n" } });
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe("Fig:\n\n# Fig 1\n\nPanel **A**\n\nand the other\n");
+    const { access: a } = access({ "Notes/Legend.md": "# Fig 1\n\nPanel **A**\n" });
+    const texts = cardTextSource({ doc, registries: registries(), figurePath: "Figs/Fig.lnkfig.md", access: a }, []);
+    const [only] = await texts("pg-1");
+    expect(markdownToPlainText(only.markdown)).toBe("Fig:\n\nFig 1\n\nPanel A\n\nand the other");
+  });
+
+  test("two block embeds on one line each get lines of their own; a one-line section stays in its line", async () => {
+    const { access: a } = access({ "A.md": "# A\n\nOne", "B.md": "# B\n\nTwo", "C.md": "just c" });
+    const readNote = (file: string, subpath: string) => readNoteSection(a, file, subpath, "Figs/Fig.lnkfig.md");
+    const out = await expandEmbeds("See ![[A]] ![[B]] then ![[C]] end", readNote);
+    expect(out.markdown).toBe("See\n\n# A\n\nOne\n\n# B\n\nTwo\n\nthen just c end");
+  });
+
   test("a cards file refused (it would replace a source) leaves nothing behind: none of its images are copied", async () => {
     const doc = pages();
     // A card that embeds the figure's own earlier cards file, which embeds an image: that file is a source now.

@@ -133,9 +133,36 @@ export async function expandEmbeds(
         }
       }
     }
-    edits.push({ start: link.start, end: link.end, insert: resolve ? rebaseEmbeds(section.markdown, section.path, resolve) : section.markdown });
+    const insert = resolve ? rebaseEmbeds(section.markdown, section.path, resolve) : section.markdown;
+    const edit = asBlock(markdown, link.start, link.end, insert);
+    // Two embeds on one line: the space between them went with the first, and so did the blank line.
+    const previous = edits[edits.length - 1];
+    if (previous && edit.start < previous.end) {
+      edit.start = previous.end;
+      if (previous.insert.endsWith("\n\n") && edit.insert.startsWith("\n\n")) edit.insert = edit.insert.slice(2);
+    }
+    edits.push(edit);
   }
   return { markdown: applyEdits(markdown, edits), warnings, notes };
+}
+
+/**
+ * The edit that writes `section` in place of the embed at [`start`, `end`) of `markdown`. A section of more than one
+ * line, or one that starts with a heading, is a block, as Obsidian shows an embed: it is put on lines of its own, set
+ * off by a blank line from text before it and after it on the embed's line ("Fig: ![[Note#Fig 1]] and …" gives "Fig:",
+ * the heading "# Fig 1" and its text, then "and …"), so its heading stays a heading. A one-line section stays in the line.
+ */
+function asBlock(markdown: string, start: number, end: number, section: string): TextEdit {
+  if (!section.includes("\n") && !/^\s{0,3}#{1,6}\s/.test(section)) return { start, end, insert: section };
+  const lineStart = markdown.lastIndexOf("\n", start - 1) + 1;
+  const lineEnd = markdown.indexOf("\n", end);
+  const before = markdown.slice(lineStart, start);
+  const after = markdown.slice(end, lineEnd === -1 ? markdown.length : lineEnd);
+  if (before.trim() === "" && after.trim() === "") return { start, end, insert: section };
+  // The spaces between the embed and the text either side go with it: that text is ended, or begun, by the blank line.
+  const from = before.trim() === "" ? start : lineStart + before.trimEnd().length;
+  const to = after.trim() === "" ? end : end + (after.length - after.trimStart().length);
+  return { start: from, end: to, insert: `${before.trim() === "" ? "" : "\n\n"}${section}${after.trim() === "" ? "" : "\n\n"}` };
 }
 
 /**

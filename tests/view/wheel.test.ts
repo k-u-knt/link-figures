@@ -48,3 +48,17 @@ describe("scrollsUnderWheel", () => {
     expect(scrollsUnderWheel(null, stage, 0, 30)).toBe(false);
   });
 });
+
+test("an element of another window (a popout), with that window's own HTMLElement, is found too", () => {
+  class PopoutHTMLElement {}
+  const popout = { HTMLElement: PopoutHTMLElement, getComputedStyle: () => ({ overflowX: "", overflowY: "" }) };
+  const area = Object.assign(Object.create(PopoutHTMLElement.prototype), {
+    tagName: "TEXTAREA",
+    ownerDocument: { defaultView: popout },
+    style: { overflow: "" },
+    parentElement: null,
+    ...{ scrollTop: 0, scrollHeight: 500, clientHeight: 100, scrollLeft: 0, scrollWidth: 100, clientWidth: 100 },
+  });
+  expect(area instanceof HTMLElement).toBe(false);
+  expect(scrollsUnderWheel(area, document.createElement("div"), 0, 30)).toBe(true);
+});

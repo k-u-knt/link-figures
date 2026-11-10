@@ -4,7 +4,7 @@
  * overflow is `auto` or `scroll`) and has room left in the wheel's direction. At its end the wheel goes to the canvas.
  */
 export function scrollsUnderWheel(target: EventTarget | null, stage: HTMLElement, dx: number, dy: number): boolean {
-  let el = target instanceof HTMLElement ? target : null;
+  let el = isElement(target) ? target : null;
   while (el && el !== stage) {
     if (scrolls(el) && hasRoom(el, dx, dy)) return true;
     el = el.parentElement;
@@ -24,4 +24,13 @@ function hasRoom(el: HTMLElement, dx: number, dy: number): boolean {
   const right = dx > 0 && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
   const left = dx < 0 && el.scrollLeft > 0;
   return down || up || right || left;
+}
+
+/**
+ * Whether `target` is an HTML element of whichever window it belongs to: a popout window has its own `HTMLElement`, so
+ * `instanceof` against this window's would miss the card editor there.
+ */
+function isElement(target: EventTarget | null): target is HTMLElement {
+  const view = (target as Node | null)?.ownerDocument?.defaultView as (Window & typeof globalThis) | null | undefined;
+  return !!view && target instanceof view.HTMLElement;
 }

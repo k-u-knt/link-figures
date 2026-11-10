@@ -23,17 +23,66 @@ function namesOf(oldPath: string): Set<string> {
   return names;
 }
 
+/** The folder of a vault path ("" at the root). */
+const folderOf = (path: string): string => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+
+/** `link` (`./x`, `../x`) joined to `folder` with its `.` and `..` parts resolved; null when it climbs above the vault. */
+function joinRelative(folder: string, link: string): string | null {
+  const parts = folder === "" ? [] : folder.split("/");
+  for (const part of link.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else parts.push(part);
+  }
+  return parts.join("/");
+}
+
 /**
- * The rename of the file at `oldPath`, as the figure at `figurePath` sees it once the file has its new name: a link
- * target that finds a file now (`resolveNow`) leads there, and one that finds none but named the file before (one of
- * its names, see `namesOf`) led to `oldPath`; `linktext` is what such links are written as now.
+ * Which of two files a link that names both by name led to, as Obsidian picks: the one in the figure's own folder, else
+ * the one with the shorter path, else `a` (the renamed file, which the link was written for).
  */
-export function linkRenameFor(oldPath: string, figurePath: string, linktext: string, resolveNow: (link: string, fromPath: string) => string | null): LinkRename {
+function pick(a: string, b: string, figureFolder: string): string {
+  const here = (path: string) => folderOf(path) === figureFolder;
+  if (here(a) !== here(b)) return here(a) ? a : b;
+  const depth = (path: string) => path.split("/").length;
+  return depth(b) < depth(a) ? b : a;
+}
+
+/**
+ * The rename of the file at `oldPath` (now at `newPath`), as the figure at `figurePath` sees it once the file has its
+ * new name; `linktext` is what links to it are written as now. `resolve` answers what a link target led to before the
+ * rename, as Obsidian resolved it then, with the old file still there:
+ * - a relative target (`./`, `../`) is joined to the figure's folder, and is the old file when it names its path;
+ * - a target that is one of the old file's names (`namesOf`) led to it, unless another file it finds now (`resolveNow`)
+ *   would have been picked over it (`pick`: one beside the figure, or with a shorter path); a target that finds the
+ *   renamed file itself (a folder move) leads there, needing no rename;
+ * - any other target leads where it finds now.
+ */
+export function linkRenameFor(
+  oldPath: string,
+  newPath: string,
+  figurePath: string,
+  linktext: string,
+  resolveNow: (link: string, fromPath: string) => string | null,
+): LinkRename {
   const names = namesOf(oldPath);
+  const folder = folderOf(figurePath);
+  const old = oldPath.toLowerCase();
   return {
     oldPath,
     linktext,
-    resolve: (target) => resolveNow(target, figurePath) ?? (names.has(target.toLowerCase()) ? oldPath : null),
+    resolve: (target) => {
+      if (target.startsWith("./") || target.startsWith("../")) {
+        const joined = joinRelative(folder, target)?.toLowerCase();
+        if (joined === old || joined + ".md" === old) return oldPath;
+        return resolveNow(target, figurePath);
+      }
+      const now = resolveNow(target, figurePath);
+      if (!names.has(target.toLowerCase()) || now === newPath) return now;
+      return now === null ? oldPath : pick(oldPath, now, folder);
+    },
   };
 }
 
@@ -47,7 +96,8 @@ function renamedNode(registries: Registries, unreadable: ReadonlySet<NodeId> | u
  * (`DocumentStore.rewriteNodes`), with no undo step of its own. True when the document changed, for the view to save.
  */
 export function renameLinksInStore(store: DocumentStore, registries: Registries, rename: LinkRename): boolean {
-  return store.rewriteNodes(renamedNode(registries, store.unreadable, rename));
+  // Only a text that holds a link can hold one to the file: what history holds of other fields is not replayed.
+  return store.rewriteNodes(renamedNode(registries, store.unreadable, rename), (value) => typeof value === "string" && value.includes("[["));
 }
 
 /**
@@ -118,7 +168,7 @@ export async function renameLinksInFigures(host: CardRenameHost, oldPath: string
   for (const path of host.figurePaths()) {
     if (path === newPath) continue;
     try {
-      const rename = linkRenameFor(oldPath, path, host.linktext(newPath, path), host.resolve);
+      const rename = linkRenameFor(oldPath, newPath, path, host.linktext(newPath, path), host.resolve);
       const open = host.openFigure(path);
       if (open === "held") continue;
       if (open) {

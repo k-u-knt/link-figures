@@ -53,13 +53,14 @@ export function isEditable(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a press on `target` is the target's own, not the stage's: a node's link badge, or a link in what a node
- * renders whose links are live (`LIVE_LINKS`, a card's text), which opens on its click. Capturing the pointer would
+ * Whether a press on `target` is the target's own, not the stage's: a node's link badge, or a link or an embed's open
+ * icon (`.markdown-embed-link`) in what a node renders whose links are live (`LIVE_LINKS`, a card's text), which opens
+ * on its click. Capturing the pointer would
  * send that click to the stage.
  */
 export function isOwnClick(target: EventTarget | null): boolean {
   const el = target as Element | null;
-  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a`) !== null;
+  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a, .${LIVE_LINKS} .markdown-embed-link`) !== null;
 }
 
 /** What a press turns into once it has travelled far enough. A `move` that has nothing to move becomes a marquee: see `begin`. */

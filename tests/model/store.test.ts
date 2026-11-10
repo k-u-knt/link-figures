@@ -576,3 +576,25 @@ describe("revertMerge", () => {
     expect(s.canRedo()).toBe(true);
   });
 });
+
+describe("rewriteNodes", () => {
+  test("a rewrite that changes nothing is found by a pre-scan, without replaying history", async () => {
+    const { createFigureStore } = await import("../../src/model/normalise");
+    const { createDocument, shapeNodeDefaults } = await import("../../src/model/defaults");
+    const { createRegistries } = await import("../../src/registry");
+    const doc = createDocument("a4-portrait");
+    doc.nodes.push({ ...shapeNodeDefaults(doc.pages[0], { id: "s", x: 0, y: 0, width: 10, height: 10 }, []), text: "plain" } as never);
+    let t = 0;
+    const store = createFigureStore(doc, createRegistries(), () => (t += 10_000));
+    store.commit("edit", (d) => void ((d.nodes[0] as unknown as { text: string }).text = "plainer"));
+    const rewrite = vi.fn((node: import("../../src/model/types").Node) => node);
+    expect(store.rewriteNodes(rewrite, (value) => typeof value === "string" && value.includes("[["))).toBe(false);
+    // The document's nodes only: the field patches in history are judged by the pre-scan, not replayed.
+    expect(rewrite).toHaveBeenCalledTimes(1);
+    // A field value the pre-scan cannot rule out is replayed.
+    store.commit("edit", (d) => void ((d.nodes[0] as unknown as { text: string }).text = "[[x]]"));
+    rewrite.mockClear();
+    store.rewriteNodes(rewrite, (value) => typeof value === "string" && value.includes("[["));
+    expect(rewrite.mock.calls.length).toBeGreaterThan(1);
+  });
+});

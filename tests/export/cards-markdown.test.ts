@@ -360,12 +360,18 @@ describe("links and embeds in a text card", () => {
     expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe(
       "Figure 1.\n\n## Fig 1\n\nPanel **A** ![](<Fig - Page 1 cards/plot.png>) and ![[Inner]]\n\n`![[Legend]]` stays\n",
     );
-    expect(out.warnings).toEqual(['"c": the embed "Inner" is not an image; its link is kept']);
+    // The embed one level down is kept, said once (by the expansion, not again as "not an image").
+    expect(out.warnings).toEqual(['"c": the embed "Inner" inside "Legend#Fig 1" is not expanded (one level only); its embed is kept']);
     // The expansion alone: one level, and a missing section keeps its embed.
     const { access: a } = access(files);
     const readNote = (file: string, subpath: string) => readNoteSection(a, file, subpath, "Figs/Fig.lnkfig.md");
-    const once = await expandEmbeds("![[Inner]] and ![[Legend#Fig 9]]", readNote);
+    const resolve = (link: string, fromPath: string) => a.resolveLink(link, fromPath);
+    const once = await expandEmbeds("![[Inner]] and ![[Legend#Fig 9]]", readNote, { resolve, fromPath: "Figs/Fig.lnkfig.md" });
     expect(once.markdown).toBe("Inner text ![[Notes/Legend#Fig 1]] and ![[Legend#Fig 9]]");
+    expect(once.warnings).toEqual([
+      'the embed "Notes/Legend#Fig 1" inside "Inner" is not expanded (one level only); its embed is kept',
+      'the section "Legend#Fig 9" was not found; its embed is kept',
+    ]);
   });
 
   test("`[[link|shown]]` exports `shown`", async () => {
@@ -384,5 +390,16 @@ describe("links and embeds in a text card", () => {
     const texts = cardTextSource({ doc, registries: registries(), figurePath: "Figs/Fig.lnkfig.md", access: a }, []);
     const [only] = await texts("pg-1");
     expect(markdownToPlainText(only.markdown)).toBe("Legend:\n\nFig 1\n\nPanel A: cortex.");
+  });
+});
+
+describe("embeds that are kept", () => {
+  test('a note found without its section: `the section "X#h" was not found; its embed is kept`, said once', async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "Before\n\n![[Legend#Fig 9]]\n\n![[Nowhere]]" });
+    tie(doc, c, doc.pages[0]);
+    const { vault, out } = await exportCards(doc);
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe("Before\n\n![[Legend#Fig 9]]\n\n![[Nowhere]]\n");
+    expect(out.warnings).toEqual(['"c": the section "Legend#Fig 9" was not found; its embed is kept', '"c": the note "Nowhere" was not found; its embed is kept']);
   });
 });

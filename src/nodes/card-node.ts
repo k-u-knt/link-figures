@@ -77,7 +77,8 @@ class CardNodeRenderer implements NodeRenderer {
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
     // A link in what the card shows opens in a new tab beside the figure (the pointer controller leaves its press alone).
-    for (const type of ["click", "auxclick"] as const) this.body.addEventListener(type, (ev) => void openCardLink(ev, this.ctx));
+    // In the capture phase: before Obsidian's own handlers in a rendered embed, so a link opens once (`openCardLink`).
+    for (const type of ["click", "auxclick"] as const) this.body.addEventListener(type, (ev) => void openCardLink(ev, this.ctx), { capture: true });
     this.update(node);
   }
 

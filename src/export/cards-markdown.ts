@@ -77,29 +77,65 @@ export async function readNoteSection(access: VaultAccess, file: string, subpath
   return { markdown: markdown.trim(), path: target.path };
 }
 
+/** Whether a link names a note by its form: no extension, `.md`, or a dot that starts no extension ("v1.2 results"). */
+export function isNoteLink(link: string): boolean {
+  const name = link.slice(link.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return true;
+  const ext = name.slice(dot + 1);
+  return ext.toLowerCase() === "md" || !/^[a-z0-9]{1,8}$/i.test(ext);
+}
+
+/** What `expandEmbeds` reads and resolves links with. */
+export interface ExpandOptions {
+  /** The vault path a link finds from `fromPath` (`VaultAccess.resolveLink`). Without it, sections' images keep their links and no warning is given. */
+  resolve?(link: string, fromPath: string): FileRef | null;
+  /** Where the Markdown's own links resolve from: the figure. */
+  fromPath?: string;
+}
+
 /**
  * `markdown` with each embed of a note section in it (`![[note]]`, `![[note#heading]]`, `![[note#^block]]`, outside
  * code) replaced by that section's Markdown (`readNote`, which gives null for what is not a note section that can be
- * found: an image, a missing note; such an embed is kept as it is). One level deep: an embed inside an embedded section
- * is left as it is, so there is no recursion and no cycle. With `resolve`, the other embeds a section holds (images)
- * are written with their full vault path, so they resolve from anywhere, not only from their note. `notes` are the
- * notes read.
+ * found). One level deep: an embed inside an embedded section is left as it is, so there is no recursion and no cycle.
+ * With `options.resolve`, the other embeds a section holds (images) are written with their full vault path, so they
+ * resolve from anywhere, not only from their note; and each note embed that is kept says so in `warnings`: a note found
+ * without the section (`the section "X#h" was not found; its embed is kept`), a note not found, and a note embed one
+ * level down. `notes` are the notes read.
  */
 export async function expandEmbeds(
   markdown: string,
   readNote: (file: string, subpath: string) => Promise<NoteSection | null>,
-  resolve?: (link: string, fromPath: string) => FileRef | null,
+  options: ExpandOptions = {},
 ): Promise<{ markdown: string; warnings: string[]; notes: string[] }> {
+  const { resolve, fromPath = "" } = options;
   const edits: TextEdit[] = [];
   const notes: string[] = [];
+  const warnings: string[] = [];
   for (const link of cardLinks(markdown)) {
     if (!link.embed || link.target === "") continue;
+    const shown = `${link.target}${link.subpath}`;
     const section = await readNote(link.target, link.subpath);
-    if (!section) continue;
+    if (!section) {
+      if (!resolve) continue;
+      const file = resolve(link.target, fromPath);
+      if (file?.extension.toLowerCase() === "md") warnings.push(`the section "${shown}" was not found; its embed is kept`);
+      else if (!file && isNoteLink(link.target)) warnings.push(`the note "${link.target}" was not found; its embed is kept`);
+      continue;
+    }
     if (!notes.includes(section.path)) notes.push(section.path);
+    if (resolve) {
+      for (const inner of cardLinks(section.markdown)) {
+        if (!inner.embed || inner.target === "") continue;
+        const file = resolve(inner.target, section.path);
+        if (file ? file.extension.toLowerCase() === "md" : isNoteLink(inner.target)) {
+          warnings.push(`the embed "${inner.target}${inner.subpath}" inside "${shown}" is not expanded (one level only); its embed is kept`);
+        }
+      }
+    }
     edits.push({ start: link.start, end: link.end, insert: resolve ? rebaseEmbeds(section.markdown, section.path, resolve) : section.markdown });
   }
-  return { markdown: applyEdits(markdown, edits), warnings: [], notes };
+  return { markdown: applyEdits(markdown, edits), warnings, notes };
 }
 
 /**
@@ -132,21 +168,24 @@ function rebaseEmbeds(markdown: string, fromPath: string, resolve: (link: string
 /**
  * A card's Markdown as it is exported: a text card's text, its note embeds expanded one level (`expandEmbeds`) and its
  * wikilinks written as the text they show (`linksAsText`); or a note card's section (`deps.readNote`), as it is.
- * `sourcePath` is the note a note card's links resolve from (null for a text card: the figure's, its sections' images
- * written with full paths by `deps.resolve`). `notes` are the notes read. A note card whose note or section cannot be
+ * `sourcePath` is the note a note card's links resolve from (null for a text card: the figure's, `deps.figurePath`, its
+ * sections' images written with full paths by `deps.resolve`). `notes` are the notes read; `quietNotes`, the note
+ * embeds kept were reported in `warnings` already. A note card whose note or section cannot be
  * found gives no Markdown, and a warning; an empty card gives none, silently.
  */
 export async function cardMarkdown(
   card: CardNode,
-  deps: { readNote(file: string, subpath: string): Promise<NoteSection | null>; resolve?(link: string, fromPath: string): FileRef | null },
-): Promise<{ markdown: string | null; sourcePath: string | null; warnings: string[]; notes?: string[] }> {
+  deps: { readNote(file: string, subpath: string): Promise<NoteSection | null>; resolve?(link: string, fromPath: string): FileRef | null; figurePath?: string },
+): Promise<{ markdown: string | null; sourcePath: string | null; warnings: string[]; notes?: string[]; quietNotes?: boolean }> {
   const link = linkOf(card);
   if (!link) {
     const text = (card.text ?? "").trim();
     if (text === "") return { markdown: null, sourcePath: null, warnings: [] };
-    const expanded = await expandEmbeds(text, (file, subpath) => deps.readNote(file, subpath), deps.resolve);
+    const expanded = await expandEmbeds(text, (file, subpath) => deps.readNote(file, subpath), { resolve: deps.resolve, fromPath: deps.figurePath });
     const markdown = linksAsText(expanded.markdown).trim();
-    return { markdown: markdown === "" ? null : markdown, sourcePath: null, warnings: expanded.warnings, ...(expanded.notes.length > 0 ? { notes: expanded.notes } : {}) };
+    const warnings = expanded.warnings.map((warning) => `${cardLabel(card)}: ${warning}`);
+    // The note embeds kept have been reported here: writing the images says nothing more of them (`quietNotes`).
+    return { markdown: markdown === "" ? null : markdown, sourcePath: null, warnings, ...(expanded.notes.length > 0 ? { notes: expanded.notes } : {}), ...(deps.resolve ? { quietNotes: true } : {}) };
   }
   const section = link.file === "" ? null : await deps.readNote(link.file, link.subpath);
   if (!section) {
@@ -181,7 +220,7 @@ function decoded(link: string): string {
  */
 export async function rewriteImages(
   markdown: string,
-  deps: { label: string; resolve(link: string): FileRef | null; copy(file: FileRef): Promise<string | null> },
+  deps: { label: string; resolve(link: string): FileRef | null; copy(file: FileRef): Promise<string | null>; quietNotes?: boolean },
 ): Promise<{ markdown: string; warnings: string[] }> {
   const warnings: string[] = [];
   const parts: string[] = [];
@@ -210,12 +249,12 @@ export async function rewriteImages(
     }
     const file = link === "" ? null : deps.resolve(link);
     if (!file) {
-      warnings.push(`${deps.label}: the image "${link}" was not found; its link is kept`);
+      if (!(deps.quietNotes && m[1] !== undefined && isNoteLink(link))) warnings.push(`${deps.label}: the image "${link}" was not found; its link is kept`);
       parts.push(m[0]);
       continue;
     }
     if (file.extension.toLowerCase() === "md") {
-      warnings.push(`${deps.label}: the embed "${link}" is not an image; its link is kept`);
+      if (!deps.quietNotes) warnings.push(`${deps.label}: the embed "${link}" is not an image; its link is kept`);
       parts.push(m[0]);
       continue;
     }
@@ -262,6 +301,8 @@ export interface CardText {
   sourcePath: string;
   /** The notes a text card's embeds were read from: sources, never written over. */
   notes?: string[];
+  /** The note embeds its Markdown keeps were reported already (see `rewriteImages`' `quietNotes`). */
+  quietNotes?: boolean;
 }
 
 /** What `cardTextSource` reads cards with. */
@@ -286,9 +327,10 @@ export function cardTextSource(ctx: CardTextContext, warnings: string[]): (page:
     if (!text) {
       const readNote = (file: string, subpath: string) => (ctx.access ? readNoteSection(ctx.access, file, subpath, ctx.figurePath) : Promise.resolve(null));
       const resolve = (link: string, fromPath: string) => ctx.access?.resolveLink(link, fromPath) ?? null;
-      text = cardMarkdown(card, { readNote, resolve }).then((out) => {
+      text = cardMarkdown(card, { readNote, resolve, figurePath: ctx.figurePath }).then((out) => {
         warnings.push(...out.warnings);
-        return out.markdown === null ? null : { card, markdown: out.markdown, sourcePath: out.sourcePath ?? ctx.figurePath, ...(out.notes ? { notes: out.notes } : {}) };
+        if (out.markdown === null) return null;
+        return { card, markdown: out.markdown, sourcePath: out.sourcePath ?? ctx.figurePath, ...(out.notes ? { notes: out.notes } : {}), ...(out.quietNotes ? { quietNotes: true } : {}) };
       });
       byCard.set(card.id, text);
     }
@@ -363,6 +405,7 @@ export async function writeCardFiles(
         label: cardLabel(text.card),
         resolve: (link) => deps.access?.resolveLink(link, text.sourcePath) ?? null,
         copy,
+        ...(text.quietNotes ? { quietNotes: true } : {}),
       });
       warnings.push(...rewritten.warnings);
       parts.push(rewritten.markdown);

@@ -36,19 +36,22 @@ export function renderCard(el: HTMLElement, node: CardNode, ctx: RenderContext):
 }
 
 /**
- * A click (`click`, or a middle-click's `auxclick`) in a card's body: on a link Obsidian's renderer made of an internal
- * link (`a.internal-link`, its target in `data-href`), the target is opened in a new tab beside the figure, whatever
- * modifier is held, and nothing else happens. An external link is left to Obsidian (it opens in the browser). True when
- * the click was a link's.
+ * A click (`click`, or a middle-click's `auxclick`) in a card's body, taken in the capture phase, before any handler
+ * inside the body (Obsidian's own, in a rendered embed): on a link Obsidian's renderer made of an internal link
+ * (`a.internal-link`, its target in `data-href`), the target is opened once, in a new tab beside the figure, whatever
+ * modifier is held, and the click goes no further. A click a handler further out already took (`defaultPrevented`) is
+ * left alone, so a link never opens twice. An external link, and anything else (an embed's open icon), are left to
+ * Obsidian. True when the click was opened here.
  */
 export function openCardLink(ev: MouseEvent, ctx: Pick<RenderContext, "openLink">): boolean {
+  if (ev.defaultPrevented) return false;
   if (ev.type === "auxclick" && ev.button !== 1) return false;
   const target = ev.target as Element | null;
   const link = typeof target?.closest === "function" ? target.closest<HTMLAnchorElement>("a.internal-link") : null;
   if (!link) return false;
   const linktext = link.getAttribute("data-href") ?? link.getAttribute("href") ?? "";
   ev.preventDefault();
-  ev.stopPropagation();
+  ev.stopImmediatePropagation();
   if (linktext !== "") ctx.openLink(linktext, ev, "tab");
   return true;
 }

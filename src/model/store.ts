@@ -200,9 +200,35 @@ export class DocumentStore {
    * steps: the node values its patches carry are rewritten, and a patch of one field of a node (`["nodes", i, key]`) takes
    * that field from the node it applies to, rewritten, which history is replayed to find. The document itself is swapped
    * in with `replace` (`keepHistory`), which tells the subscribers; nothing happens when no node of it changes. True when
-   * the document changed.
+   * the document changed. History is replayed only when a cheap pre-scan finds it may change (`historyMayChange`):
+   * `touches` tells whether a field value may be rewritten (by default, any may).
    */
-  rewriteNodes(rewrite: (node: Node) => Node): boolean {
+  rewriteNodes(rewrite: (node: Node) => Node, touches: (value: unknown) => boolean = () => true): boolean {
+    const doc = this.current;
+    const nodes = doc.nodes.map(rewrite);
+    if (this.historyMayChange(rewrite, touches)) this.rewriteHistory(rewrite);
+    if (nodes.every((n, i) => n === doc.nodes[i])) return false;
+    this.replace({ ...doc, nodes }, "links", { keepHistory: true });
+    return true;
+  }
+
+  /**
+   * The cheap pre-scan of `rewriteNodes`, which replays nothing: whether a node value history carries is changed by
+   * `rewrite`, or a field value it carries (`["nodes", i, key]`, whose node is known only by replaying) may be, as
+   * `touches` cannot rule out.
+   */
+  private historyMayChange(rewrite: (node: Node) => Node, touches: (value: unknown) => boolean): boolean {
+    const changes = (patch: Patch): boolean => {
+      if (patch.path[0] !== "nodes" || !("value" in patch)) return false;
+      if (patch.path.length === 1) return Array.isArray(patch.value) && (patch.value as unknown[]).some((n) => isNodeValue(n) && rewrite(n) !== n);
+      if (patch.path.length === 2) return isNodeValue(patch.value) && rewrite(patch.value) !== patch.value;
+      return patch.path.length === 3 && touches(patch.value);
+    };
+    return [...this.undoStack, ...this.redoStack].some((entry) => entry.patches.some(changes) || entry.inversePatches.some(changes));
+  }
+
+  /** `rewriteNodes`' rewrite of history, which is replayed from the document to find the node of each field patch. */
+  private rewriteHistory(rewrite: (node: Node) => Node): void {
     let state = this.current;
     for (let i = this.undoStack.length - 1; i >= 0; i--) {
       const entry = this.undoStack[i];
@@ -219,11 +245,6 @@ export class DocumentStore {
       entry.inversePatches = rewritePatches(entry.inversePatches, forward.state, rewrite).patches;
       state = forward.state;
     }
-    const doc = this.current;
-    const nodes = doc.nodes.map(rewrite);
-    if (nodes.every((n, i) => n === doc.nodes[i])) return false;
-    this.replace({ ...doc, nodes }, "links", { keepHistory: true });
-    return true;
   }
 
   /**

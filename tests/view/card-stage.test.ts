@@ -566,6 +566,51 @@ describe("links in a card", () => {
     expect(el.querySelector("textarea")).toBeNull();
   });
 
+  test("a link opens once: Obsidian's own handler inside the card never also runs, and a click it already took is left to it", () => {
+    const s = setup();
+    render.mockImplementationOnce(async (_app, _markdown, el) => {
+      el.innerHTML = '<div class="markdown-embed"><div class="markdown-embed-link">open</div><a class="internal-link" data-href="Notes/a">a</a></div>';
+    });
+    const { el } = mountCard(s, "C");
+    const ctx = (s as unknown as { lastCtx: { openLink: ReturnType<typeof vi.fn> } }).lastCtx;
+    const link = el.querySelector("a")!;
+    // Obsidian's handler on the embed, in the bubbling phase.
+    const inner = vi.fn((ev: Event) => ev.preventDefault());
+    el.querySelector(".markdown-embed")!.addEventListener("click", inner);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ctx.openLink).toHaveBeenCalledTimes(1);
+    expect(inner).not.toHaveBeenCalled();
+
+    // A click a handler further out already took (default prevented) is not opened again.
+    const outer = (ev: Event) => ev.preventDefault();
+    document.addEventListener("click", outer, { capture: true });
+    try {
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    } finally {
+      document.removeEventListener("click", outer, { capture: true });
+    }
+    expect(ctx.openLink).toHaveBeenCalledTimes(1);
+    expect(inner).toHaveBeenCalledTimes(1);
+  });
+
+  test("the embed's open icon takes its own press: the stage does not select the card", () => {
+    const s = setup();
+    render.mockImplementationOnce(async (_app, _markdown, el) => {
+      el.innerHTML = '<div class="markdown-embed"><div class="markdown-embed-link"><svg></svg></div>Text</div>';
+    });
+    const { el } = mountCard(s, "C");
+    const icon = el.querySelector(".markdown-embed-link svg")!;
+    const card = nodeWorldRect(s.store.doc, s.node("C"));
+    s.fire("pointerdown", { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, clientX: card.x + 5, clientY: card.y + 5, target: icon, preventDefault: vi.fn() });
+    s.fire("pointerup", { pointerId: 1, isPrimary: true, button: 0, clientX: card.x + 5, clientY: card.y + 5, target: icon });
+    expect(s.view.selection.ids).toEqual([]);
+    // Elsewhere on the embed, a press selects the card as before.
+    const text = el.querySelector(".markdown-embed")!;
+    s.fire("pointerdown", { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, clientX: card.x + 5, clientY: card.y + 5, target: text, preventDefault: vi.fn() });
+    s.fire("pointerup", { pointerId: 1, isPrimary: true, button: 0, clientX: card.x + 5, clientY: card.y + 5, target: text });
+    expect(s.view.selection.ids).toEqual(["C"]);
+  });
+
   test("Open source opens the first link; it is disabled with none", async () => {
     const s = setup();
     await s.call("node.update", { id: "C", patch: { text: "`[[Not this]]` see [[Notes/b#^blk|b]] and ![[Notes/a#Legend]]" } });

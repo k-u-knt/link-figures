@@ -525,4 +525,24 @@ describe("card.convert", () => {
     await expect(call("card.convert", { id: "sh" })).rejects.toThrow(new CommandError('card.convert: "sh" is not a note card'));
     await expect(call("card.convert", { id: "nope" })).rejects.toThrow(new CommandError('card.convert: there is no node "nope"'));
   });
+
+  test("two `card.convert` within the merge window are two undo steps", () => {
+    const doc = figure(false, (d) =>
+      ["n1", "n2"].map((id, i) => {
+        const note = { ...cardNodeDefaults(d.pages[0], -300, i * 200), id, file: `Notes/${id}` } as Node;
+        delete (note as { text?: string }).text;
+        return note;
+      }),
+    );
+    const r = registries();
+    // A clock that never moves: every commit is within the merge window.
+    const store = createFigureStore(doc, r, () => 0);
+    const ctx: CommandContext = { app: {} as never, registries: r, view: null, store, selection: [], page: undefined };
+    const convert = r.commands.get("card.convert")!;
+    convert.run(ctx, { id: "n1" } as never);
+    convert.run(ctx, { id: "n2" } as never);
+    expect(store.undo()).toBe(true);
+    expect(store.doc.nodes.find((n) => n.id === "n1")).toMatchObject({ text: "![[Notes/n1]]" });
+    expect(store.doc.nodes.find((n) => n.id === "n2")).toMatchObject({ file: "Notes/n2" });
+  });
 });

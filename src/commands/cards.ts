@@ -64,7 +64,8 @@ export function convertCard(ctx: CommandContext, args: { id: string }): { id: No
     throw new CommandError(`${command}: "${args.id}" is not a note card`);
   }
   const text = embedText(card.file, card.subpath ?? "", (file) => ctx.linktext?.(file) ?? file);
-  ctx.store.commit(command, (draft) => {
+  // A label of its own: a commit merges into one of the same label just before it, and each convert is its own step.
+  ctx.store.commit(`${command}:${node.id}`, (draft) => {
     const target = draft.nodes.find((n) => n.id === node.id) as CardNode | undefined;
     if (!target) return;
     delete target.file;

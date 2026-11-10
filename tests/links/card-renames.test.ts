@@ -28,6 +28,7 @@ vi.mock("obsidian", () => ({
 }));
 
 const { cardNodeDefaults, cardNodeType } = await import("../../src/nodes/card-node");
+const { renameInCardText } = await import("../../src/model/card-links");
 const { followRenames, linkRenameFor, renameLinksInFigures, renameLinksInStore } = await import("../../src/links/card-renames");
 
 beforeAll(() => {
@@ -76,7 +77,7 @@ function figure(cards: Record<string, string | { file: string; subpath?: string 
 
 /** The vault after `Notes/Results.md` was renamed to `Notes/Final.md`: what a link finds now. */
 const resolveNow = (link: string) => (["Final", "Notes/Final", "Notes/Final.md", "Final.md"].includes(link) ? "Notes/Final.md" : link === "Other" ? "Other.md" : null);
-const RENAME = linkRenameFor("Notes/Results.md", "fig.lnkfig.md", "Final", resolveNow);
+const RENAME = linkRenameFor("Notes/Results.md", "Notes/Final.md", "fig.lnkfig.md", "Final", resolveNow);
 
 const text = (doc: Document, id: string) => (doc.nodes.find((n) => n.id === id) as CardNode | undefined)?.text;
 
@@ -161,6 +162,34 @@ describe("an open figure", () => {
     await Promise.all(pending);
     expect(commits).toEqual([]);
     expect(text(store.doc, "C")).toBe("[[Final]]");
+  });
+});
+
+describe("what a link led to before the rename", () => {
+  test("a relative link (`./`, `../`) is resolved against the figure's folder", () => {
+    const rename = linkRenameFor("Notes/Results.md", "Notes/Final.md", "Figs/sub/fig.lnkfig.md", "../../Notes/Final", () => null);
+    expect(rename.resolve("../../Notes/Results")).toBe("Notes/Results.md");
+    expect(rename.resolve("../../Notes/Results.md")).toBe("Notes/Results.md");
+    expect(rename.resolve("./../../Notes/Results")).toBe("Notes/Results.md");
+    expect(rename.resolve("../Notes/Results")).toBeNull();
+    const local = linkRenameFor("Figs/notes/a.md", "Figs/notes/b.md", "Figs/fig.lnkfig.md", "b", () => null);
+    expect(local.resolve("./notes/a")).toBe("Figs/notes/a.md");
+    expect(renameInCardText("See [[../../Notes/Results#h|x]]", rename.resolve, rename.oldPath, rename.linktext)).toBe("See [[../../Notes/Final#h|x]]");
+  });
+
+  test("a shortest-name link shadowed after the rename still counts as the renamed file's, as Obsidian resolved it before", () => {
+    // `a/foo.md` was renamed to `a/bar.md`; `b/foo.md` exists, so `foo` finds it now.
+    const now = (link: string) => (link === "foo" ? "b/foo.md" : link === "bar" ? "a/bar.md" : null);
+    // From a figure in `a/`, `foo` led to the file beside it.
+    expect(linkRenameFor("a/foo.md", "a/bar.md", "a/fig.lnkfig.md", "bar", now).resolve("foo")).toBe("a/foo.md");
+    // From a figure in `b/`, it led to `b/foo.md`, which is not renamed.
+    expect(linkRenameFor("a/foo.md", "a/bar.md", "b/fig.lnkfig.md", "bar", now).resolve("foo")).toBe("b/foo.md");
+    // From elsewhere: neither beside it, the one with the shorter path, the renamed file on a tie.
+    expect(linkRenameFor("a/foo.md", "a/bar.md", "fig.lnkfig.md", "bar", now).resolve("foo")).toBe("a/foo.md");
+    expect(linkRenameFor("x/y/foo.md", "x/y/bar.md", "fig.lnkfig.md", "bar", now).resolve("foo")).toBe("b/foo.md");
+    // A folder move whose name still finds the moved file needs no rename.
+    const moved = linkRenameFor("a/b/plot.png", "a/c/plot.png", "fig.lnkfig.md", "plot.png", (link) => (link === "plot.png" ? "a/c/plot.png" : null));
+    expect(moved.resolve("plot.png")).toBe("a/c/plot.png");
   });
 });
 

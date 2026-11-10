@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createPptxExporter } from "../../src/export/exporters/pptx";
 import { buildPptx } from "../../src/export/pptx/package";
 import { notesMasterXml, notesSlideXml } from "../../src/export/pptx/notes";
@@ -88,10 +89,16 @@ describe("pptx presenter notes", () => {
     for (const [name, xml] of parts) if (name.endsWith(".xml") || name.endsWith(".rels")) parseXml(xml);
   });
 
-  test("notes off: the package is byte-identical to before", async () => {
+  test("notes off: the cards are never asked for, and the package is byte-identical to the one built before notes existed (1a0bd61)", async () => {
     const doc = figure();
     const off = await run(doc, CARDS, {});
     expect(off.asked).toEqual([]);
+    // Pinned from the same figure exported at 1a0bd61 (before presenter notes), with `created` fixed at CREATED.
+    const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    expect(off.files.map((f) => [f.name, sha(f.bytes)])).toEqual([
+      ["Fig.pptx", "396bb6aa428dc8a29ba6b5e0c4fb978dcace65a656e5e18c25a1a8ba75f3707f"],
+      ["Fig (183×170 mm).pptx", "29189c1a8ed541af2c1d9b61576bdae73ba59eb4ded7147dcc47cf985c4c923f"],
+    ]);
     const plain = await createPptxExporter(backend, () => CREATED).run(
       { doc, pages: doc.pages, svgs: new Map(), assets: new Map(), registries: pptxRegistries(), warnings: [], baseName: "Fig", dpi: 150 },
       {},

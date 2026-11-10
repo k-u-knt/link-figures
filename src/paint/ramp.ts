@@ -51,7 +51,8 @@ export function rampKindName(paint: Paint, registries: PaintLookup): string {
 }
 
 /**
- * The paint `ramp` writes. One stop is a `solid`: its colour, and its opacity when under 1. Two or more are the paint
+ * The paint `ramp` writes. One stop is a `solid`: its colour, and its opacity when under 1 (or when `previous` is a
+ * solid that has one). Two or more are the paint
  * of the ramp's geometry, written by its registered kind (the first registered when it has none). `previous`, when it
  * is of the type written, keeps its other keys and their order.
  */
@@ -61,7 +62,9 @@ export function paintOfRamp(ramp: ColorRamp, previous: Paint | undefined, geomet
     const stop = stops[0] ?? { offset: 0, color: "#000000" };
     const paint: Paint = previous?.type === "solid" ? { ...previous, type: "solid", color: stop.color } : { type: "solid", color: stop.color };
     const opacity = num(stop.opacity, 1);
-    if (opacity < 1) paint.opacity = clamp01(opacity);
+    // A previous solid's opacity is written as 1, not dropped: `node.update` merges a paint of the same type key by
+    // key, so a key left out would keep its old value.
+    if (opacity < 1 || (previous?.type === "solid" && "opacity" in previous)) paint.opacity = clamp01(opacity);
     else delete paint.opacity;
     return paint;
   }

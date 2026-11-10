@@ -394,3 +394,21 @@ describe("the selected stop's row", () => {
     expect(opened).toBe(1);
   });
 });
+
+describe("writes that drop a key", () => {
+  test("a solid's opacity set back to 1 is written as 1, not left at its old value by node.update's merge", () => {
+    const t = setup({ type: "solid", color: "#ff0000", opacity: 0.5 });
+    const opacity = t.q<HTMLInputElement>('[data-key="fill.stop.opacity"]');
+    opacity.value = "1";
+    opacity.dispatchEvent(new t.window.Event("change") as never);
+    expect(t.fillNow()).toEqual({ type: "solid", color: "#ff0000", opacity: 1 });
+  });
+
+  test("a stop's opacity set back to 1 is kept as written", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000", opacity: 0.5 }, { offset: 1, color: "#ffffff" }] });
+    const opacity = t.q<HTMLInputElement>('[data-key="fill.stop.opacity"]');
+    opacity.value = "1";
+    opacity.dispatchEvent(new t.window.Event("change") as never);
+    expect((t.fillNow().stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000", opacity: 1 });
+  });
+});

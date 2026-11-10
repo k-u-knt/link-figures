@@ -61,6 +61,8 @@ describe("rampOf and paintOfRamp", () => {
     expect(write({ stops: [{ offset: 0.3, color: "#ff0000" }], geometry: { kind: "radial", cx: 0.5, cy: 0.5, r: 0.5 } })).toEqual({ type: "solid", color: "#ff0000" });
     expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 1 }], geometry: { kind: "linear", angle: 0 } })).toEqual({ type: "solid", color: "#ff0000" });
     expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 0.2 }], geometry: { kind: "linear", angle: 0 } })).toEqual({ type: "solid", color: "#ff0000", opacity: 0.2 });
+    // A previous solid's opacity is kept as a key (1), so that node.update's merge does not keep the old value.
+    expect(write({ stops: [{ offset: 0, color: "#ff0000", opacity: 1 }], geometry: { kind: "linear", angle: 0 } }, { type: "solid", color: "#ff0000", opacity: 0.5 })).toEqual({ type: "solid", color: "#ff0000", opacity: 1 });
     // A gradient's extra keys are not carried onto a solid.
     expect(write({ stops: [{ offset: 0, color: "#ff0000" }], geometry: { kind: "linear", angle: 0 } }, { type: "linear", angle: 0, stops: [], note: 1 })).toEqual({ type: "solid", color: "#ff0000" });
   });

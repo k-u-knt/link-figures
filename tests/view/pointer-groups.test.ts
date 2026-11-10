@@ -5,7 +5,8 @@ import { createFigureStore } from "../../src/model/normalise";
 import type { DocumentStore } from "../../src/model/store";
 import type { Document, Node, NodeId } from "../../src/model/types";
 import { groupNodeType } from "../../src/nodes/group-node";
-import { PointerController } from "../../src/view/pointer";
+import { isAddingToSelection, PointerController } from "../../src/view/pointer";
+import { Platform } from "obsidian";
 import { SelectionState } from "../../src/view/selection";
 import { Viewport } from "../../src/view/viewport";
 
@@ -142,6 +143,59 @@ const ON_C: [number, number] = [50, 120];
 const ON_X: [number, number] = [320, 320];
 const IN_H: [number, number] = [130, 80];
 const PAPER: [number, number] = [400, 600];
+
+describe("Cmd-click (Mac) and Ctrl-click (elsewhere) add to the selection, as Shift-click does", () => {
+  afterEach(() => {
+    Platform.isMacOS = false;
+  });
+
+  test("elsewhere, a Ctrl-click on x adds it to h, and a second takes it away", () => {
+    const { view, click } = setup(nested());
+    click(...ON_A);
+    click(...ON_X, { ctrlKey: true });
+    expect([...view.selection.ids].sort()).toEqual(["h", "x"]);
+    click(...ON_X, { ctrlKey: true });
+    expect(view.selection.ids).toEqual(["h"]);
+  });
+
+  test("on a Mac, a Cmd-click on x adds it to h", () => {
+    Platform.isMacOS = true;
+    const { view, click } = setup(nested());
+    click(...ON_A);
+    click(...ON_X, { metaKey: true });
+    expect([...view.selection.ids].sort()).toEqual(["h", "x"]);
+  });
+
+  test("on a Mac, Cmd held while sweeping empty paper keeps what was selected", () => {
+    Platform.isMacOS = true;
+    const { view, click, pointer } = setup(nested());
+    click(...ON_X);
+    pointer("pointerdown", ...PAPER, { metaKey: true });
+    pointer("pointermove", 450, 650, { metaKey: true });
+    pointer("pointerup", 450, 650, { metaKey: true });
+    expect(view.selection.ids).toEqual(["x"]);
+  });
+
+  test("elsewhere, Cmd (the Windows key) does not add: a click selects x alone", () => {
+    const { view, click } = setup(nested());
+    click(...ON_A);
+    click(...ON_X, { metaKey: true });
+    expect(view.selection.ids).toEqual(["x"]);
+  });
+});
+
+describe("isAddingToSelection", () => {
+  test("Shift on every platform; Cmd on a Mac; Ctrl elsewhere", () => {
+    const none = { shiftKey: false, metaKey: false, ctrlKey: false };
+    expect(isAddingToSelection({ ...none, shiftKey: true }, false)).toBe(true);
+    expect(isAddingToSelection({ ...none, shiftKey: true }, true)).toBe(true);
+    expect(isAddingToSelection({ ...none, metaKey: true }, true)).toBe(true);
+    expect(isAddingToSelection({ ...none, ctrlKey: true }, true)).toBe(false);
+    expect(isAddingToSelection({ ...none, ctrlKey: true }, false)).toBe(true);
+    expect(isAddingToSelection({ ...none, metaKey: true }, false)).toBe(false);
+    expect(isAddingToSelection(none, false)).toBe(false);
+  });
+});
 
 describe("clicks select whole groups", () => {
   test("a click on a member of g, which is in h, selects h", () => {

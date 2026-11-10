@@ -36,6 +36,15 @@ function isControlClick(ev: PointerEvent): boolean {
   return ev.ctrlKey && ev.button === 0 && Platform.isMacOS;
 }
 
+/**
+ * Whether a press adds to the selection (or takes the pressed item from it) instead of starting afresh: Shift on every
+ * platform, and the platform's command key as well, Cmd on a Mac and Ctrl elsewhere. (A Mac's Control-click is a
+ * right-click, see `isControlClick`; Windows' Win key is not taken.)
+ */
+export function isAddingToSelection(ev: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }, mac: boolean = Platform.isMacOS): boolean {
+  return ev.shiftKey || (mac ? ev.metaKey : ev.ctrlKey);
+}
+
 /** Text being typed into must keep its keys. */
 export function isEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -323,6 +332,7 @@ export class PointerController {
     }
 
     const selectedPage = this.selectionPage(doc);
+    const adding = isAddingToSelection(ev);
     // Nodes are not clipped to their page, so what is under the pointer is looked for among every page's nodes. What is
     // hit is a drawn node; the press acts on the unit it is part of at the entered level (a whole group at top level).
     const drawn = hitTest(this.itemsOnAllPages(doc), world);
@@ -339,7 +349,7 @@ export class PointerController {
       // The page that counts for a selection is the node's own, wherever on the canvas it has ended up.
       const hitPage = doc.nodes.find((n) => n.id === hit)?.page;
       if (selectedPage !== null && selectedPage !== hitPage) selection.clear();
-      if (ev.shiftKey) {
+      if (adding) {
         selection.toggle(hit);
         if (selection.has(hit)) this.press(ev, world, { kind: "move" }, null);
         return;
@@ -352,7 +362,7 @@ export class PointerController {
       return;
     }
 
-    // Empty paper (or no paper): shift keeps what is selected on this page, anything else starts afresh. Inside the
+    // Empty paper (or no paper): shift (or Cmd / Ctrl, see `isAddingToSelection`) keeps what is selected on this page, anything else starts afresh. Inside the
     // entered group's box a sweep selects among its children, and a click leaves it (see `onPointerUp`); anywhere else
     // the press leaves it at once.
     const page = pageAt(doc, world);
@@ -362,9 +372,9 @@ export class PointerController {
       this.setEntered(null);
       entered = null;
       // What shift keeps selected is then taken as the top-level units it is part of, so as not to mix levels.
-      if (ev.shiftKey) selection.set(unitsOf(doc, selection.ids, null));
+      if (adding) selection.set(unitsOf(doc, selection.ids, null));
     }
-    if (!ev.shiftKey || page === null || page.id !== selectedPage) selection.clear();
+    if (!adding || page === null || page.id !== selectedPage) selection.clear();
     if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids], within: entered, leaveOnClick: inside }, null);
   }
 

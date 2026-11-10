@@ -620,7 +620,8 @@
   border: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
   border-radius: var(--radius-m, 8px);
   background-color: var(--background-primary);
-  overflow: hidden;
+  /* Not clipped, so the label above a note card shows; the body clips what the card shows. */
+  overflow: visible;
   color: var(--lf-ui-normal);
   --text-normal: var(--lf-ui-normal);
   --text-muted: var(--lf-ui-muted);
@@ -636,6 +637,36 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
+  border-radius: inherit;
+}
+
+/* The label above a note card (see `view/card-label.ts`), as Canvas draws it above a file card: grey interface text at
+   the card's top left. It is in the zoomed viewport, so it is scaled back by --lf-zoom to keep its size on screen; its
+   width is the card's on screen. It is never exported: exports draw from the model, not from the stage. */
+.lf-card-label {
+  position: absolute;
+  left: 0;
+  top: calc(-1 * var(--size-4-1, 4px) / var(--lf-zoom, 1));
+  transform: translateY(-100%) scale(calc(1 / var(--lf-zoom, 1)));
+  transform-origin: bottom left;
+  max-width: calc(100% * var(--lf-zoom, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+  color: var(--lf-ui-faint, var(--text-faint));
+  cursor: pointer;
+  user-select: none;
+}
+
+.lf-card-label:hover {
+  color: var(--lf-ui-muted, var(--text-muted));
+}
+
+/* A note that is not in the vault: its link as stored, greyed out further. */
+.lf-card-label.is-missing {
+  font-style: italic;
+  opacity: 0.6;
 }
 
 .lf-card-content {

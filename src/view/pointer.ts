@@ -1,5 +1,5 @@
 import { Platform } from "obsidian";
-import { LIVE_LINKS, MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
+import { LIVE_LINKS, MIN_NODE_PX, NODE_GRIP, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { visualBounds } from "../model/arrange";
 import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, unionRect, type PlacePoint, type Pt, type Rect } from "../model/geometry";
@@ -53,20 +53,34 @@ export function isEditable(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a press on `target` is the target's own, not the stage's: a node's link badge, or a link or an embed's open
- * icon (`.markdown-embed-link`) in what a node renders whose links are live (`LIVE_LINKS`, a card's text), which opens
- * on its click. Capturing the pointer would
- * send that click to the stage.
+ * Whether a press on `target` is the target's own, not the stage's: a node's link badge, a link or an embed's open
+ * icon (`.markdown-embed-link`) in what a node renders whose links are live (`LIVE_LINKS`, a card's text), or a node's
+ * grip (`NODE_GRIP`, a note card's label), which opens on its click. Capturing the pointer would send that click to the
+ * stage.
  */
 export function isOwnClick(target: EventTarget | null): boolean {
   const el = target as Element | null;
-  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a, .${LIVE_LINKS} .markdown-embed-link`) !== null;
+  return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a, .${LIVE_LINKS} .markdown-embed-link, .${NODE_GRIP}`) !== null;
 }
 
-/** Whether `target` is in a link in what a node renders whose links are live (`LIVE_LINKS`, a card's text). */
+/**
+ * Whether a press on `target` waits to be a click or a drag: on a link in what a node renders whose links are live
+ * (`LIVE_LINKS`, a card's text), or on a node's grip (`NODE_GRIP`).
+ */
 export function isLivePress(target: EventTarget | null): boolean {
   const el = target as Element | null;
-  return typeof el?.closest === "function" && el.closest(`.${LIVE_LINKS} a`) !== null;
+  return typeof el?.closest === "function" && el.closest(`.${LIVE_LINKS} a, .${NODE_GRIP}`) !== null;
+}
+
+/**
+ * The node whose grip (`NODE_GRIP`, a part drawn outside its box, such as a note card's label) `target` is in, by the
+ * `data-node-id` of its element; null when it is in none.
+ */
+export function gripNode(target: EventTarget | null): string | null {
+  const el = target as Element | null;
+  if (typeof el?.closest !== "function") return null;
+  const owner = el.closest(`.${NODE_GRIP}`)?.closest<HTMLElement>("[data-node-id]");
+  return owner?.dataset.nodeId ?? null;
 }
 
 /**
@@ -410,7 +424,7 @@ export class PointerController {
     const adding = isAddingToSelection(ev);
     // Nodes are not clipped to their page, so what is under the pointer is looked for among every page's nodes. What is
     // hit is a drawn node; the press acts on the unit it is part of at the entered level (a whole group at top level).
-    const drawn = hitTest(this.itemsOnAllPages(doc), world);
+    const drawn = this.nodeUnder(doc, world, ev.target);
     let entered = this.entered;
     // A press on a node outside the entered group leaves it entirely, and what was selected in it.
     if (drawn !== null && entered !== null && !descendantsOf(doc, entered).includes(drawn)) {
@@ -453,6 +467,17 @@ export class PointerController {
     }
     if (!adding || page === null || page.id !== selectedPage) selection.clear();
     if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids], within: entered, leaveOnClick: inside }, null);
+  }
+
+  /**
+   * The drawn node at `world`, or else the node whose grip (a note card's label, outside its box) the event's `target`
+   * is in; null when there is neither.
+   */
+  private nodeUnder(doc: Document, world: Pt, target: EventTarget | null): NodeId | null {
+    const hit = hitTest(this.itemsOnAllPages(doc), world);
+    if (hit !== null) return hit;
+    const gripped = gripNode(target);
+    return gripped !== null && doc.nodes.some((n) => n.id === gripped) ? gripped : null;
   }
 
   private press(ev: PointerEvent, world: Pt, intent: Intent, collapseTo: NodeId | null, edit: Pressed["edit"] = null): void {
@@ -1039,7 +1064,7 @@ export class PointerController {
     const selection = this.view.selection;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
     const at = { x: ev.clientX, y: ev.clientY };
-    const drawn = hitTest(this.itemsOnAllPages(doc), world);
+    const drawn = this.nodeUnder(doc, world, ev.target);
     let entered = this.entered;
     if (drawn !== null) {
       // As a click: a node outside the entered group leaves it, and what was selected in it.

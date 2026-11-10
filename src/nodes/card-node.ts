@@ -5,7 +5,9 @@ import { mmToPx, type Pt, type Rect } from "../model/geometry";
 import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
 import { cardLinks, firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
+import { joinLinktext } from "../format/links-section";
 import type { LinkedPath, LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { CardLabel, cardLabel, type LabelCache } from "../view/card-label";
 import { attachLinkSuggest, type BlockIdWriter } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
 import { noteFile, openEmbed, type LiveEmbed } from "../view/embed-adapter";
@@ -89,11 +91,16 @@ interface Live {
  * edit with a save. The embed goes (saving an edit first) when the card is removed, stops being a note card, shows
  * another note, or its note goes. Without the embed (`openEmbed` gives null), the card shows its section read-only, as
  * a text card is shown. The pointer controller leaves presses and keys in an editor to it (`isEditing`).
+ *
+ * A note card has a label above it (`CardLabel`), as Canvas's file card does: where its note lives, `Folder › Note ›
+ * Heading` (`cardLabel`), or the link as stored, greyed out, when the note is missing. A click on it opens the note at
+ * that place in a new tab beside the figure, as Open source does; a drag from it moves the card.
  */
 class CardNodeRenderer implements NodeRenderer {
   private node: CardNode;
   private readonly el: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly label: CardLabel;
   private shown: CardBody | null = null;
   /** What the body was drawn from (the content and what was resolved for it), so an update that leaves it alone draws nothing. */
   private drawnFrom: { key: string; resolved: Resolved | undefined } | null = null;
@@ -114,6 +121,7 @@ class CardNodeRenderer implements NodeRenderer {
     this.node = node;
     this.el = host.createDiv({ cls: ["lf-node", "lf-card"] });
     this.body = this.el.createDiv({ cls: "lf-card-body" });
+    this.label = new CardLabel(this.el, (ev) => this.openNote(ev));
     // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
     this.el.addEventListener("lf-activate", () => this.beginEdit());
@@ -136,6 +144,7 @@ class CardNodeRenderer implements NodeRenderer {
     this.el.classList.toggle("is-note", n.file !== undefined);
     // What is being typed is the user's: a change of the node does not overwrite it.
     if (!this.editor) this.draw();
+    this.drawLabel();
   }
 
   unmount(): void {
@@ -190,6 +199,45 @@ class CardNodeRenderer implements NodeRenderer {
   refresh(): void {
     this.drawnFrom = null;
     if (!this.editor) this.draw();
+    this.drawLabel();
+  }
+
+  /**
+   * The label above a note card: where its note is (the live embed's file, which follows a rename, else what its link
+   * resolved to, else the link as stored), and the place in it; the link as stored, greyed out, when it is missing.
+   */
+  private drawLabel(): void {
+    const n = this.node;
+    if (n.file === undefined) {
+      this.label.hide();
+      return;
+    }
+    const subpath = n.subpath ?? "";
+    const resolved = this.ctx.resolved(n.id);
+    if (resolved?.kind === "missing" && !this.live) {
+      this.label.show([joinLinktext(n.file, subpath)], true);
+      return;
+    }
+    const livePath = (this.live?.file as { path?: unknown } | undefined)?.path;
+    const path = typeof livePath === "string" ? livePath : resolved?.kind === "content" ? resolved.file.path : n.file;
+    this.label.show(cardLabel(path, subpath, this.noteCache(path)), false);
+  }
+
+  /** Obsidian's cached headings and blocks of the note at `path`, or null when there is no cache to ask. */
+  private noteCache(path: string): LabelCache | null {
+    const cache = (this.ctx.app as { metadataCache?: { getCache?: (path: string) => unknown } } | undefined)?.metadataCache;
+    if (typeof cache?.getCache !== "function") return null;
+    try {
+      return (cache.getCache(path) as LabelCache | null) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The label was clicked: the note opens at the card's place in it, in a new tab beside the figure (as Open source). */
+  private openNote(ev: MouseEvent): void {
+    const n = this.node;
+    if (n.file !== undefined) this.ctx.openLink(joinLinktext(n.file, n.subpath ?? ""), ev, "tab");
   }
 
   /**

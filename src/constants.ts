@@ -12,6 +12,12 @@ export const LIVE_LINKS = "lf-live-links";
 export const EDITING_CLASS = "is-editing";
 /** The bubbling event a node's element sends as its in-place edit begins and ends, so the item bar is brought in line. */
 export const EDITING_EVENT = "lf-editing";
+/**
+ * The class of a part of a node's element drawn outside its box (a note card's label above it). A press on it waits, as
+ * on a live link: let go in place, it is the part's own click; dragged, it is a press on the node, which the box's hit
+ * test would not find (see `isOwnClick` and `gripNode` in `view/pointer.ts`).
+ */
+export const NODE_GRIP = "lf-node-grip";
 
 export const MM_TO_PX = 96 / 25.4;
 export const PAGE_GAP_MM = 20;

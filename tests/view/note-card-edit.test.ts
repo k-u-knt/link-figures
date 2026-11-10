@@ -172,6 +172,9 @@ async function setup(options: { registry?: boolean } = {}) {
   };
   const pointer = (type: string, [clientX, clientY]: [number, number], target: unknown = {}) =>
     stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, clientX, clientY, target, preventDefault: vi.fn() });
+  /** As `pointer`, with the left button held (`buttons`), as a move during a drag has it. */
+  const pointerHeld = (type: string, [clientX, clientY]: [number, number], target: unknown = {}) =>
+    stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, buttons: 1, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, clientX, clientY, target, preventDefault: vi.fn() });
   const click = async (id: string) => {
     const { at, target } = inside(id);
     pointer("pointerdown", at, target);
@@ -180,7 +183,7 @@ async function setup(options: { registry?: boolean } = {}) {
   };
   const key = (name: string, target: unknown) => stage.fire("keydown", { key: name, target, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, preventDefault: vi.fn() });
   const embedOf = (id: string): FakeEmbed => embeds.find((e) => el(id).contains(e.containerEl))!;
-  return { r, store, view, nodeHost, embeds, embedOf, tfiles, vaultFiles, headings, node, el, inside, pointer, click, key, settled: () => Promise.all(pending) };
+  return { r, store, view, nodeHost, embeds, embedOf, tfiles, vaultFiles, headings, node, el, inside, pointer, pointerHeld, click, key, settled: () => Promise.all(pending) };
 }
 
 describe("a note card's body is Obsidian's editable embed", () => {
@@ -417,5 +420,36 @@ describe("ending and unloading", () => {
     s.nodeHost.unmountAll();
     expect(embed.writes).toEqual(["Typed"]);
     expect(s.embeds.every((e) => e.unloaded)).toBe(true);
+  });
+});
+
+describe("the label above a note card", () => {
+  /** A point just above the card, where its label is drawn (outside the card's box), and the label element. */
+  const onLabel = (s: Awaited<ReturnType<typeof setup>>, id: string): { at: [number, number]; target: Element } => {
+    const box = nodeWorldRect(s.store.doc, s.node(id));
+    return { at: [box.x + 10, box.y - 8], target: s.el(id).querySelector(".lf-card-label")! };
+  };
+
+  test("a press on the label is left to its click: nothing is selected, the pointer is not captured", async () => {
+    const s = await setup();
+    const { at, target } = onLabel(s, "N");
+    s.pointer("pointerdown", at, target);
+    s.pointer("pointerup", at, target);
+    await s.settled();
+    expect(s.view.selection.ids).toEqual([]);
+    expect(s.node("N").x).toBe(-400);
+  });
+
+  test("a drag from the label selects the card and moves it", async () => {
+    const s = await setup();
+    const { at, target } = onLabel(s, "N");
+    const before = nodeWorldRect(s.store.doc, s.node("N"));
+    s.pointer("pointerdown", at, target);
+    s.pointerHeld("pointermove", [at[0] + 40, at[1] + 30], target);
+    s.pointerHeld("pointerup", [at[0] + 40, at[1] + 30], target);
+    await s.settled();
+    expect(s.view.selection.ids).toEqual(["N"]);
+    expect(nodeWorldRect(s.store.doc, s.node("N")).x).toBeCloseTo(before.x + 40, 5);
+    expect(nodeWorldRect(s.store.doc, s.node("N")).y).toBeCloseTo(before.y + 30, 5);
   });
 });

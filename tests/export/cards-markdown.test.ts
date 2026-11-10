@@ -172,6 +172,18 @@ describe("cardMarkdown and rewriteImages", () => {
     expect(out.warnings).toEqual(['"c": the image "gone.png" was not found; its link is kept', '"c": the embed "Other" is not an image; its link is kept']);
   });
 
+  test("with quietNotes, a wikilink note embed (reported by the expansion) is quiet; a Markdown-form one keeps its warning", async () => {
+    const { access: a } = access({ "Other.md": "x" });
+    const out = await rewriteImages("E ![[Other]] F ![](Other.md) G ![[Gone]]", {
+      label: '"c"',
+      resolve: (link) => a.resolveLink(link, "Figs/Fig.lnkfig.md"),
+      copy: async () => null,
+      quietNotes: true,
+    });
+    expect(out.markdown).toBe("E ![[Other]] F ![](Other.md) G ![[Gone]]");
+    expect(out.warnings).toEqual(['"c": the embed "Other.md" is not an image; its link is kept']);
+  });
+
   test("embeds in fenced code blocks and inline code are left as they are", async () => {
     const copied: string[] = [];
     const { access: a } = access({ "img/plot.png": new Uint8Array([1]) });

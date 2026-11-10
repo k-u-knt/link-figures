@@ -254,7 +254,8 @@ export async function rewriteImages(
       continue;
     }
     if (file.extension.toLowerCase() === "md") {
-      if (!deps.quietNotes) warnings.push(`${deps.label}: the embed "${link}" is not an image; its link is kept`);
+      // Only a wikilink embed was reported by the expansion (`quietNotes`); a Markdown-form one (`![](note.md)`) is told here.
+      if (!(deps.quietNotes && m[1] !== undefined)) warnings.push(`${deps.label}: the embed "${link}" is not an image; its link is kept`);
       parts.push(m[0]);
       continue;
     }

@@ -316,8 +316,9 @@ export class PointerController {
     // The right button (and a Mac's Control-click) opens the context menu (see `onContextMenu`), and neither drags nor sweeps.
     if (!ev.isPrimary || ev.button !== 0 || isControlClick(ev) || this.view.isPanGesture(ev)) return;
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
+    // Not while a tool is armed: its press is the tool's wherever it lands (the Connector tool from a card's link).
     const target = ev.target as Element | null;
-    if (isEditable(target) || isOwnClick(target)) return;
+    if (isEditable(target) || (!this.view.armedTool && isOwnClick(target))) return;
 
     // An armed tool takes the press: it is placed where the press is, on any page and over any node, and selects nothing
     // itself. The stage does not take the focus, and the mousedown that follows must not move it either (hence

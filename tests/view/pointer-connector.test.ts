@@ -111,8 +111,8 @@ function setup(armed: string | null = "tool.connector") {
   const stage = new FakeStage();
   controller = new PointerController(view);
   controller.attach(stage as never);
-  const pointer = (type: string, [clientX, clientY]: [number, number]) => {
-    const ev = { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, clientX, clientY, target: {}, preventDefault: vi.fn() };
+  const pointer = (type: string, [clientX, clientY]: [number, number], target: object = {}) => {
+    const ev = { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, clientX, clientY, target, preventDefault: vi.fn() };
     stage.fire(type, ev);
     return ev;
   };
@@ -182,6 +182,30 @@ test("in anchor mode, a drag from shape A to shape B attaches each end to the an
   // One undo step takes it away.
   view.store.undo();
   expect(connectors()).toEqual([]);
+});
+
+test("with the Connector tool armed, a press on a link in a node (its own click otherwise) starts a connector", async () => {
+  // A link in what a node renders with live links (a card's text): `isOwnClick` finds it by `closest`.
+  const link = { tagName: "A", closest: (selector: string) => (selector.includes("lf-live-links a") ? link : null) };
+  const { pointer, connectors, view, stage, settled } = setup();
+  pointer("pointerdown", [140, 85], link);
+  pointer("pointermove", [240, 70]);
+  pointer("pointermove", [340, 60]);
+  pointer("pointerup", [340, 60]);
+  await settled();
+  expect(connectors()[0].ends).toEqual([attached("A", "e"), attached("B", "n")]);
+  // The pointer is captured, so the link's click goes to the stage: the link does not open.
+  expect(stage.setPointerCapture).toHaveBeenCalledWith(1);
+  expect(view.armedTool).toBeNull();
+  // With no tool armed, the press is the link's own: no drag, no selection.
+  const idle = setup(null);
+  idle.pointer("pointerdown", [140, 85], link);
+  idle.pointer("pointermove", [240, 70]);
+  idle.pointer("pointerup", [240, 70]);
+  await idle.settled();
+  expect(idle.view.selection.ids).toEqual([]);
+  expect(idle.stage.setPointerCapture).not.toHaveBeenCalled();
+  expect(idle.store.doc.nodes.find((n) => n.id === "A")).toMatchObject({ x: 50, y: 50 });
 });
 
 test("in centre mode the ends attach to the centres", async () => {

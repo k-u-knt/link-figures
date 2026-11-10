@@ -156,25 +156,38 @@ export function linksAsText(markdown: string): string {
   return applyEdits(markdown, edits);
 }
 
-/** A block id at a line's end (` ^id`), or alone on a line, as Obsidian writes one. */
-const BLOCK_ID = /(^|[ \t]+)\^[A-Za-z0-9-]+[ \t]*$/gm;
+/**
+ * A block id as Obsidian reads one: `^` and an id of letters, digits and dashes at the very end of a line (before its
+ * line break, `\n` or `\r\n`), after a space or a tab, or alone on its line. An id of digits only (`x ^2`) is taken for
+ * prose, an exponent, as Obsidian's own ids always hold a letter in practice.
+ */
+const BLOCK_ID = /(^|[ \t])\^(?![0-9]+(?=\r?$))[A-Za-z0-9-]+(?=\r?$)/gm;
 
 /**
- * `markdown` with its block-id markers left out, outside code: ` ^id` at the end of a line goes, and a line that held
- * only `^id` (the id of a list or a table, on the line after it) goes with its line break. For text read without Obsidian
- * (an export), where the marker would show.
+ * `markdown` with its block-id markers left out (`BLOCK_ID`), outside code: ` ^id` at the end of a line goes, with the
+ * spaces before it, and a line that held only `^id` (the id of a list or a table, on the line after it) goes with its
+ * line break. For text read without Obsidian (an export), where the marker would show.
  */
 export function stripBlockIds(markdown: string): string {
   const code = codeRanges(markdown);
   const edits: TextEdit[] = [];
   for (const m of markdown.matchAll(BLOCK_ID)) {
     if (code.some(([a, b]) => m.index >= a && m.index < b)) continue;
-    const alone = m[1] === "" && (m.index === 0 || markdown[m.index - 1] === "\n");
     const end = m.index + m[0].length;
-    // A line that held only the id goes whole: with its own line break, or the one before it at the very end.
-    if (alone && markdown[end] === "\n") edits.push({ start: m.index, end: end + 1, insert: "" });
-    else if (alone && m.index > 0) edits.push({ start: m.index - 1, end, insert: "" });
-    else edits.push({ start: m.index, end, insert: "" });
+    if (m[1] === "") {
+      // Alone on its line: the line goes, with its own line break, or with the one before it at the very end.
+      const lineEnd = markdown.startsWith("\r\n", end) ? end + 2 : markdown[end] === "\n" ? end + 1 : end;
+      if (lineEnd > end) edits.push({ start: m.index, end: lineEnd, insert: "" });
+      else {
+        const before = m.index >= 2 && markdown.startsWith("\r\n", m.index - 2) ? 2 : m.index >= 1 ? 1 : 0;
+        edits.push({ start: m.index - before, end, insert: "" });
+      }
+      continue;
+    }
+    // The spaces before the marker go with it.
+    let start = m.index;
+    while (start > 0 && (markdown[start - 1] === " " || markdown[start - 1] === "\t")) start--;
+    edits.push({ start, end, insert: "" });
   }
   return applyEdits(markdown, edits);
 }

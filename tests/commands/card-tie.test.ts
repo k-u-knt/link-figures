@@ -139,5 +139,45 @@ describe("card.tie", () => {
     expect(ties("c")).toHaveLength(0);
     expect(store.canUndo()).toBe(false);
   });
-});
 
+  test("a locked tie is not moved or deleted: `card.tie: a tie of \"<id>\" is locked`", async () => {
+    const { call, ties, store } = setup();
+    const { connector } = (await call("card.tie", { id: "c", page: "pg-1" })) as { connector: string };
+    await call("node.update", { id: connector, patch: { locked: true } });
+    const before = JSON.stringify(store.doc);
+    await expect(call("card.tie", { id: "c", page: "pg-2" })).rejects.toThrow(new CommandError('card.tie: a tie of "c" is locked'));
+    await expect(call("card.tie", { id: "c", page: null })).rejects.toThrow(new CommandError('card.tie: a tie of "c" is locked'));
+    expect(JSON.stringify(store.doc)).toBe(before);
+    // Choosing the page it is already tied to changes nothing, so it is not refused.
+    expect(await call("card.tie", { id: "c", page: "pg-1" })).toEqual({ connector });
+    // A locked tie among several: still refused, nothing deleted.
+    await call("connector.create", { page: "pg-1", from: centre("c"), to: { kind: "page", page: "pg-2" } });
+    await expect(call("card.tie", { id: "c", page: "pg-2" })).rejects.toThrow(/^card\.tie: a tie of "c" is locked$/);
+    expect(ties("c")).toHaveLength(2);
+  });
+
+  test("re-choosing the current page writes nothing, whatever order the ends' fields are in", async () => {
+    const { call, store } = setup();
+    // A tie written by hand (or by another version) with its fields in another order.
+    await call("connector.create", { page: "pg-1", from: { snap: "center", node: "c", kind: "attached" }, to: { page: "pg-2", kind: "page" } });
+    const commits: string[] = [];
+    store.subscribe((ev) => void (ev.kind === "commit" && commits.push(ev.label)));
+    await call("card.tie", { id: "c", page: "pg-2" });
+    expect(commits).toEqual([]);
+    // An anchor on the page end is not the same tie: re-aimed to the centre.
+    const s2 = setup();
+    await s2.call("connector.create", { page: "pg-1", from: centre("c"), to: { kind: "page", page: "pg-2", anchor: "w" } });
+    await s2.call("card.tie", { id: "c", page: "pg-2" });
+    expect(s2.ties("c")[0].ends[1]).toEqual({ kind: "page", page: "pg-2" });
+  });
+
+  test("two ties to the same page collapse into one when that page is chosen", async () => {
+    const { call, ties } = setup();
+    await call("connector.create", { page: "pg-1", from: centre("c"), to: { kind: "page", page: "pg-2" } });
+    await call("connector.create", { page: "pg-1", from: centre("c"), to: { kind: "page", page: "pg-2", anchor: "n" } });
+    expect(ties("c")).toHaveLength(2);
+    await call("card.tie", { id: "c", page: "pg-2" });
+    expect(ties("c")).toHaveLength(1);
+    expect(ties("c")[0].ends).toEqual([centre("c"), { kind: "page", page: "pg-2" }]);
+  });
+});

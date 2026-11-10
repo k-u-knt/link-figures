@@ -229,6 +229,11 @@ export interface Command<A = unknown, R = unknown> {
    * as a toolbar button runs it, on the selection (the item). One that does not apply is shown disabled.
    */
   itemBar?: string[];
+  /**
+   * True for a command that changes nothing in the figure (Open source), which a read-only view still runs: its item bar
+   * lists only such commands, and its `runCommand` lets them through.
+   */
+  readOnlySafe?: true;
   /** Where the command sits in the bar: lower first; without it, after those that have one, in the registry's order. */
   itemBarOrder?: number;
   /** Whether the bar shows the command for item `id` now (a text card's Edit, a note card's Convert); without it, always. */

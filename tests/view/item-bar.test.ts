@@ -36,7 +36,7 @@ vi.mock("obsidian", () => ({
 const { PointerController } = await import("../../src/view/pointer");
 const { SelectionState } = await import("../../src/view/selection");
 const { Viewport } = await import("../../src/view/viewport");
-const { ItemBar } = await import("../../src/view/item-bar");
+const { ItemBar, wireItemBar } = await import("../../src/view/item-bar");
 
 beforeAll(() => {
   const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
@@ -134,9 +134,12 @@ function setup(extra: Command[] = []) {
       if (args === undefined) {
         const command = r.commands.get(id)!;
         const ctx = view.commandContext();
-        if (command.applies(ctx)) pending.push(Promise.resolve(command.run(ctx)));
+        // As the figure view's `runCommand`: read-only runs only what is marked safe there.
+        if ((view.readOnly && !command.readOnlySafe) || !command.applies(ctx)) return;
+        pending.push(Promise.resolve(command.run(ctx)));
         return;
       }
+      if (view.readOnly) return;
       pending.push(runCall(store, view.commandContext(), prepareCall(r, { id, args }), step).catch((error) => (view.failures.push(error), null)));
     }),
     failures: [] as unknown[],
@@ -150,10 +153,14 @@ function setup(extra: Command[] = []) {
   document.body.appendChild(host);
   const bar = new ItemBar(host);
   // As the figure view does: the bar is brought in line on every change of the store, the selection and the gesture.
-  const sync = () => bar.sync(view);
+  // The same wiring the figure view uses: a pan or zoom (`viewportApplied`), a card's edit (`EDITING_EVENT` on the
+  // stage) and a gesture's start and end (the pointer controller) each bring the bar in line.
+  const wiring = wireItemBar(view, bar, { stage: host, gestures: pointer });
+  view.applyViewport = () => wiring.viewportApplied();
+  const sync = () => wiring.sync();
+  // As the figure view's `renderChrome` does, on every change of the store and the selection.
   store.subscribe(sync);
   view.selection.onChange(sync);
-  view.gestureChanged = sync;
   const fire = (type: string, [clientX, clientY]: [number, number]) =>
     stage.fire(type, { pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, clientX, clientY, target: {}, preventDefault: vi.fn() });
   const settled = () => Promise.all(pending);
@@ -175,7 +182,7 @@ function setup(extra: Command[] = []) {
   const ties = (card: string) =>
     store.doc.nodes.filter((n): n is ConnectorNode => n.type === "connector" && isAssociation(store.doc, n as ConnectorNode, r) && (n as ConnectorNode).ends.some((e) => e.kind === "attached" && e.node === card));
   const call = (id: string, args: Record<string, unknown>) => runCall(store, view.commandContext(), prepareCall(r, { id, args }));
-  return { r, store, view, bar, host, sync, fire, settled, select, buttons, dropdown, options, chosen, press, choose, ties, call, elements, pointer };
+  return { r, store, view, bar, host, sync, wiring, fire, settled, select, buttons, dropdown, options, chosen, press, choose, ties, call, elements, pointer };
 }
 
 describe("the item bar", () => {
@@ -198,9 +205,23 @@ describe("the item bar", () => {
     s.view.enteredGroup = group;
     s.select(["C"]);
     expect(s.bar.el.hidden).toBe(false);
-    // Read-only: nothing to run.
+  });
+
+  test("a read-only view shows the bar with Open source only, and Open source runs there", () => {
+    const s = setup();
+    s.view.openLink = vi.fn();
     s.view.readOnly = true;
-    s.sync();
+    s.select(["C"]);
+    expect(s.bar.el.hidden).toBe(false);
+    expect(s.buttons()).toEqual(["Open source"]);
+    expect(s.bar.el.querySelector("select")).toBeNull();
+    s.press("Open source");
+    expect(s.view.runCommandById).toHaveBeenCalledWith("open-source");
+    expect(s.view.openLink).toHaveBeenCalledWith("Notes/a", "tab");
+    // A card with no link: nothing to show at all.
+    s.select(["D"]);
+    expect(s.buttons()).toEqual(["Open source"]);
+    s.select(["A"]);
     expect(s.bar.el.hidden).toBe(true);
   });
 
@@ -237,7 +258,7 @@ describe("the item bar", () => {
     const renderer = cardNodeType.mount(s.store.doc.nodes.find((n) => n.id === "C") as CardNode, host, ctx as never);
     const el = host.firstElementChild as HTMLElement;
     s.elements.set("C", el);
-    const told = vi.fn(() => s.sync());
+    const told = vi.fn();
     s.host.addEventListener("lf-editing", told);
     el.dispatchEvent(new CustomEvent("lf-activate"));
     expect(el.classList.contains("is-editing")).toBe(true);
@@ -379,5 +400,93 @@ describe("the item bar", () => {
     // Not on a shape: it lists cards only.
     s.select(["A"]);
     expect(s.bar.el.hidden).toBe(true);
+  });
+
+  test("two ties to the same page read 'Several pages', and choosing that page collapses them", async () => {
+    const s = setup();
+    await s.call("connector.create", { page: "pg-1", from: { kind: "attached", node: "C", snap: "center" }, to: { kind: "page", page: "pg-2" } });
+    await s.call("connector.create", { page: "pg-1", from: { kind: "attached", node: "C", snap: "center" }, to: { kind: "page", page: "pg-2", anchor: "n" } });
+    s.select(["C"]);
+    expect(s.chosen()).toBe("Several pages");
+    s.choose("Figure 2");
+    await s.settled();
+    expect(s.ties("C")).toHaveLength(1);
+    expect(s.chosen()).toBe("Figure 2");
+  });
+
+  test("the wiring brings the bar in line on a pan, an edit, and the end of a gesture", () => {
+    const s = setup();
+    s.select(["C"]);
+    // A pan: the bar follows at once.
+    const left = parseFloat(s.bar.el.style.left);
+    s.view.viewport.tx += 100;
+    s.view.applyViewport();
+    expect(parseFloat(s.bar.el.style.left)).toBeCloseTo(left + 100, 6);
+    // An edit begins and ends (nothing committed): the stage hears of it.
+    const el = document.createElement("div");
+    s.host.appendChild(el);
+    s.elements.set("C", el);
+    el.classList.add("is-editing");
+    el.dispatchEvent(new CustomEvent("lf-editing", { bubbles: true }));
+    expect(s.bar.el.hidden).toBe(true);
+    el.classList.remove("is-editing");
+    el.dispatchEvent(new CustomEvent("lf-editing", { bubbles: true }));
+    expect(s.bar.el.hidden).toBe(false);
+    // A drag of the card: its moves commit (and hide the bar); its end commits nothing, and only the gesture's end
+    // brings the bar back.
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    // Stage px, after the pan.
+    const at = s.view.viewport.toScreen({ x: card.x + 20, y: card.y + 20 });
+    s.fire("pointerdown", [at.x, at.y]);
+    s.fire("pointermove", [at.x + 40, at.y]);
+    expect(s.bar.el.hidden).toBe(true);
+    s.fire("pointerup", [at.x + 40, at.y]);
+    expect(s.bar.el.hidden).toBe(false);
+    s.wiring.detach();
+  });
+
+  test("the bar is kept inside the stage: left and right by half its width, and at the bottom when below the card", () => {
+    const s = setup();
+    Object.defineProperty(s.host, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(s.bar.el, "offsetWidth", { configurable: true, value: 200 });
+    Object.defineProperty(s.bar.el, "offsetHeight", { configurable: true, value: 30 });
+    s.select(["C"]);
+    const card = nodeWorldRect(s.store.doc, s.store.doc.nodes.find((n) => n.id === "C")!);
+    const place = (tx: number, ty: number) => {
+      s.view.viewport.tx = tx;
+      s.view.viewport.ty = ty;
+      s.view.applyViewport();
+      return { left: parseFloat(s.bar.el.style.left), top: parseFloat(s.bar.el.style.top), below: s.bar.el.classList.contains("is-below") };
+    };
+    const middle = card.x + card.width / 2;
+    // Off the left edge: held at half its width.
+    expect(place(-middle - 50, 300 - card.y).left).toBe(100);
+    // Off the right edge: held at the stage's width less half its width.
+    expect(place(900 - middle, 300 - card.y).left).toBe(700);
+    // Inside: where the card is.
+    expect(place(400 - middle, 300 - card.y).left).toBeCloseTo(400, 6);
+    // No room above: below the card; a stage too short for that holds the bar's bottom inside it.
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 100 });
+    const low = place(400 - middle, 10 - card.y);
+    expect(low.below).toBe(true);
+    // Its top is given before the 8 px gap below the card; 30 px tall, so at most 100 - 30 - 8.
+    expect(low.top).toBe(62);
+    // With room, it sits right under the card.
+    Object.defineProperty(s.host, "clientHeight", { configurable: true, value: 600 });
+    expect(place(400 - middle, 10 - card.y).top).toBeCloseTo(10 + card.height, 6);
+  });
+
+  test("the wheel is not stopped on the bar, so zoom and pan work over it", () => {
+    const s = setup();
+    s.select(["C"]);
+    const heard = vi.fn();
+    s.host.addEventListener("wheel", heard);
+    s.bar.el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 10 }));
+    expect(heard).toHaveBeenCalledTimes(1);
+    const pressed = vi.fn();
+    s.host.addEventListener("pointerdown", pressed);
+    s.bar.el.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(pressed).not.toHaveBeenCalled();
   });
 });

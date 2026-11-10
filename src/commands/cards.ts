@@ -94,10 +94,18 @@ export function tiesOf(ctx: Pick<CommandContext, "store" | "registries" | "unrea
   );
 }
 
-/** The pages item `id` is tied to (see `tiesOf`), each once, in the order of its ties. */
-export function tiedPagesOf(ctx: Pick<CommandContext, "store" | "registries" | "unreadable">, id: NodeId): PageId[] {
-  const pages = tiesOf(ctx, id).flatMap((c) => c.ends.flatMap((e) => (e.kind === "page" ? [e.page] : [])));
-  return [...new Set(pages)];
+/**
+ * Whether `tie` is already what `card.tie` makes for item `id` and `page`: the item's end attached at its centre (no
+ * anchor) and the page end on `page` with no anchor, compared field by field.
+ */
+function isCentreTie(tie: ConnectorNode, id: NodeId, page: PageId): boolean {
+  const at = endOn(tie.ends[0], id) ? 0 : 1;
+  const item = tie.ends[at];
+  const other = tie.ends[1 - at];
+  return (
+    item.kind === "attached" && item.node === id && item.snap === "center" && !("anchor" in item) &&
+    other.kind === "page" && other.page === page && other.anchor === undefined
+  );
 }
 
 /**
@@ -106,7 +114,8 @@ export function tiedPagesOf(ctx: Pick<CommandContext, "store" | "registries" | "
  * to the page with no anchor (its centre), both clipped at the outlines: the first association is re-aimed (its id and
  * look stay) and the rest are deleted. An item with one association already tied that way to `page` is left alone.
  * Its other connectors stay. One undo step, under a label of its own for each choice, so two choices in a row are two
- * steps. Refused for a page that is not the figure's (one deleted while the card bar's dropdown was open).
+ * steps. Refused for a page that is not the figure's (one deleted while the card bar's dropdown was open), and when
+ * a tie it would move or delete is locked.
  */
 export function tieCard(ctx: CommandContext, args: { id: string; page: string | null }): { connector: NodeId | null } {
   const command = "card.tie";
@@ -120,13 +129,10 @@ export function tieCard(ctx: CommandContext, args: { id: string; page: string | 
   const ties = tiesOf(ctx, node.id);
   const itemEnd: End = { kind: "attached", node: node.id, snap: "center" };
   const pageEnd: End | null = page === null ? null : { kind: "page", page };
-  const same = (a: End, b: End) => JSON.stringify(a) === JSON.stringify(b);
   if (pageEnd === null && ties.length === 0) return { connector: null };
-  if (pageEnd !== null && ties.length === 1) {
-    const ends = ties[0].ends;
-    const at = endOn(ends[0], node.id) ? 0 : 1;
-    if (same(ends[at], itemEnd) && same(ends[1 - at], pageEnd)) return { connector: ties[0].id };
-  }
+  if (page !== null && ties.length === 1 && isCentreTie(ties[0], node.id, page)) return { connector: ties[0].id };
+  // Every tie is moved or deleted from here on: none may be locked (itself or by its group).
+  if (ties.some((c) => isLocked(doc, c.id))) throw new CommandError(`${command}: a tie of "${node.id}" is locked`);
   const kept = pageEnd === null ? null : (ties[0] ?? null);
   const gone = new Set(ties.filter((c) => c !== kept).map((c) => c.id));
   let made: ConnectorNode | null = null;
@@ -206,9 +212,12 @@ function editableNoteCard(ctx: CommandContext, id: NodeId): boolean {
   return !!card && typeof card.file === "string" && card.file !== "" && !isLocked(ctx.store.doc, id);
 }
 
-/** The card bar's Page dropdown: this figure's pages by name, plus None; "Several pages" when it is tied to more than one. */
+/**
+ * The card bar's Page dropdown: this figure's pages by name, plus None; "Several pages" when it has more than one tie,
+ * even two to the same page, so choosing that page makes them one.
+ */
 function pageChoice(ctx: CommandContext, id: NodeId): ItemBarChoice {
-  const tied = tiedPagesOf(ctx, id);
+  const tied = tiesOf(ctx, id).flatMap((c) => c.ends.flatMap((e) => (e.kind === "page" ? [e.page] : [])));
   return {
     param: "page",
     options: [{ value: null, label: "None" }, ...ctx.store.doc.pages.map((p, i) => ({ value: p.id, label: p.name || `Page ${i + 1}` }))],

@@ -619,6 +619,8 @@ function builtinCommands(): Command[] {
       // In a card's bar too, locked or not; disabled when the card holds no link.
       itemBar: ["card"],
       itemBarOrder: 20,
+      // It only opens a note: a read-only figure offers it too.
+      readOnlySafe: true,
       needsView: true,
       applies: (ctx) => selectedLink(ctx) !== undefined,
       run(ctx) {

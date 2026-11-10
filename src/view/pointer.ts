@@ -172,10 +172,22 @@ export class PointerController {
 
   /**
    * Whether a gesture is under way that moves, resizes or draws (anything past a press that has not yet travelled):
-   * the item bar hides meanwhile. The view is told as one begins and ends (`LinkFiguresView.gestureChanged`).
+   * the item bar hides meanwhile. Listeners hear as one begins and ends (`onGestureChange`).
    */
   busy(): boolean {
     return this.gesture.kind !== "idle" && this.gesture.kind !== "pressed";
+  }
+
+  private readonly gestureListeners = new Set<() => void>();
+
+  /** Calls `fn` as a gesture that makes the controller `busy` begins and as it ends; returns the function that stops it. */
+  onGestureChange(fn: () => void): () => void {
+    this.gestureListeners.add(fn);
+    return () => void this.gestureListeners.delete(fn);
+  }
+
+  private gestureChanged(): void {
+    for (const fn of [...this.gestureListeners]) fn();
   }
 
   attach(stageEl: HTMLElement): void {
@@ -342,7 +354,7 @@ export class PointerController {
       if (at && target) {
         crop.begin(target, at);
         this.gesture = { kind: "cropping", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, handle: target, started: false };
-        this.view.gestureChanged?.();
+        this.gestureChanged();
         try {
           stage.setPointerCapture(ev.pointerId);
         } catch {
@@ -440,7 +452,7 @@ export class PointerController {
       }
       this.gesture = g = begun;
       if (begun.kind !== "marquee") this.dragStartedAt = Date.now();
-      this.view.gestureChanged?.();
+      this.gestureChanged();
     }
 
     const now = this.view.viewport.toWorld(this.view.stagePoint(ev));
@@ -696,7 +708,7 @@ export class PointerController {
     // A tool with a preview of its own (the connector) finds what it attaches to itself; a box is dragged out snapping.
     const snap = this.view.armedTool?.preview ? null : this.snapLines(from.page.id, []);
     this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null, snap, onPaper };
-    this.view.gestureChanged?.();
+    this.gestureChanged();
     try {
       this.stage?.setPointerCapture(ev.pointerId);
     } catch {
@@ -888,7 +900,7 @@ export class PointerController {
     this.dragStartedAt = null;
     this.clearGuides();
     if (g.kind === "idle") return;
-    if (g.kind !== "pressed") this.view.gestureChanged?.();
+    if (g.kind !== "pressed") this.gestureChanged();
     // A crop drag's step stays open for the session's next drag: the session closes it when it ends.
     if (g.kind === "cropping") this.cropSession.release();
     else this.store.endMerge();

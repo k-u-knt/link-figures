@@ -438,7 +438,8 @@
   align-items: center;
   gap: var(--size-2-1);
   padding: var(--size-2-1);
-  transform: translate(-50%, calc(-100% - var(--size-4-2)));
+  /* The 8 px gap is `GAP_PX` in item-bar.ts, which keeps the bar inside the stage. */
+  transform: translate(-50%, calc(-100% - 8px));
   background-color: var(--background-primary);
   border: var(--border-width) solid var(--background-modifier-border);
   border-radius: var(--radius-m);
@@ -448,7 +449,7 @@
 }
 
 .lf-item-bar.is-below {
-  transform: translate(-50%, var(--size-4-2));
+  transform: translate(-50%, 8px);
 }
 
 .lf-item-bar[hidden] {

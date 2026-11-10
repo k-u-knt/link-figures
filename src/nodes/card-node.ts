@@ -84,6 +84,10 @@ export const cardNodeType: NodeType<CardNode> = {
   exportable: false,
   offPaper: true,
   pageTies: true,
+  // A note card's link is in the Links section, as a file panel's is, so it follows a rename of the note.
+  linkField: { always: false },
+  // Never rotated (`checkField` refuses it), so the inspector does not offer it.
+  derivedFields: ["rotation"],
 
   mount(node: CardNode, host: HTMLElement): NodeRenderer {
     return new CardNodeRenderer(node, host);
@@ -107,7 +111,9 @@ export const cardNodeType: NodeType<CardNode> = {
     return after;
   },
 
-  checkField(key: string, _value: unknown, _ctx: UpdateContext, node: CardNode): string | null {
+  /** Its content (`cardContentError`); and a card does not rotate, so its `rotation` is 0. */
+  checkField(key: string, value: unknown, _ctx: UpdateContext, node: CardNode): string | null {
+    if (key === "rotation") return value === 0 ? null : "a card does not rotate";
     return key === "text" || key === "file" || key === "subpath" ? cardContentError(node) : null;
   },
 

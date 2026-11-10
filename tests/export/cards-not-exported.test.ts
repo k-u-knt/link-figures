@@ -157,3 +157,11 @@ test("a group holding a card exports without it", async () => {
   expect(names).not.toContain("kc");
   for (const spy of spies) expect(spy).not.toHaveBeenCalled();
 });
+
+test("a connector to a card its plugin could not read is still not exported", () => {
+  const { r } = registries();
+  const doc = figure(r);
+  const kc = doc.nodes.find((n) => n.id === "kc")!;
+  expect(isExported(doc, r, kc, new Set(["c"]))).toBe(false);
+});
+

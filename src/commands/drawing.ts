@@ -330,7 +330,10 @@ function checkReplace(command: string, ctx: CommandContext, node: Node, patch: R
 function checkChanged(command: string, ctx: CommandContext, changed: string[], after: Record<string, unknown>, type: NodeType | undefined, updateCtx: UpdateContext): void {
   for (const key of changed) {
     const value = after[key];
-    const error = Object.hasOwn(BASE_FIELDS, key) ? paramError(key, BASE_FIELDS[key], value) : (type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null);
+    const own = (): string | null => type?.checkField?.(key, value, updateCtx, after as unknown as Node) ?? null;
+    // A base field is checked here, then by the type, which may refuse a value it does not take (a card's rotation);
+    // `page` is the type's to judge only once the page is known to exist (below).
+    const error = Object.hasOwn(BASE_FIELDS, key) ? (paramError(key, BASE_FIELDS[key], value) ?? (key === "page" ? null : own())) : own();
     if (error !== null) throw new CommandError(`${command}: ${error}`);
     if (key === "page" && !ctx.store.doc.pages.some((p) => p.id === value)) throw new CommandError(`${command}: there is no page "${String(value)}"`);
     // A type may refuse a page change it cannot make by this command (a connector attached to items: node.move).

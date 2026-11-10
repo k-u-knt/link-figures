@@ -415,6 +415,8 @@ export const fileNodeType: NodeType<FileNode> = {
   type: "file",
   name: "Linked file",
   icon: "image",
+  // Every panel has a link (an empty one when it has none), kept in the figure file's Links section.
+  linkField: { always: true },
 
   mount(node: FileNode, host: HTMLElement, ctx: RenderContext): NodeRenderer {
     return new FileNodeRenderer(node, host, ctx);

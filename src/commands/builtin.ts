@@ -380,8 +380,9 @@ function addPage(ctx: CommandContext, args?: { page?: unknown; preset?: unknown 
  * Removes a page (`args.page`, else the focus page) and everything on it, and every node tied to it from another page (an
  * association, `NodeType.tiedPages`); never the last page. Headless the page must be named. An item kept off the paper
  * (`NodeType.offPaper`: a card) placed against the page is not on it, so it stays: it goes to the remaining page whose
- * paper is nearest it, keeping its place on the canvas (the store then pushes it off any paper), and the nodes tied to
- * other pages that are drawn only from it (its associations) go with it. All in one undo step.
+ * paper is nearest it, keeping its place on the canvas (the store then pushes it off any paper), and a node drawn only
+ * from such items, all going to one page (its associations to other pages, a connector between two cards), goes with
+ * them. All in one undo step.
  */
 function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
   const page = targetPage(ctx, "delete-page", args);
@@ -394,23 +395,34 @@ function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
   // The nodes tied to the page (associations, see `NodeType.tiedPages`) go with it.
   const tied = new Set(doc.nodes.filter((n) => typeOf(n)?.tiedPages?.(n).includes(id) === true).map((n) => n.id));
   const rehomed = rehomeOffPage(doc, id, typeOf);
+  // A node drawn only from items that stay, all going to one page (a card's association to another page, a connector
+  // between two cards), goes with them, moved as its type moves (a connector's free ends) to keep its canvas place.
+  const before = pageOriginsPx(doc);
+  const after = pageOriginsPx({ ...doc, pages: doc.pages.filter((p) => p.id !== id) });
+  const from = before.get(id) ?? { x: 0, y: 0 };
+  const followers = new Map<NodeId, { page: PageId; fields: Record<string, unknown> }>();
   for (const n of doc.nodes) {
-    if (n.page !== id || tied.has(n.id) || rehomed.has(n.id) || (typeOf(n)?.tiedPages?.(n).length ?? 0) === 0) continue;
-    // Tied to another page and drawn only from items that stay (a card's association): it goes where they go.
-    const from = typeOf(n)?.dependsOn?.(n) ?? [];
-    const to = from.length > 0 && from.every((d) => rehomed.has(d)) ? rehomed.get(from[0])?.page : undefined;
-    if (to !== undefined) rehomed.set(n.id, { page: to });
+    if (n.page !== id || tied.has(n.id) || rehomed.has(n.id)) continue;
+    const type = typeOf(n);
+    const items = type?.dependsOn?.(n) ?? [];
+    const pages = new Set(items.map((d) => rehomed.get(d)?.page));
+    const [to] = pages;
+    if (items.length === 0 || pages.size !== 1 || to === undefined) continue;
+    const at = after.get(to) ?? { x: 0, y: 0 };
+    const moved = (type?.translate?.(n, from.x - at.x, from.y - at.y) ?? n) as unknown as Record<string, unknown>;
+    const fields: Record<string, unknown> = {};
+    for (const key of Object.keys(moved)) if (moved[key] !== (n as unknown as Record<string, unknown>)[key]) fields[key] = moved[key];
+    followers.set(n.id, { page: to, fields });
   }
   // One commit, so one undo brings the page back with everything on it. The node host lets go of the removed nodes' links.
   ctx.store.commit("delete-page", (draft) => {
     draft.pages = draft.pages.filter((p) => p.id !== id);
-    draft.nodes = draft.nodes.filter((n) => (n.page !== id || rehomed.has(n.id)) && !tied.has(n.id));
+    draft.nodes = draft.nodes.filter((n) => (n.page !== id || rehomed.has(n.id) || followers.has(n.id)) && !tied.has(n.id));
     for (const n of draft.nodes) {
       const to = rehomed.get(n.id);
-      if (!to) continue;
-      n.page = to.page;
-      if (to.x !== undefined) n.x = to.x;
-      if (to.y !== undefined) n.y = to.y;
+      const follower = followers.get(n.id);
+      if (to) Object.assign(n, { page: to.page, x: to.x, y: to.y });
+      else if (follower) Object.assign(n, follower.fields, { page: follower.page });
     }
   });
 }
@@ -419,8 +431,8 @@ function deletePage(ctx: CommandContext, args?: { page?: unknown }): void {
  * Where each item kept off the paper (`offPaper`) that is placed against page `id` goes once the page is deleted: the
  * remaining page whose paper is nearest its box, at the same place on the canvas as the pages then stand.
  */
-function rehomeOffPage(doc: Document, id: PageId, typeOf: (n: Node) => NodeType | undefined): Map<NodeId, { page: PageId; x?: number; y?: number }> {
-  const out = new Map<NodeId, { page: PageId; x?: number; y?: number }>();
+function rehomeOffPage(doc: Document, id: PageId, typeOf: (n: Node) => NodeType | undefined): Map<NodeId, { page: PageId; x: number; y: number }> {
+  const out = new Map<NodeId, { page: PageId; x: number; y: number }>();
   const before = pageOriginsPx(doc);
   const after = pageOriginsPx({ ...doc, pages: doc.pages.filter((p) => p.id !== id) });
   const from = before.get(id);

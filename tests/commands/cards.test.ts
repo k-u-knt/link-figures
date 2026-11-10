@@ -398,3 +398,37 @@ describe("note cards keep their link in the Links section", () => {
     expect(node("n")).toMatchObject({ file: "Notes/b.md", subpath: "#Legend" });
   });
 });
+
+describe("review fixes", () => {
+  test("a card does not rotate: node.update refuses a rotation but 0, and rotation is derived", async () => {
+    const { call, node } = setup(figure());
+    await call("card.create", { page: "pg-1", x: 220 * MM, y: 0, id: "c" });
+    await expect(call("node.update", { id: "c", patch: { rotation: 15 } })).rejects.toThrow(/^node\.update: a card does not rotate$/);
+    await call("node.update", { id: "c", patch: { rotation: 0 } });
+    expect(node("c")!.rotation).toBe(0);
+    expect(cardNodeType.derivedFields).toContain("rotation");
+  });
+
+  test("delete-page re-homes a connector whose items all go to the same page, keeping its free end's canvas place", async () => {
+    const { call, node, store, r } = setup(figure(true));
+    await call("card.create", { page: "pg-2", x: 220 * MM, y: 10 * MM, id: "a" });
+    await call("card.create", { page: "pg-2", x: 220 * MM, y: 60 * MM, id: "b" });
+    const both = (await call("connector.create", { page: "pg-2", from: cardEnd("a", "s"), to: cardEnd("b", "n") })) as { id: string };
+    const loose = (await call("connector.create", { page: "pg-2", from: cardEnd("a", "e"), to: { kind: "free", x: 300 * MM, y: 20 * MM } })) as { id: string };
+    const freeWorld = () => {
+      const c = node<ConnectorNode>(loose.id)!;
+      const end = resolveConnector(store.doc, c, r).ends[1].pt;
+      return nodeWorldRect(store.doc, { ...c, x: end.x, y: end.y, width: 0, height: 0 } as Node);
+    };
+    const before = freeWorld();
+    await call("delete-page", { page: "pg-2" });
+    expect(node("a")!.page).toBe("pg-1");
+    expect(node(both.id)).toMatchObject({ page: "pg-1", ends: [cardEnd("a", "s"), cardEnd("b", "n")] });
+    expect(node(loose.id)).toMatchObject({ page: "pg-1" });
+    expect(node<ConnectorNode>(loose.id)!.ends[0]).toEqual(cardEnd("a", "e"));
+    const after = freeWorld();
+    expect(after.x).toBeCloseTo(before.x, 1);
+    expect(after.y).toBeCloseTo(before.y, 1);
+  });
+});
+

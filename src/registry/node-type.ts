@@ -1,5 +1,6 @@
 import type { App, Component } from "obsidian";
 import type { AssetMap } from "../export/asset-types";
+import { registerLinkedType, type LinkField } from "../format/node-links";
 import type { Attachable } from "../model/attach";
 import type { Pt, Rect } from "../model/geometry";
 import type { PathData } from "../model/path";
@@ -220,7 +221,8 @@ export interface NodeType<N extends Node = Node> {
    * For `node.update`: what is wrong with `value`, one of the type's own top-level fields (`"fill"`, `"ends"`) as the
    * patch leaves it, or null when it is fine. `node` is the whole node as the patch leaves it (after `completeUpdate`),
    * for a field that depends on another (a connector's ends must be on its page). Called for each such field a patch
-   * touches; a key the type does not know is fine, as the file format keeps unknown keys. Also called for the base field
+   * touches; a key the type does not know is fine, as the file format keeps unknown keys. It is called for a changed base field too, after that field's own
+   * check, so a type can refuse a value it does not take (a card's `rotation`). Also called for the base field
    * `"page"` when a patch moves the node to another page, so a type can refuse a move this command cannot make (a
    * connector attached to items, which `node.move` moves with them). `node.update` runs these checks within its patch
    * (`judgingPatch`): a stroke field checked with `fieldError` or `paramError` is judged by the keys the patch gives
@@ -274,6 +276,11 @@ export interface NodeType<N extends Node = Node> {
    * value to one. Undefined for a key that is a path into the node, which `node.update` writes.
    */
   fieldRoute?(key: string): FieldRoute<N> | undefined;
+  /**
+   * Opts the type in to keeping a link in the figure file's Links section (see `LinkField`): its nodes' `file` and
+   * `subpath` are written there, not in the JSON, read back from there, and follow a rename of the target.
+   */
+  linkField?: LinkField;
   /**
    * `false` keeps the type's items out of every export, inside groups too, and with them every node drawn from one of
    * them (a connector with an end on one, see `isExported`): a card beside the figure. Absent, the items are exported.
@@ -346,6 +353,8 @@ export class NodeTypeRegistry {
 
   register(t: NodeType<any>): void {
     this.types.set(t.type, t);
+    // The file format reads which types keep a link without the registries.
+    registerLinkedType(t.type, t.linkField);
   }
 
   get(type: string): NodeType<any> | undefined {
@@ -380,7 +389,8 @@ export function isExported(doc: Document, registries: { nodeTypes: NodeTypeRegis
   if ((type.tiedPages?.(node).length ?? 0) > 0) return false;
   for (const id of type.dependsOn?.(node) ?? []) {
     const other = doc.nodes.find((n) => n.id === id);
-    if (other && nodeTypeFor(registries, other, unreadable)?.exportable === false) return false;
+    // Asked of its type even when its plugin could not read it: the flag is the type's, not the node's.
+    if (other && registries.nodeTypes.get(other.type)?.exportable === false) return false;
   }
   return true;
 }

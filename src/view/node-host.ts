@@ -185,7 +185,9 @@ export class NodeHost {
   /**
    * The watcher says files that `ids` depend on changed: each node that resolves a link (`linkTarget`) is resolved
    * again, which draws it; any other is drawn again from scratch (`NodeRenderer.refresh`). Both track their linked
-   * files afresh, as what an embedded note embeds may have changed.
+   * files afresh, as what an embedded note embeds may have changed. A node whose renderer follows its file by itself
+   * (`NodeRenderer.followsFile`: a note card's live embed) is left alone, so an edit in it is never drawn over; it is
+   * resolved again once it no longer does (its note deleted).
    */
   async invalidate(ids: NodeId[]): Promise<void> {
     const doc = this.view.store.doc;
@@ -194,12 +196,14 @@ export class NodeHost {
     for (const id of new Set(ids)) {
       const node = byId.get(id);
       if (!node) continue;
+      const entry = this.entries.get(id);
+      // A drawing that follows its file itself (a note's live embed) is not drawn over: an edit in it may be under way.
+      if (this.follows(id, entry)) continue;
       this.linked.delete(id);
       if (this.asFile(node, doc)) {
         toResolve.push(id);
         continue;
       }
-      const entry = this.entries.get(id);
       try {
         entry?.renderer.refresh?.();
       } catch (error) {
@@ -283,6 +287,62 @@ export class NodeHost {
   /** A file a link leads to was renamed: each renderer that holds text the model does not yet (an open editor) follows it. */
   renameLinks(rename: LinkRename): void {
     for (const { renderer } of this.entries.values()) renderer.renameLinks?.(rename);
+  }
+
+  /** Whether node `id`'s renderer keeps its drawing in step with its file by itself (`NodeRenderer.followsFile`). */
+  private follows(id: NodeId, entry: Entry | undefined): boolean {
+    try {
+      return entry?.renderer.followsFile?.() === true;
+    } catch (error) {
+      console.error(`Link Figures: could not tell whether node ${id} follows its file`, error);
+      return false;
+    }
+  }
+
+  /**
+   * A click on node `id` while it was selected alone, pressed on `target` at `at` (client px): true when its renderer
+   * started an edit in place (see `NodeRenderer.edit`).
+   */
+  edit(id: NodeId, target: EventTarget | null, at: { x: number; y: number }): boolean {
+    const renderer = this.entries.get(id)?.renderer;
+    try {
+      return renderer?.edit?.(target, at) === true;
+    } catch (error) {
+      console.error(`Link Figures: could not edit node ${id}`, error);
+      return false;
+    }
+  }
+
+  /** Whether `target` is inside an editor in place that is open (`NodeRenderer.isEditing`): its events are the editor's. */
+  isEditingAt(target: EventTarget | null): boolean {
+    if (!target) return false;
+    for (const { renderer } of this.entries.values()) {
+      try {
+        if (renderer.isEditing?.(target)) return true;
+      } catch {
+        // A renderer that cannot say is not editing.
+      }
+    }
+    return false;
+  }
+
+  /** Writes what every editor in place holds and has not saved yet (`NodeRenderer.flush`). Never rejects. */
+  async flushAll(): Promise<void> {
+    await Promise.all(
+      [...this.entries].map(async ([id, { renderer }]) => {
+        try {
+          await renderer.flush?.();
+        } catch (error) {
+          console.error(`Link Figures: could not save what node ${id} is editing`, error);
+        }
+      }),
+    );
+  }
+
+  /** Unmounts every node (the view is closing): each renderer lets go of what it holds, an editor saving first. */
+  unmountAll(): void {
+    for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
+    this.entries.clear();
   }
 
   /** The `.lf-node` element of a node (or whatever its node type mounted), for hit-testing and for rasterising it. */

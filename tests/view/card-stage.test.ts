@@ -430,28 +430,33 @@ describe("drops", () => {
     return s;
   }
 
-  test("a note dropped off the paper makes a text card `![[<linktext>#h]]`; on paper, still a content panel", async () => {
+  test("a note dropped off the paper makes a note card of it, as Canvas makes a file card; on paper, still a content panel", async () => {
     const off = dropSetup(false);
     await vi.waitFor(() => expect(off.store.doc.nodes).toHaveLength(4));
     const card = off.store.doc.nodes[3] as CardNode;
     expect(card.type).toBe("card");
-    expect(card.file).toBeUndefined();
-    // The figure's link text for the note (here its base name, as Obsidian's shortest form writes it).
-    expect(card.text).toBe("![[a]]");
+    expect(card.text).toBeUndefined();
+    // Linked as a content panel links its note.
+    expect(card.file).toBe("Notes/a");
+    expect(card.subpath ?? "").toBe("");
     const box = nodeWorldRect(off.store.doc, card);
     expect([box.x, box.y]).toEqual([-700, 300]);
     expect(off.view.selection.ids).toEqual([card.id]);
 
-    // Two notes off the paper: one card below the other, a 4 mm gap between them.
+    // Two notes off the paper: two note cards, one below the other, a 4 mm gap between them.
     const two = dropSetup(false, [{ path: "Notes/a.md" }, { path: "Notes/b.md" }]);
     await vi.waitFor(() => expect(two.store.doc.nodes).toHaveLength(5));
     const [first, second] = two.store.doc.nodes.slice(3) as CardNode[];
+    expect([first.file, second.file]).toEqual(["Notes/a", "Notes/b"]);
+    expect(first.text).toBeUndefined();
+    expect(second.text).toBeUndefined();
     expect(second.y).toBeCloseTo(first.y + first.height + GAP, 1);
 
-    // A heading's link keeps its subpath.
+    // A heading makes a note card of that section.
     const heading = dropSetup(false, undefined, { type: "link", linktext: "Notes/a#Legend" });
     await vi.waitFor(() => expect(heading.store.doc.nodes).toHaveLength(4));
-    expect((heading.store.doc.nodes[3] as CardNode).text).toBe("![[a#Legend]]");
+    const section = heading.store.doc.nodes[3] as CardNode;
+    expect([section.file, section.subpath, section.text]).toEqual(["Notes/a", "#Legend", undefined]);
 
     const on = dropSetup(true);
     await vi.waitFor(() => expect(on.store.doc.nodes).toHaveLength(4));

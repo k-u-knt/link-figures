@@ -48,6 +48,7 @@ export function viewExportTarget(view: LinkFiguresView, file: { path: string }, 
       access: plugin.access,
     },
     drawn: () => view.nodeHost.drawn(),
+    flush: () => view.nodeHost.flushAll(),
     // As the view loaded the figure (an export opened in the background loads it too).
     unreadable: view.unreadableNodes,
   };

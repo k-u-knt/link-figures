@@ -5,7 +5,6 @@ import { prepareCall, runInOneCommit } from "../commands/headless";
 import { CARD_PAPER_GAP_MM } from "../model/card-space";
 import { fileNodeDefaults } from "../model/defaults";
 import { CARD_SIZE_MM } from "../nodes/card-node";
-import { embedText } from "../model/card-links";
 import { mmToPx, pageSizePx, type PlacePoint, type Pt } from "../model/geometry";
 import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
@@ -26,7 +25,7 @@ type Size = { width: number; height: number };
 
 /**
  * Where new nodes go: a page, and a position on it in that page's pixels. `offPaper`: the drop landed off every page's
- * paper, where a note (its content) becomes a text card holding its embed (`![[<linktext><subpath>]]`), placed against
+ * paper, where a note (its content) becomes a note card of that section (as Canvas makes a file card), placed against
  * the page whose paper is nearest, at that point.
  */
 export type IntakeTarget = PlacePoint & { offPaper?: PlacePoint };
@@ -485,8 +484,9 @@ export class Intake {
             id: "card.create",
             args: {
               page: cardAt.page.id,
-              // A text card holding the note's embed, written as the figure writes links to it: one kind of card, edited one way.
-              text: embedText(item.file, item.subpath, (file) => context.linktext?.(file) ?? file),
+              // A note card of the section, as Canvas makes a file card: its body is the note's own editor.
+              file: item.file,
+              ...(item.subpath !== "" ? { subpath: item.subpath } : {}),
               x: roundPx(cardAt.x),
               y: roundPx(cardAt.y + cards++ * cardStep),
             },

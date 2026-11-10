@@ -295,6 +295,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     const waiters = this.loadWaiters;
     this.loadWaiters = [];
     for (const resolve of waiters) resolve();
+    // What the note cards' editors hold is written to their notes, then their embeds are let go of (an edit is ended
+    // with a save).
+    if (this.nodeHost) {
+      await this.nodeHost.flushAll();
+      this.nodeHost.unmountAll();
+    }
   }
 
   /**

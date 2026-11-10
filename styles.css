@@ -682,6 +682,40 @@
   font-size: var(--font-text-size);
 }
 
+/* A note card's body: Obsidian's own note embed (see `embed-adapter.ts`), laid out as Canvas lays out a file card's.
+   Its editor runs in an iframe (`.embed-iframe`) filling the card, and scrolls there. */
+.lf-card-embed {
+  padding: 0;
+}
+
+.lf-card-embed > .markdown-embed {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.lf-card-embed > .markdown-embed > .markdown-embed-link {
+  display: none;
+}
+
+.lf-card-embed > .markdown-embed > .markdown-embed-content {
+  height: 100%;
+  max-height: none;
+  overflow: hidden;
+}
+
+.lf-card-embed > .markdown-embed > .markdown-embed-content > .markdown-preview-view {
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
+.lf-card-embed .embed-iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
 /* A card's tie to a page (an association): dashed, in the interface colour, whatever paint the connector has. The line
    is its one unfilled path; its caps are filled paths. */
 .lf-association path[fill="none"] {

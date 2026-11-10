@@ -104,6 +104,21 @@ describe("exportFigure", () => {
     expect(out).toEqual({ files: ["figs/Fig - Page 2.txt"], warnings: ["said"], folder: "figs" });
   });
 
+  test("open note-card editors are flushed (target.flush) before anything is drawn or read", async () => {
+    const order: string[] = [];
+    const { t, spy } = target({
+      flush: async () => void order.push("flush"),
+      drawn: async () => void order.push("drawn"),
+    });
+    const run = spy.exporter.run;
+    spy.exporter.run = (...args: Parameters<typeof run>) => {
+      order.push("run");
+      return run(...args);
+    };
+    await exportFigure(t, { format: "spy" });
+    expect(order).toEqual(["flush", "drawn", "run"]);
+  });
+
   test("all pages, or the pages named, at the dpi asked for (rounded), with the options given", async () => {
     const { t, doc, spy } = target({ settings: { exportFolder: "out", exportDpi: 300, maxPageSizeMm: 2000 } });
     const all = await exportFigure(t, { format: "spy", pages: "all", dpi: 600.4, options: { compression: "none" } });

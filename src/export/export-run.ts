@@ -196,6 +196,11 @@ export interface FigureExportTarget {
    * waited on for at most `DRAWN_WAIT_MS` before the export. None: the figure is taken as drawn.
    */
   drawn?: () => Promise<void>;
+  /**
+   * Writes what the figure's open editors hold and have not saved yet (a note card's note, see `NodeHost.flushAll`), so
+   * the export reads the notes as they were just typed. Called first; a failure is logged, and the export goes on.
+   */
+  flush?: () => Promise<void>;
   /** The nodes their plugin could not read when the figure was loaded (the load result's `unreadable`), which are skipped. */
   unreadable?: ReadonlySet<NodeId>;
 }
@@ -268,6 +273,14 @@ export async function exportFigure(target: FigureExportTarget, request: ExportRe
   const { exporter, dpi, options, cards } = checkRequest(target.deps.registries, target.settings.exportDpi, request);
   const pages = pagesOf(target.doc, target.currentPage, request.pages);
   const folder = exportFolderFor(target.settings, target.figurePath);
+  // Note cards are read from the vault: what was just typed into one is written there first.
+  if (target.flush) {
+    try {
+      await target.flush();
+    } catch (error) {
+      console.error(`Link Figures: could not save the notes being edited in "${target.baseName}" before the export`, error);
+    }
+  }
   // Content cards are snapshotted from the stage: wait (bounded) for it to settle, open figures too.
   const drawn = target.drawn ? await drawnWithin(target.drawn, DRAWN_WAIT_MS) : true;
   const { paths, warnings } = await runExport(

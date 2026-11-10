@@ -104,7 +104,7 @@ type Snap = { pageId: PageId; lines: SnapLines } | null;
  */
 type Gesture =
   | { kind: "idle" }
-  | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
+  | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null; edit: { id: NodeId; target: EventTarget | null } | null }
   | { kind: "link"; pointerId: number; client: Pt; down: PointerEvent }
   | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean; snap: Snap; bounds: Rect | null; offPaper: OffPaperDrag | null }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null; snap: Snap }
@@ -339,7 +339,7 @@ export class PointerController {
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     // Not while a tool is armed: its press is the tool's wherever it lands (the Connector tool from a card's link).
     const target = ev.target as Element | null;
-    if (isEditable(target)) return;
+    if (isEditable(target) || this.inEditor(target)) return;
     if (!this.view.armedTool && isOwnClick(target)) {
       // A press on a link waits: let go where it is, it is the link's click; moved on, it is a press on the card (see
       // `onPointerMove`). The pointer is not captured meanwhile, so the click reaches the link.
@@ -432,8 +432,10 @@ export class PointerController {
       // A press on a node of a larger selection moves them all; a click that goes nowhere narrows it to that node.
       // A press on a locked node selects it like any other, but there is nothing to move: a drag from it sweeps a marquee (see `begin`).
       const collapseTo = selection.has(hit) ? hit : null;
+      // A click on the node it selected alone may edit it in place (a note card's body), if it stays a click: see `onPointerUp`.
+      const edit = collapseTo !== null && selection.ids.length === 1 && hit === drawn ? { id: hit, target: ev.target } : null;
       if (!selection.has(hit)) selection.set([hit]);
-      this.press(ev, world, { kind: "move" }, collapseTo);
+      this.press(ev, world, { kind: "move" }, collapseTo, edit);
       return;
     }
 
@@ -453,8 +455,8 @@ export class PointerController {
     if (page) this.press(ev, world, { kind: "marquee", pageId: page.id, base: [...selection.ids], within: entered, leaveOnClick: inside }, null);
   }
 
-  private press(ev: PointerEvent, world: Pt, intent: Intent, collapseTo: NodeId | null): void {
-    this.gesture = { kind: "pressed", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, intent, collapseTo };
+  private press(ev: PointerEvent, world: Pt, intent: Intent, collapseTo: NodeId | null, edit: Pressed["edit"] = null): void {
+    this.gesture = { kind: "pressed", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, intent, collapseTo, edit };
     try {
       this.stage?.setPointerCapture(ev.pointerId);
     } catch {
@@ -929,6 +931,13 @@ export class PointerController {
     if (g.kind === "pressed" && g.intent.kind === "marquee" && g.intent.leaveOnClick) this.setEntered(null);
     if (g.kind === "moving") this.finishMove(g);
     this.endGesture();
+    // A click (no drag) on the node that was selected alone: the node may start editing in place where it was pressed.
+    if (g.kind === "pressed" && g.edit) this.view.nodeHost?.edit?.(g.edit.id, g.edit.target, g.client);
+  }
+
+  /** Whether `target` is inside a node's editor in place that is open (see `NodeRenderer.isEditing`): its events are its own. */
+  private inEditor(target: EventTarget | null): boolean {
+    return this.view.nodeHost?.isEditingAt?.(target) === true;
   }
 
   /** The pointer was cancelled or its capture lost: whatever was done so far stays done (and undoable). */
@@ -972,7 +981,7 @@ export class PointerController {
    * entered level itself is told.
    */
   private onDoubleClick(ev: MouseEvent): void {
-    if (this.view.readOnly || isEditable(ev.target) || isOwnClick(ev.target)) return;
+    if (this.view.readOnly || isEditable(ev.target) || isOwnClick(ev.target) || this.inEditor(ev.target)) return;
     // A double-click finishes crop mode.
     if (this.cropSession.active) {
       this.cropSession.finish();
@@ -1008,7 +1017,7 @@ export class PointerController {
    * outside the pages, the view menu. Text being typed into keeps the browser's own menu. A crop session ignores it.
    */
   private onContextMenu(ev: MouseEvent): void {
-    if (this.view.readOnly || isEditable(ev.target)) return;
+    if (this.view.readOnly || isEditable(ev.target) || this.inEditor(ev.target)) return;
     ev.preventDefault();
     // The Menu key or Shift+F10 has opened the menu already, and this is the event the same key sends after.
     // It is one-shot: a real right-click after the echo is not taken for one.
@@ -1071,6 +1080,8 @@ export class PointerController {
   // Keyboard
 
   private onKeyDown(ev: KeyboardEvent): void {
+    // Keys typed into a node's editor in place (a note card's) are the editor's.
+    if (this.inEditor(ev.target)) return;
     // An open context menu owns Escape: it closes itself, and the stage keeps its selection, group and tool.
     if (ev.key === "Escape" && this.view.contextMenuOpen) return;
     // Escape takes the snap guides of a drag away (the drag goes on, and draws them again where it snaps next).

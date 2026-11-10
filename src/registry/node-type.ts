@@ -82,6 +82,24 @@ export interface NodeRenderer {
    * failed to), so the stage can be snapshotted. Never rejects. Without it, the node is drawn as soon as it is mounted.
    */
   drawn?(): Promise<void>;
+  /**
+   * Whether the node is being edited in place (a card's editor open); with `target`, whether `target` is inside that
+   * editor, whose pointer and key events are then the editor's, not the stage's.
+   */
+  isEditing?(target?: EventTarget | null): boolean;
+  /**
+   * A click on the node while it was selected alone, pressed on `target` at `at` (client px): true when it started an
+   * edit in place there (a note card's body opens its note's editor). A click that is not one returns false, and stays
+   * a click on the node.
+   */
+  edit?(target: EventTarget | null, at: Pt): boolean;
+  /** Writes what an editor in place holds and has not saved yet (a note card's note), before something reads it. */
+  flush?(): Promise<void>;
+  /**
+   * Whether the renderer keeps what it shows in step with its file by itself (an Obsidian embed of a note, which
+   * follows the note's changes): the watcher then leaves it alone, so an edit under way is never drawn over.
+   */
+  followsFile?(): boolean;
 }
 
 export interface SvgContext {

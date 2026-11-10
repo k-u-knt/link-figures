@@ -1,13 +1,14 @@
-import { EDITING_CLASS, EDITING_EVENT } from "../constants";
+import { EDITING_CLASS, EDITING_EVENT, LIVE_LINKS } from "../constants";
 import { boxAttachable } from "../model/attach";
 import { newId } from "../model/defaults";
-import { mmToPx, type Rect } from "../model/geometry";
+import { mmToPx, type Pt, type Rect } from "../model/geometry";
 import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
 import { cardLinks, firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
 import type { LinkedPath, LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
 import { attachLinkSuggest, type BlockIdWriter } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
+import { noteFile, openEmbed, type LiveEmbed } from "../view/embed-adapter";
 
 /** The size of a new card, in mm. */
 export const CARD_SIZE_MM = { width: 60, height: 40 };
@@ -56,12 +57,38 @@ interface EditingView {
   plugin?: { api?: { blockId?: BlockIdWriter } };
 }
 
+/** A DOM node, as `contains` takes it (the model's `Node` has the name here). */
+type DomNode = NonNullable<Parameters<HTMLElement["contains"]>[0]>;
+
+/** Whether `target` is a DOM node inside `el` (or `el` itself). */
+function within(el: HTMLElement, target: EventTarget | null | undefined): boolean {
+  const node = target as unknown as DomNode | null | undefined;
+  return !!node && typeof node.nodeType === "number" && el.contains(node);
+}
+
+/** A note card's live embed (see `openEmbed`): of which file object (kept across a rename) and subpath. */
+interface Live {
+  embed: LiveEmbed;
+  file: object;
+  subpath: string;
+}
+
 /**
- * One card's DOM: `.lf-node.lf-card` (`is-note` for a note card) holding `.lf-card-body`, which shows the card's content
- * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown, with link suggestions while a `[[` link is
- * typed (`attachLinkSuggest`; Escape with their list open closes only the list); Escape or the textarea
- * losing the focus ends the edit and writes what was typed with `node.update`, one undo step, and nothing when it is
- * unchanged. The pointer controller leaves presses and keys on the textarea to it (`isEditable`).
+ * One card's DOM: `.lf-node.lf-card` (`is-note` for a note card) holding `.lf-card-body`, which shows the card's content.
+ *
+ * A text card shows its Markdown rendered (`renderCard`), and is edited in place: a double-click (as `lf-activate` from
+ * the pointer controller) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown, with link
+ * suggestions while a `[[` link is typed (`attachLinkSuggest`; Escape with their list open closes only the list);
+ * Escape or the textarea losing the focus ends the edit and writes what was typed with `node.update`, one undo step, and
+ * nothing when it is unchanged.
+ *
+ * A note card shows Obsidian's own editable embed of its note's section (`openEmbed`), as Canvas's file card does: made
+ * once its link resolves, and kept while the card shows that file and subpath, through moves, resizes, other commits and
+ * a rename of the note. A click on its body while the card is selected alone (`edit`, from the pointer controller)
+ * opens the embed's editor, which saves to the note itself; a press outside the card, or Escape in the editor, ends the
+ * edit with a save. The embed goes (saving an edit first) when the card is removed, stops being a note card, shows
+ * another note, or its note goes. Without the embed (`openEmbed` gives null), the card shows its section read-only, as
+ * a text card is shown. The pointer controller leaves presses and keys in an editor to it (`isEditing`).
  */
 class CardNodeRenderer implements NodeRenderer {
   private node: CardNode;
@@ -75,6 +102,13 @@ class CardNodeRenderer implements NodeRenderer {
   private before = "";
   /** Detaches the editor's link suggestions (`attachLinkSuggest`); a no-op when not editing. */
   private detachSuggest: () => void = () => {};
+  /** A note card's live embed, or null (a text card, a note not resolved or not found, no embed to be had). */
+  private live: Live | null = null;
+  /** Ends a note card's edit when a press lands outside the card; on the document while the note is being edited. */
+  private readonly pressOutside = (ev: Event): void => {
+    if (within(this.el, ev.target)) return;
+    this.live?.embed.stopEditing();
+  };
 
   constructor(node: CardNode, host: HTMLElement, private readonly ctx: RenderContext) {
     this.node = node;
@@ -105,9 +139,10 @@ class CardNodeRenderer implements NodeRenderer {
   }
 
   unmount(): void {
-    // The card is gone (deleted, undone, reloaded): what was being typed has nowhere to go.
+    // The card is gone (deleted, undone, reloaded): what was being typed has nowhere to go. A note's editor saves to the note.
     this.editor = null;
     this.detachSuggest();
+    this.dropLive();
     this.shown?.release();
     this.shown = null;
     this.el.remove();
@@ -115,6 +150,32 @@ class CardNodeRenderer implements NodeRenderer {
 
   drawn(): Promise<void> {
     return this.shown?.drawn ?? Promise.resolve();
+  }
+
+  isEditing(target?: EventTarget | null): boolean {
+    if (this.editor) return target === undefined || target === this.editor;
+    if (!this.live?.embed.editing()) return false;
+    return target === undefined || within(this.body, target);
+  }
+
+  /** A click on the body of the selected note card opens its note's editor there (see `canEdit`). */
+  edit(target: EventTarget | null, at: Pt): boolean {
+    const live = this.live;
+    if (!live || !within(this.body, target) || !this.canEdit()) return false;
+    live.embed.edit(at);
+    return live.embed.editing();
+  }
+
+  flush(): Promise<void> {
+    return this.live?.embed.flush() ?? Promise.resolve();
+  }
+
+  /** While the embed's note is in the vault, the embed follows it: the watcher need not resolve the card again. */
+  followsFile(): boolean {
+    const live = this.live;
+    if (!live) return false;
+    const path = (live.file as { path?: unknown }).path;
+    return typeof path === "string" && noteFile(this.ctx.app, path) === live.file;
   }
 
   /** A note it links or embeds changed: drawn again from scratch (its embeds rendered afresh), unless it is being edited. */
@@ -139,15 +200,78 @@ class CardNodeRenderer implements NodeRenderer {
     area.setSelectionRange(mapOffset(selectionStart, edits), mapOffset(selectionEnd, edits), selectionDirection ?? undefined);
   }
 
-  /** Draws the body from the node and what was resolved for it, unless it already shows that. */
+  /**
+   * Draws the body from the node and what was resolved for it, unless it already shows that. A note card whose live
+   * embed is of the file and subpath it shows now keeps it as it is (its note renamed, re-resolved, edited).
+   */
   private draw(): void {
     const n = this.node;
     const key = JSON.stringify([n.text, n.file, n.subpath]);
     const resolved = n.file === undefined ? undefined : this.ctx.resolved(n.id);
     if (this.drawnFrom && this.drawnFrom.key === key && this.drawnFrom.resolved === resolved) return;
     this.drawnFrom = { key, resolved };
+    const content = n.file !== undefined && resolved?.kind === "content" ? resolved : null;
+    const file = content && noteFile(this.ctx.app, content.file.path);
+    const subpath = n.subpath ?? "";
+    const live = this.live;
+    if (live && content && live.subpath === subpath) {
+      if (file === live.file) return;
+      // A resolution from before a rename (its path is the note's old one) while the new one is made: the embed follows
+      // the note itself, so it stays until the new resolution says what the card shows.
+      if (!file && this.followsFile()) return;
+    }
+    this.dropLive();
     this.shown?.release();
-    this.shown = renderCard(this.body, n, this.ctx);
+    this.shown = (file && this.openLive(file, subpath)) || renderCard(this.body, n, this.ctx);
+  }
+
+  /** Puts Obsidian's editable embed of `file`'s `subpath` in the body; null (the body untouched) when there is none to be had. */
+  private openLive(file: NonNullable<ReturnType<typeof noteFile>>, subpath: string): CardBody | null {
+    const holder = this.body.ownerDocument.createElement("div");
+    // Its links take their own clicks (`openCardLink`), not the stage's.
+    holder.classList.add("lf-card-content", "lf-card-embed", LIVE_LINKS);
+    const embed = openEmbed(this.ctx.app, file, subpath, holder, this.ctx.figurePath, {
+      canEdit: () => this.canEdit(),
+      onEditingChange: (editing) => this.liveEditing(editing),
+    });
+    if (!embed) return null;
+    this.body.empty();
+    this.body.appendChild(holder);
+    this.live = { embed, file, subpath };
+    return { drawn: embed.ready, release: () => {} };
+  }
+
+  /** Lets go of the live embed, if there is one: an edit under way is ended with a save, then the embed is unloaded. */
+  private dropLive(): void {
+    const live = this.live;
+    if (!live) return;
+    this.live = null;
+    try {
+      live.embed.unload();
+    } catch (error) {
+      console.error(`Link Figures: could not close the note of card ${this.node.id}`, error);
+    }
+    // Its edit's end may not have been told (the embed failed): the card is not being edited any more either way.
+    this.liveEditing(false);
+  }
+
+  /** Whether the card may be edited in place now: not locked, and in a view that is not read-only. */
+  private canEdit(): boolean {
+    const view = this.view();
+    return !this.node.locked && !!view && !view.readOnly;
+  }
+
+  /** The note's editor opened or went: the card says so, and a press outside it ends it. */
+  private liveEditing(editing: boolean): void {
+    const doc = this.el.ownerDocument;
+    if (this.el.classList.contains(EDITING_CLASS) === editing) return;
+    if (editing) doc.addEventListener("pointerdown", this.pressOutside, true);
+    else doc.removeEventListener("pointerdown", this.pressOutside, true);
+    this.toldEditing(editing);
+    // Ended from inside (Escape): the keys go back to the stage, as when a text card's edit ends. Not when the focus
+    // has gone elsewhere already.
+    const active = doc.activeElement;
+    if (!editing && (!active || active === doc.body || this.el.contains(active))) this.el.closest<HTMLElement>(".lf-stage")?.focus({ preventScroll: true });
   }
 
   /** The figure view, or null when there is none to edit through. */

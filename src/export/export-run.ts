@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import type { App, EventRef } from "obsidian";
 import { MAX_DPI, MIN_DPI } from "../constants";
 import type { Decoders, Resolved, VaultAccess } from "../links/types";
 import type { Document, NodeId, Page, PageId } from "../model/types";
@@ -309,6 +309,53 @@ export interface BackgroundTab {
   detach(): void;
   /** Whether it is the active tab: the user has switched to it meanwhile. */
   isActive(): boolean;
+  /** Lets go of what the tab was watched with (see `takeBackgroundLeaf`), whether it was closed or not. */
+  release?(): void;
+}
+
+/** What `takeBackgroundLeaf` uses of Obsidian's workspace (`activeLeaf` and the rest, as 1.15 has them). */
+export interface TabWorkspace<L> {
+  activeLeaf: L | null;
+  getLeaf(kind: "tab"): L;
+  iterateAllLeaves(fn: (leaf: L) => void): void;
+  setActiveLeaf(leaf: L, params: { focus: boolean }): void;
+  on(name: "active-leaf-change", fn: (leaf: L | null) => void): EventRef;
+  offref(ref: EventRef): void;
+}
+
+/** A leaf `takeBackgroundLeaf` gave out, as `closeBackgroundTab` closes it (with the view's `save` added). */
+export interface BackgroundLeaf<L> extends Omit<BackgroundTab, "save"> {
+  leaf: L;
+}
+
+/**
+ * A tab for exporting a figure in the background. `getLeaf("tab")` makes a new tab and, with "Always focus new tabs"
+ * on (Obsidian's default), makes it the active one, so it read as a tab the user had switched to and was left open
+ * after the export: the tab that was active is made active again at once. The tab counts as the user's
+ * (`isActive`) only once they switch to it themselves and while it stays active. Obsidian hands out the most recent tab
+ * instead of a new one when that is an empty tab ("New tab"): that tab is the user's, and is given back empty rather
+ * than closed.
+ */
+export function takeBackgroundLeaf<L extends { detach(): void; setViewState(state: { type: string }): Promise<void> }>(workspace: TabWorkspace<L>): BackgroundLeaf<L> {
+  const previous = workspace.activeLeaf;
+  const existing = new Set<L>();
+  workspace.iterateAllLeaves((l) => existing.add(l));
+  const leaf = workspace.getLeaf("tab");
+  const reused = existing.has(leaf);
+  if (!reused && previous && previous !== leaf && workspace.activeLeaf === leaf) workspace.setActiveLeaf(previous, { focus: false });
+  let switchedTo = false;
+  const ref = workspace.on("active-leaf-change", (active) => {
+    switchedTo = active === leaf;
+  });
+  return {
+    leaf,
+    isActive: () => switchedTo && workspace.activeLeaf === leaf,
+    detach: () => {
+      if (reused) void leaf.setViewState({ type: "empty" });
+      else leaf.detach();
+    },
+    release: () => workspace.offref(ref),
+  };
 }
 
 /**
@@ -323,6 +370,7 @@ export async function closeBackgroundTab(tab: BackgroundTab): Promise<void> {
     console.error("Link Figures: could not save the figure exported in the background", error);
   }
   if (!tab.isActive()) tab.detach();
+  tab.release?.();
 }
 
 /** What `exportInBackground` needs of the plugin, so that it can be tested without Obsidian. */

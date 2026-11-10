@@ -11,7 +11,7 @@ vi.mock("obsidian", async () => {
   return { normalizePath: fake.normalizePath, TFile: fake.FakeTFile, Modal: class {}, Notice: class {}, Setting: class {} };
 });
 vi.mock("../../src/links/decoders/pdf", () => ({ decodePdf: vi.fn(), pdfPageSizePt: vi.fn() }));
-const { closeBackgroundTab, exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS, DRAWN_WAIT_MS } = await import("../../src/export/export-run");
+const { closeBackgroundTab, takeBackgroundLeaf, exportFigure, exportInBackground, exportOptions, optionDefaults, DPI_PRESETS, DRAWN_WAIT_MS } = await import("../../src/export/export-run");
 type FigureExportTarget = import("../../src/export/export-run").FigureExportTarget;
 
 const FIELDS: Field[] = [
@@ -353,3 +353,74 @@ describe("closeBackgroundTab", () => {
   });
 });
 
+
+describe("takeBackgroundLeaf", () => {
+  type Leaf = { id: string; type: string; detached: boolean; detach(): void; setViewState(s: { type: string }): Promise<void> };
+  /**
+   * Obsidian 1.15's workspace as `getLeaf("tab")` uses it (`createLeafInTabGroup`, read from its app.js): the most
+   * recently active tab is reused when it is an empty tab, else a new tab is made, and, with "Always focus new tabs" on
+   * (`focusNewTab`, the default), made the active one.
+   */
+  function workspace(o: { focusNewTab?: boolean; activeType?: string } = {}) {
+    const listeners = new Set<(leaf: Leaf | null) => void>();
+    const leaf = (id: string, type: string): Leaf => {
+      const l: Leaf = { id, type, detached: false, detach: () => void (l.detached = true), setViewState: async (s) => void (l.type = s.type) };
+      return l;
+    };
+    const ws = {
+      leaves: [leaf("user", o.activeType ?? "markdown")],
+      activeLeaf: null as Leaf | null,
+      setActiveLeaf(l: Leaf) {
+        if (ws.activeLeaf === l) return;
+        ws.activeLeaf = l;
+        for (const fn of listeners) fn(l);
+      },
+      getLeaf(): Leaf {
+        const recent = ws.activeLeaf!;
+        if (recent.type === "empty") return recent;
+        const l = leaf(`tab-${ws.leaves.length}`, "empty");
+        ws.leaves.push(l);
+        if (o.focusNewTab ?? true) ws.setActiveLeaf(l);
+        return l;
+      },
+      iterateAllLeaves: (fn: (l: Leaf) => void) => ws.leaves.forEach(fn),
+      on: (_: "active-leaf-change", fn: (leaf: Leaf | null) => void) => (listeners.add(fn), fn),
+      offref: (ref: unknown) => void listeners.delete(ref as never),
+    };
+    ws.activeLeaf = ws.leaves[0];
+    return ws;
+  }
+
+  test("a new tab that Obsidian focuses gives the focus back, and is closed after the export", async () => {
+    const ws = workspace();
+    const tab = takeBackgroundLeaf(ws as never);
+    expect(ws.activeLeaf!.id).toBe("user");
+    expect(tab.isActive()).toBe(false);
+    await closeBackgroundTab({ save: async () => {}, ...tab });
+    expect((tab.leaf as Leaf).detached).toBe(true);
+  });
+
+  test("a tab the user switches to meanwhile is theirs, and stays open", async () => {
+    const ws = workspace();
+    const tab = takeBackgroundLeaf(ws as never);
+    ws.setActiveLeaf(tab.leaf as Leaf);
+    expect(tab.isActive()).toBe(true);
+    await closeBackgroundTab({ save: async () => {}, ...tab });
+    expect((tab.leaf as Leaf).detached).toBe(false);
+    // Switching away again makes it the export's to close.
+    const other = takeBackgroundLeaf(ws as never);
+    ws.setActiveLeaf(other.leaf as Leaf);
+    ws.setActiveLeaf(ws.leaves[0]);
+    expect(other.isActive()).toBe(false);
+  });
+
+  test("the user's empty tab that Obsidian hands out is given back empty, not closed", async () => {
+    const ws = workspace({ activeType: "empty" });
+    const tab = takeBackgroundLeaf(ws as never);
+    expect(tab.leaf).toBe(ws.leaves[0]);
+    await (tab.leaf as Leaf).setViewState({ type: "link-figures" });
+    await closeBackgroundTab({ save: async () => {}, ...tab });
+    expect((tab.leaf as Leaf).detached).toBe(false);
+    expect((tab.leaf as Leaf).type).toBe("empty");
+  });
+});

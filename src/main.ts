@@ -21,7 +21,7 @@ import { groupCommands } from "./commands/groups";
 import { builtinCapKinds, builtinRoutes } from "./connectors/builtin";
 import { VIEW_TYPE } from "./constants";
 import { viewExportTarget } from "./export/export-modal";
-import { closeBackgroundTab, exportFigure, exportInBackground, type BackgroundFigure, type ExportOutcome, type ExportRequest } from "./export/export-run";
+import { closeBackgroundTab, exportFigure, exportInBackground, takeBackgroundLeaf, type BackgroundFigure, type ExportOutcome, type ExportRequest, type TabWorkspace } from "./export/export-run";
 import { pdfExporter } from "./export/exporters/pdf";
 import { pptxExporter } from "./export/exporters/pptx";
 import { pngExporter, tiffExporter } from "./export/exporters/raster";
@@ -313,7 +313,9 @@ export default class LinkFiguresPlugin extends Plugin {
   /** Opens the figure at `path` in a background tab, for `exportInBackground`; the tab is closed again if it is no figure. */
   private async openInBackground(path: string): Promise<BackgroundFigure> {
     const file = this.vaultFile(path);
-    const leaf = this.app.workspace.getLeaf("tab");
+    // Not left active by "Always focus new tabs", and closed after the export unless the user switches to it.
+    const tab = takeBackgroundLeaf(this.app.workspace as unknown as TabWorkspace<WorkspaceLeaf>);
+    const leaf = tab.leaf;
     try {
       await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path }, active: false });
       await leaf.loadIfDeferred();
@@ -323,11 +325,11 @@ export default class LinkFiguresPlugin extends Plugin {
       void view.nodeHost.resolveStale();
       // Closing saves what the view would write (nothing, for a figure it only read): done first, and waited on, so the
       // next call on the figure, which the API queues after this export, does not race that write.
-      const close = () =>
-        closeBackgroundTab({ save: () => view.save(), detach: () => leaf.detach(), isActive: () => this.app.workspace.getActiveViewOfType(LinkFiguresView) === view });
+      const close = () => closeBackgroundTab({ save: () => view.save(), ...tab });
       return { target: viewExportTarget(view, view.file), drawn: () => view.nodeHost.drawn(), close };
     } catch (error) {
-      leaf.detach();
+      tab.detach();
+      tab.release?.();
       throw error;
     }
   }

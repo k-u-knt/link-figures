@@ -5,7 +5,7 @@ import type { FileRef, VaultAccess } from "../links/types";
 import { mmToPx, pageOriginsPx } from "../model/geometry";
 import type { CardNode, Document, Node, NodeId, Page, PageId } from "../model/types";
 import type { Registries } from "../registry";
-import { applyEdits, cardLinks, codeRanges, linksAsText, type TextEdit } from "../model/card-links";
+import { applyEdits, cardLinks, codeRanges, linksAsText, stripBlockIds, type TextEdit } from "../model/card-links";
 import { exportDir, exportPathFor, safeFileName, uniqueFileNames, writeExportFile } from "./write";
 
 /** Two cards whose tops are this close (mm) are one row; within a row they go left to right. */
@@ -167,7 +167,8 @@ function rebaseEmbeds(markdown: string, fromPath: string, resolve: (link: string
 
 /**
  * A card's Markdown as it is exported: a text card's text, its note embeds expanded one level (`expandEmbeds`) and its
- * wikilinks written as the text they show (`linksAsText`); or a note card's section (`deps.readNote`), as it is.
+ * wikilinks written as the text they show (`linksAsText`); or a note card's section (`deps.readNote`), as it is. Either
+ * way without its block-id markers (`stripBlockIds`), which only Obsidian reads.
  * `sourcePath` is the note a note card's links resolve from (null for a text card: the figure's, `deps.figurePath`, its
  * sections' images written with full paths by `deps.resolve`). `notes` are the notes read; `quietNotes`, the note
  * embeds kept were reported in `warnings` already. A note card whose note or section cannot be
@@ -182,7 +183,7 @@ export async function cardMarkdown(
     const text = (card.text ?? "").trim();
     if (text === "") return { markdown: null, sourcePath: null, warnings: [] };
     const expanded = await expandEmbeds(text, (file, subpath) => deps.readNote(file, subpath), { resolve: deps.resolve, fromPath: deps.figurePath });
-    const markdown = linksAsText(expanded.markdown).trim();
+    const markdown = stripBlockIds(linksAsText(expanded.markdown)).trim();
     const warnings = expanded.warnings.map((warning) => `${cardLabel(card)}: ${warning}`);
     // The note embeds kept have been reported here: writing the images says nothing more of them (`quietNotes`).
     return { markdown: markdown === "" ? null : markdown, sourcePath: null, warnings, ...(expanded.notes.length > 0 ? { notes: expanded.notes } : {}), ...(deps.resolve ? { quietNotes: true } : {}) };
@@ -191,7 +192,8 @@ export async function cardMarkdown(
   if (!section) {
     return { markdown: null, sourcePath: null, warnings: [`${cardLabel(card)}: its note "${joinLinktext(link.file, link.subpath)}" was not found; the card is left out`] };
   }
-  return { markdown: section.markdown === "" ? null : section.markdown, sourcePath: section.path, warnings: [] };
+  const markdown = stripBlockIds(section.markdown).trim();
+  return { markdown: markdown === "" ? null : markdown, sourcePath: section.path, warnings: [] };
 }
 
 /** An embed in Markdown: `![[x.png|300]]` or `![alt](x.png)`. */

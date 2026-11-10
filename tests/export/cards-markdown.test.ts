@@ -406,6 +406,26 @@ describe("links and embeds in a text card", () => {
 });
 
 describe("in-app check fixes (34, 35)", () => {
+  const files = {
+    "Notes/Legend.md": "# Legend\n\n# Fig 1\n\nPanel **A** ^cl-par\n\n- one\n- two\n^list-id\n\n```\nkeep ^in-code\n```\n",
+    "img/plot.png": new Uint8Array([1]),
+  };
+
+  test("block-id markers (` ^id` at a line's end, or alone on a line) are left out of a card's Markdown, outside code, and of the notes text", async () => {
+    const doc = pages();
+    const c = card(doc, "c", doc.pages[0], 220, 10, { text: "Own line ^own-id\n\n![[Legend#Fig 1]]\n\n`x ^code-span`" });
+    const n = card(doc, "n", doc.pages[0], 220, 60, { file: "Notes/Legend", subpath: "#Fig 1" });
+    tie(doc, c, doc.pages[0]);
+    tie(doc, n, doc.pages[0]);
+    const { vault } = await exportCards(doc, { files });
+    const section = "# Fig 1\n\nPanel **A**\n\n- one\n- two\n\n```\nkeep ^in-code\n```";
+    expect(text(vault.content.get("out/Fig - Page 1 cards.md"))).toBe(`Own line\n\n${section}\n\n\`x ^code-span\`\n\n---\n\n${section}\n`);
+    const { access: a } = access(files);
+    const texts = cardTextSource({ doc, registries: registries(), figurePath: "Figs/Fig.lnkfig.md", access: a }, []);
+    const plain = (await texts("pg-1")).map((t) => markdownToPlainText(t.markdown));
+    for (const notes of plain) expect(notes).not.toMatch(/\^(own-id|cl-par|list-id)/);
+  });
+
   test("a cards file refused (it would replace a source) leaves nothing behind: none of its images are copied", async () => {
     const doc = pages();
     // A card that embeds the figure's own earlier cards file, which embeds an image: that file is a source now.

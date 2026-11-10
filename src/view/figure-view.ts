@@ -941,7 +941,7 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.unsubscribe = store.subscribe((ev) => {
       if (ev.pagesChanged) this.pageLayer.render(store.doc);
       // A `replace` names the nodes that differ, like an edit does; the node host resolves again only those whose link changed.
-      this.nodeHost.applyChange(store.doc, ev.changedNodeIds);
+      this.nodeHost.applyChange(store.doc, ev.changedNodeIds, ev.pagesChanged);
       // TextFileView does not save on its own. `replace` is a reload, not an edit.
       if (ev.kind === "commit" || ev.kind === "undo" || ev.kind === "redo") {
         this.unsaved = true;

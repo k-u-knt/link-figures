@@ -1,8 +1,10 @@
 import { boxAttachable } from "../model/attach";
 import { newId } from "../model/defaults";
 import { mmToPx, type Rect } from "../model/geometry";
-import type { CardNode, Page } from "../model/types";
-import type { NodeRenderer, NodeType, UpdateContext } from "../registry/node-type";
+import type { Resolved } from "../links/types";
+import type { CardNode, Node, Page } from "../model/types";
+import type { NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { renderCard, type CardBody } from "../view/card-render";
 
 /** The size of a new card, in mm. */
 export const CARD_SIZE_MM = { width: 60, height: 40 };
@@ -43,31 +45,122 @@ export function cardContentError(card: { text?: unknown; file?: unknown; subpath
   return null;
 }
 
+/** The part of the figure view (`RenderContext.component`) that editing a card goes through. */
+interface EditingView {
+  readOnly: boolean;
+  runCommandById(id: string, args?: Record<string, unknown>): void;
+}
+
 /**
- * A card's DOM for now: `.lf-node.lf-card`, its box, holding its text or its link as plain text. (The stage's Markdown
- * rendering and editing come later.)
+ * One card's DOM: `.lf-node.lf-card` (`is-note` for a note card) holding `.lf-card-body`, which shows the card's content
+ * (`renderCard`). A text card is edited in place: a double-click (as `lf-activate` from the pointer controller, or its
+ * own `dblclick`) swaps the body for a plain `textarea.lf-card-editor` holding its Markdown; Escape or the textarea
+ * losing the focus ends the edit and writes what was typed with `node.update`, one undo step, and nothing when it is
+ * unchanged. The pointer controller leaves presses and keys on the textarea to it (`isEditable`).
  */
 class CardNodeRenderer implements NodeRenderer {
+  private node: CardNode;
   private readonly el: HTMLElement;
+  private readonly body: HTMLElement;
+  private shown: CardBody | null = null;
+  /** What the body was drawn from (the content and what was resolved for it), so an update that leaves it alone draws nothing. */
+  private drawnFrom: { key: string; resolved: Resolved | undefined } | null = null;
+  private editor: HTMLTextAreaElement | null = null;
+  /** The text when editing began: what tells whether anything was typed. */
+  private before = "";
 
-  constructor(node: CardNode, host: HTMLElement) {
+  constructor(node: CardNode, host: HTMLElement, private readonly ctx: RenderContext) {
+    this.node = node;
     this.el = host.createDiv({ cls: ["lf-node", "lf-card"] });
+    this.body = this.el.createDiv({ cls: "lf-card-body" });
+    this.el.addEventListener("lf-activate", () => this.beginEdit());
+    this.el.addEventListener("dblclick", () => this.beginEdit());
     this.update(node);
   }
 
-  update(node: CardNode): void {
+  update(node: Node): void {
+    this.node = node as CardNode;
+    const n = this.node;
     const style = this.el.style;
-    style.left = `${node.x}px`;
-    style.top = `${node.y}px`;
-    style.width = `${node.width}px`;
-    style.height = `${node.height}px`;
-    style.zIndex = String(node.z);
-    style.opacity = node.opacity === 1 ? "" : String(node.opacity);
-    this.el.textContent = node.file !== undefined ? `${node.file}${node.subpath ?? ""}` : (node.text ?? "");
+    style.left = `${n.x}px`;
+    style.top = `${n.y}px`;
+    style.width = `${n.width}px`;
+    style.height = `${n.height}px`;
+    style.zIndex = String(n.z);
+    style.opacity = n.opacity === 1 ? "" : String(n.opacity);
+    this.el.classList.toggle("is-note", n.file !== undefined);
+    // What is being typed is the user's: a change of the node does not overwrite it.
+    if (!this.editor) this.draw();
   }
 
   unmount(): void {
+    // The card is gone (deleted, undone, reloaded): what was being typed has nowhere to go.
+    this.editor = null;
+    this.shown?.release();
+    this.shown = null;
     this.el.remove();
+  }
+
+  drawn(): Promise<void> {
+    return this.shown?.drawn ?? Promise.resolve();
+  }
+
+  /** Draws the body from the node and what was resolved for it, unless it already shows that. */
+  private draw(): void {
+    const n = this.node;
+    const key = JSON.stringify([n.text, n.file, n.subpath]);
+    const resolved = n.file === undefined ? undefined : this.ctx.resolved(n.id);
+    if (this.drawnFrom && this.drawnFrom.key === key && this.drawnFrom.resolved === resolved) return;
+    this.drawnFrom = { key, resolved };
+    this.shown?.release();
+    this.shown = renderCard(this.body, n, this.ctx);
+  }
+
+  /** The figure view, or null when there is none to edit through. */
+  private view(): EditingView | null {
+    const view = this.ctx.component as unknown as Partial<EditingView>;
+    return typeof view.runCommandById === "function" ? (view as EditingView) : null;
+  }
+
+  private beginEdit(): void {
+    const n = this.node;
+    if (this.editor || n.file !== undefined || n.locked) return;
+    const view = this.view();
+    if (!view || view.readOnly) return;
+    this.before = n.text ?? "";
+    this.shown?.release();
+    this.shown = null;
+    this.drawnFrom = null;
+    this.body.empty();
+    const area = this.body.ownerDocument.createElement("textarea");
+    area.className = "lf-card-editor";
+    area.value = this.before;
+    area.spellcheck = true;
+    area.addEventListener("blur", () => this.endEdit(false));
+    area.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || ev.isComposing) return;
+      // Escape ends the edit. It must not go on to the stage, which would take it as "deselect".
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.endEdit(true);
+    });
+    this.body.appendChild(area);
+    this.editor = area;
+    area.focus({ preventScroll: true });
+  }
+
+  /** Ends the edit and writes what was typed, if it is anything new; `toStage`: the keys go back to the stage. */
+  private endEdit(toStage: boolean): void {
+    const area = this.editor;
+    if (!area) return;
+    this.editor = null;
+    const typed = area.value.replace(/\r\n?/g, "\n");
+    area.remove();
+    // Compared with what editing began with: a change made elsewhere meanwhile (an undo) is not the user's to put back.
+    if (typed !== this.before) this.view()?.runCommandById("node.update", { id: this.node.id, patch: { text: typed } });
+    // What the model holds is what is shown, whether or not the write changed it (the card may be gone, or the view read-only).
+    this.draw();
+    if (toStage) this.el.closest<HTMLElement>(".lf-stage")?.focus({ preventScroll: true });
   }
 }
 
@@ -89,9 +182,12 @@ export const cardNodeType: NodeType<CardNode> = {
   // Never rotated (`checkField` refuses it), so the inspector does not offer it.
   derivedFields: ["rotation"],
 
-  mount(node: CardNode, host: HTMLElement): NodeRenderer {
-    return new CardNodeRenderer(node, host);
+  mount(node: CardNode, host: HTMLElement, ctx: RenderContext): NodeRenderer {
+    return new CardNodeRenderer(node, host, ctx);
   },
+
+  /** A note card shows its linked section's content, resolved as a content panel's is; a text card has no link. */
+  linkTarget: (node: CardNode) => (node.file === undefined ? null : { file: node.file, subpath: node.subpath ?? "", show: "content" }),
 
   bounds: boxOf,
 

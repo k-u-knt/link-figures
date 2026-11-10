@@ -3,7 +3,8 @@ import { MIN_NODE_PX, NUDGE_LARGE_MM, NUDGE_MM } from "../constants";
 import { visualBounds } from "../model/arrange";
 import { SNAP_REACH_PX } from "../model/attach";
 import { mmToPx, nodeWorldRect, pageOriginsPx, rectContainsPt, unionRect, type PlacePoint, type Pt, type Rect } from "../model/geometry";
-import { descendantsOf, isGroup, isLocked, outermostUnit, parentOf, unitsOf } from "../model/groups";
+import { paperRectsWorld, slideAlongPaper } from "../model/card-space";
+import { descendantsOf, expandUnits, isGroup, isLocked, outermostUnit, parentOf, unitsOf } from "../model/groups";
 import { toSvgPath } from "../model/path";
 import { collectSnapLines, SNAP_OPTION, SNAP_REACH_SCREEN_PX, snapEdges, snapMove, snapOn, type SnapLines } from "../model/snap";
 import type { DocumentStore } from "../model/store";
@@ -14,7 +15,7 @@ import type { SnapLine } from "../registry/snap";
 import { CROP_ROTATED_NOTICE, CropSession, croppable, type CropHandle } from "./crop-session";
 import type { LinkFiguresView } from "./figure-view";
 import { dragRect, HANDLES, handleAt, hitAll, hitTest, marqueeSelect, nodeSizePx, rectFromPoints, resizeRect, roundPx, type Handle, type HitItem } from "./pointer-math";
-import { pagePointAt, pageWorldRect } from "./viewport";
+import { nearestPaperPoint, pagePointAt, pageWorldRect } from "./viewport";
 
 /** Screen pixels a press has to travel before it is a drag; a click that wobbles is still a click. */
 const DRAG_THRESHOLD_PX = 3;
@@ -77,12 +78,18 @@ type Snap = { pageId: PageId; lines: SnapLines } | null;
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
-  | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean; snap: Snap; bounds: Rect | null }
+  | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean; snap: Snap; bounds: Rect | null; offPaper: OffPaperDrag | null }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null; snap: Snap }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
   | { kind: "marquee"; pointerId: number; world: Pt; pageId: PageId; base: NodeId[]; within: NodeId | null; el: HTMLElement }
-  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null; snap: Snap }
+  | { kind: "drawing"; pointerId: number; client: Pt; world: Pt; from: PlacePoint; under: NodeId[]; el: Element | null; snap: Snap; onPaper: boolean }
   | { kind: "cropping"; pointerId: number; client: Pt; handle: CropHandle; started: boolean };
+
+/**
+ * What a move drag keeps off the paper (see `NodeType.offPaper`, a card): each such item's box in world px when the drag
+ * began (`start`) and where it was last let go to (`last`, clear of the papers), and the papers (`paperRectsWorld`).
+ */
+type OffPaperDrag = { items: { start: Rect; last: Rect }[]; papers: Rect[] };
 
 type Pressed = Extract<Gesture, { kind: "pressed" }>;
 type Moving = Extract<Gesture, { kind: "moving" }>;
@@ -290,10 +297,12 @@ export class PointerController {
       this.cropSession.finish();
       ev.preventDefault();
       const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-      const at = pagePointAt(this.store.doc, world);
+      const onPaper = pagePointAt(this.store.doc, world);
+      // A tool that is pressed off the paper too (the Card tool, the Connector tool from a card) is given the canvas point.
+      const at = onPaper ?? (tool.pressOffPaper ? this.offPaperPoint(this.store.doc, world) : null);
       this.clearHover();
       if (!at) this.view.disarmTool();
-      else if (tool.placeDrag) this.startDrawing(ev, world, at);
+      else if (tool.placeDrag) this.startDrawing(ev, world, at, onPaper !== null);
       else this.view.placeTool(at);
       return;
     }
@@ -441,7 +450,7 @@ export class PointerController {
         const pageId = doc.nodes.find((n) => n.id === ids[0])?.page;
         const snap = pageId === undefined ? null : this.snapLines(pageId, ids);
         const bounds = snap && unionRect(ids.map((id) => visualBounds(doc, id, this.view.plugin.registries)));
-        return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false, snap, bounds };
+        return { kind: "moving", pointerId: g.pointerId, world: g.world, ids, moved: { x: 0, y: 0 }, started: false, snap, bounds, offPaper: this.offPaperDrag(doc, ids) };
       }
       const page = this.selectionPage(doc);
       return page === null ? null : this.beginMarquee(g, page, [], this.entered);
@@ -490,6 +499,7 @@ export class PointerController {
       to = { x: roundPx(to.x + s.dx), y: roundPx(to.y + s.dy) };
       this.drawGuides(g.snap, s.guides, offsetRect(g.bounds, to));
     } else this.clearGuides();
+    if (g.offPaper) to = keepOffPaper(g.offPaper, g.moved, to);
     const step = { x: roundPx(to.x - g.moved.x), y: roundPx(to.y - g.moved.y) };
     if (step.x === 0 && step.y === 0) return;
     this.view.runCommandById("node.move", { ids: g.ids, dx: step.x, dy: step.y, pages: false }, g.started ? "continue" : "start");
@@ -535,10 +545,11 @@ export class PointerController {
       style.height = `${next.height}px`;
       return;
     }
+    const box = this.resizeOffPaper(g, next);
     this.store.commit("resize", (draft) => {
       const node = draft.nodes.find((n) => n.id === g.id);
       if (!node) return;
-      Object.assign(node, next);
+      Object.assign(node, box);
     });
   }
 
@@ -660,11 +671,11 @@ export class PointerController {
 
   // Drawing with a tool that is dragged out
 
-  private startDrawing(ev: PointerEvent, world: Pt, from: PlacePoint): void {
+  private startDrawing(ev: PointerEvent, world: Pt, from: PlacePoint, onPaper: boolean): void {
     const under = this.itemsUnder(this.store.doc, from.page.id, world);
     // A tool with a preview of its own (the connector) finds what it attaches to itself; a box is dragged out snapping.
     const snap = this.view.armedTool?.preview ? null : this.snapLines(from.page.id, []);
-    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null, snap };
+    this.gesture = { kind: "drawing", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, world, from, under, el: null, snap, onPaper };
     try {
       this.stage?.setPointerCapture(ev.pointerId);
     } catch {
@@ -674,9 +685,10 @@ export class PointerController {
 
   /**
    * Where the pointer of `ev` puts the far end of the drawing: `from` itself while the pointer has not gone further
-   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper and snapped
-   * to the lines within reach (not with Alt, nor Shift, which squares the box); the items of the press page under the
-   * pointer (under the press, for a click); and the lines it snapped to.
+   * than a click may wobble (3 screen px), and otherwise the point on the press page, clamped to its paper (not for a
+   * press off the paper, see `Command.pressOffPaper`) and snapped to the lines within reach (not with Alt, nor Shift,
+   * which squares the box); the items of the press page under the pointer (under the press, for a click), and the
+   * pages whose paper is under the press and the pointer; and the lines it snapped to.
    * Null when the press page has gone.
    */
   private drawingEnd(g: Drawing, ev: PointerEvent): { to: PlacePoint; targets: DragTargets; guides: SnapLine[] } | null {
@@ -684,16 +696,21 @@ export class PointerController {
     const page = doc.pages.find((p) => p.id === g.from.page.id);
     if (!page) return null;
     const reach = this.snapReach();
-    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) return { to: g.from, targets: { from: g.under, to: g.under, reach }, guides: [] };
+    const fromPage = g.onPaper ? page.id : null;
+    if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) <= DRAG_THRESHOLD_PX) {
+      return { to: g.from, targets: { from: g.under, to: g.under, reach, fromPage, toPage: fromPage }, guides: [] };
+    }
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    let to = clampToPaper(doc, page, world);
+    const place = (p: Pt): PlacePoint => (g.onPaper ? clampToPaper(doc, page, p) : pointOnPage(doc, page, p));
+    let to = place(world);
     let guides: SnapLine[] = [];
     if (g.snap && !ev.shiftKey && this.snapping(ev)) {
       const s = snapMove(g.snap.lines, { x: to.x, y: to.y, width: 0, height: 0 }, this.snapReachPage());
-      to = clampToPaper(doc, page, { x: world.x + s.dx, y: world.y + s.dy });
+      to = place({ x: world.x + s.dx, y: world.y + s.dy });
       guides = s.guides;
     }
-    return { to, targets: { from: g.under, to: this.itemsUnder(doc, page.id, world), reach }, guides };
+    const toPage = pagePointAt(doc, world)?.page.id ?? null;
+    return { to, targets: { from: g.under, to: this.itemsUnder(doc, page.id, world), reach, fromPage, toPage }, guides };
   }
 
   /**
@@ -750,13 +767,14 @@ export class PointerController {
     }
     const doc = this.store.doc;
     const world = this.view.viewport.toWorld(this.view.stagePoint(ev));
-    const at = pagePointAt(doc, world);
+    const onPaper = pagePointAt(doc, world);
+    const at = onPaper ?? (this.view.armedTool.pressOffPaper ? this.offPaperPoint(doc, world) : null);
     if (!at) {
       this.clearHover();
       return;
     }
     const under = this.itemsUnder(doc, at.page.id, world);
-    const preview = this.view.toolPreview(null, at, { from: [], to: under, reach: this.snapReach() });
+    const preview = this.view.toolPreview(null, at, { from: [], to: under, reach: this.snapReach(), toPage: onPaper?.page.id ?? null });
     // Over another page than before, it is drawn afresh in that page's overlay.
     if (this.hoverEl && this.hoverEl.parentElement !== this.overlayOf(at.page.id)) this.clearHover();
     this.hoverEl = this.drawPreviewIn(at.page.id, preview, this.hoverEl);
@@ -1324,6 +1342,46 @@ export class PointerController {
     return doc.nodes.filter((n) => !this.nodeType(n)?.members);
   }
 
+  /**
+   * Where a tool pressed off the paper (`Command.pressOffPaper`) is pressed: on the page the item under `world` is placed
+   * against (a card beside a page), else on the page whose paper is nearest; null for a document without pages.
+   */
+  private offPaperPoint(doc: Document, world: Pt): PlacePoint | null {
+    const hit = hitTest(this.itemsOnAllPages(doc), world);
+    const node = hit === null ? undefined : doc.nodes.find((n) => n.id === hit);
+    const page = node && doc.pages.find((p) => p.id === node.page);
+    return page ? pointOnPage(doc, page, world) : nearestPaperPoint(doc, world);
+  }
+
+  /** What a move of `ids` (units, with their members) keeps off the paper: their items of a type kept off it; null for none. */
+  private offPaperDrag(doc: Document, ids: NodeId[]): OffPaperDrag | null {
+    const origins = pageOriginsPx(doc);
+    const items: OffPaperDrag["items"] = [];
+    for (const id of expandUnits(doc, ids)) {
+      const node = doc.nodes.find((n) => n.id === id);
+      const type = node && this.nodeType(node);
+      const origin = node && origins.get(node.page);
+      if (!node || !origin || type?.offPaper !== true) continue;
+      const box = type.bounds(node);
+      const start = { x: origin.x + box.x, y: origin.y + box.y, width: box.width, height: box.height };
+      items.push({ start, last: start });
+    }
+    return items.length > 0 ? { items, papers: paperRectsWorld(doc) } : null;
+  }
+
+  /**
+   * The box a resize drag gives an item kept off the paper (a card): each dragged edge stops at the gap round the
+   * papers, so the box grows up to them and no further; any other node's `next` as it is.
+   */
+  private resizeOffPaper(g: Resizing, next: Rect): Rect {
+    const doc = this.store.doc;
+    const node = doc.nodes.find((n) => n.id === g.id);
+    const origin = node && pageOriginsPx(doc).get(node.page);
+    if (!node || !origin || this.nodeType(node)?.offPaper !== true) return next;
+    const world = stopAtPaper(offsetRect(g.start, origin), offsetRect(next, origin), g.handle, paperRectsWorld(doc));
+    return { x: roundPx(world.x - origin.x), y: roundPx(world.y - origin.y), width: roundPx(world.width), height: roundPx(world.height) };
+  }
+
   private nodeType(node: Node): NodeType | undefined {
     // A node its plugin could not read is pressed by its box, as a placeholder (see `LinkFiguresView.unreadableNodes`).
     return nodeTypeFor(this.view.plugin.registries, node, this.view.unreadableNodes);
@@ -1430,4 +1488,53 @@ function clampToPaper(doc: Document, page: Page, world: Pt): PlacePoint {
 /** The page under a world point, or null when it is over the canvas between or around the pages. */
 function pageAt(doc: Document, world: Pt): Page | null {
   return doc.pages.find((page) => rectContainsPt(pageWorldRect(doc, page), world)) ?? null;
+}
+
+/** The world point `world` as a point on `page`, wherever it is (on its paper or off it). */
+function pointOnPage(doc: Document, page: Page, world: Pt): PlacePoint {
+  const paper = pageWorldRect(doc, page);
+  return { page, x: world.x - paper.x, y: world.y - paper.y };
+}
+
+/**
+ * The offset a move drag of items kept off the paper goes to, given that it was at `moved` and the pointer asks for
+ * `to`: each item slides from where it was last let go (`slideAlongPaper`), stopping at the papers and keeping its
+ * motion along them, and the drag takes the most held-back offset on each axis, so the items move as one. Rounded
+ * towards where the drag was, so a rounding never takes an item into the gap. Updates each item's `last`.
+ */
+function keepOffPaper(drag: OffPaperDrag, moved: Pt, to: Pt): Pt {
+  const allowed = drag.items.map((item) => {
+    const at = slideAlongPaper(item.last, offsetRect(item.start, to), drag.papers);
+    return { item, at, x: at.x - item.start.x, y: at.y - item.start.y };
+  });
+  const pick = (axis: "x" | "y"): number => {
+    const back = to[axis] < moved[axis];
+    const held = allowed.reduce((best, a) => (back ? Math.max(best, a[axis]) : Math.min(best, a[axis])), to[axis]);
+    if (held === to[axis]) return held;
+    return back ? Math.ceil(held * 100) / 100 : Math.floor(held * 100) / 100;
+  };
+  const out = { x: pick("x"), y: pick("y") };
+  for (const a of allowed) a.item.last = a.at;
+  return out;
+}
+
+/**
+ * `next`, the box a resize drag of `start` gives (world px), with its dragged edges (`handle`) stopped at each paper it
+ * would run into: the box grows up to the paper and no further. `start` is clear of `papers`.
+ */
+function stopAtPaper(start: Rect, next: Rect, handle: Handle, papers: readonly Rect[]): Rect {
+  let { x, y } = next;
+  let right = next.x + next.width;
+  let bottom = next.y + next.height;
+  const startRight = start.x + start.width;
+  const startBottom = start.y + start.height;
+  for (const p of papers) {
+    if (!(x < p.x + p.width && right > p.x && y < p.y + p.height && bottom > p.y)) continue;
+    // Stop the edge that crossed into the paper; the side the box was on before tells which.
+    if (handle.includes("e") && startRight <= p.x) right = Math.min(right, p.x);
+    else if (handle.includes("w") && start.x >= p.x + p.width) x = Math.max(x, p.x + p.width);
+    else if (handle.includes("s") && startBottom <= p.y) bottom = Math.min(bottom, p.y);
+    else if (handle.includes("n") && start.y >= p.y + p.height) y = Math.max(y, p.y + p.height);
+  }
+  return { x, y, width: Math.max(right - x, 0), height: Math.max(bottom - y, 0) };
 }

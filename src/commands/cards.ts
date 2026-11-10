@@ -1,5 +1,8 @@
+import { mmToPx, type PlacePoint } from "../model/geometry";
 import type { CardNode, NodeId } from "../model/types";
-import { cardContentError, cardNodeDefaults } from "../nodes/card-node";
+import { CARD_SIZE_MM, cardContentError, cardNodeDefaults } from "../nodes/card-node";
+import { roundPx } from "../view/pointer-math";
+import { editor } from "./builtin";
 import { CommandError, type Command, type CommandContext } from "../registry/command";
 import { addNode, checkMinSize, creationPage, newNodeId, topOf } from "./drawing";
 
@@ -45,9 +48,43 @@ export function createCard(ctx: CommandContext, args: CardCreateArgs): { id: Nod
   return addNode(ctx, command, card);
 }
 
+/**
+ * The Card tool's press at `at` (on the canvas beside a page, or on a page's paper): `card.create` with a 60 × 40 mm
+ * text card centred there, as a script would run it, which puts a card that would be on paper just outside the
+ * nearest edge. The new card is selected, and starts being edited.
+ */
+function placeCard(ctx: CommandContext, at: PlacePoint): void {
+  const view = editor(ctx);
+  const x = roundPx(at.x - mmToPx(CARD_SIZE_MM.width) / 2);
+  const y = roundPx(at.y - mmToPx(CARD_SIZE_MM.height) / 2);
+  const before = new Set(ctx.store.doc.nodes.map((n) => n.id));
+  view.runCommandById("card.create", { page: at.page.id, x, y });
+  const made = ctx.store.doc.nodes.find((n) => !before.has(n.id));
+  // The node host drew the card as the commit was made, so it is there to be told.
+  if (made) view.activateNode(made.id);
+}
+
+/**
+ * The Card tool: its button (or a context menu) arms it, and a click on the canvas, beside a page or on it, places a
+ * text card there and starts editing it (see `placeCard`).
+ */
+const cardTool: Command = {
+  id: "tool.card",
+  name: "Card",
+  icon: "sticky-note",
+  group: "insert",
+  menu: ["canvas", "page"],
+  needsView: true,
+  pressOffPaper: true,
+  applies: (ctx) => !!ctx.page,
+  run: (ctx) => editor(ctx).armTool(cardTool),
+  place: placeCard,
+};
+
 /** The card commands, for the command registry. `card.create` is hidden: it needs arguments to mean anything. */
 export function cardCommands(): Command[] {
   return [
+    cardTool,
     {
       id: "card.create",
       name: "Create card",

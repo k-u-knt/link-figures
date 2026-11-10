@@ -80,6 +80,24 @@ export function pagePointAt(doc: Document, world: Pt): PlacePoint | null {
   return null;
 }
 
+/**
+ * The page whose paper is nearest `world` (no distance when it is on the paper), and the point in that page's pixels,
+ * which may lie outside its paper; the first page on a tie, and null for a document without pages.
+ */
+export function nearestPaperPoint(doc: Document, world: Pt): PlacePoint | null {
+  let best: PlacePoint | null = null;
+  let bestDistance = Infinity;
+  for (const page of doc.pages) {
+    const r = pageWorldRect(doc, page);
+    const distance = Math.hypot(Math.max(0, r.x - world.x, world.x - (r.x + r.width)), Math.max(0, r.y - world.y, world.y - (r.y + r.height)));
+    if (distance < bestDistance) {
+      best = { page, x: world.x - r.x, y: world.y - r.y };
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 /** The page whose centre is nearest `world`; the first page on a tie, and undefined for a document without pages. */
 export function nearestPage(doc: Document, world: Pt): Page | undefined {
   let best: Page | undefined;

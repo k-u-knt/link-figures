@@ -10,6 +10,13 @@ import type { Resolved } from "../links/types";
 import type { Field } from "./fields";
 import type { Registries } from "./index";
 
+/** A link the stage resolves for a node (see `NodeType.linkTarget`), as a file panel's own fields name its link. */
+export interface LinkTarget {
+  file: string;
+  subpath: string;
+  show: "image" | "content";
+}
+
 export interface RenderContext {
   app: App;
   /** The plugin's registries: what a node type draws with (shape kinds, paints…). */
@@ -303,6 +310,13 @@ export interface NodeType<N extends Node = Node> {
    * it, in the same undo step, and a node tied to a page is never exported.
    */
   tiedPages?(node: N): PageId[];
+  /**
+   * The vault link whose target the stage shows in the node, resolved as a file panel's link is (`resolveFileNode`): the
+   * file, its subpath, and whether the node shows the section's content or an image in it. The result reaches the
+   * node's renderer through `RenderContext.resolved`, and the node is resolved again when the target changes. Null (or
+   * absent) for a node that shows no link (a text card). A file panel resolves its own link and needs none.
+   */
+  linkTarget?(node: N): LinkTarget | null;
   /**
    * For a type a plugin registers (not one this plugin builds in): validates one of its nodes as a figure file holds it,
    * and gives the node back, completed with what is missing. `raw` has the base fields checked (`id`, `type`, `page`, a

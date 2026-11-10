@@ -1,10 +1,10 @@
 import { resolveConnector } from "../connectors/geometry";
-import { endAt, endError, pageEndsError, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
+import { endAt, endError, nearestAnchor, onPageTiedItem, pageEndsError, pageTarget, SNAP_MODE_OPTION, snapMarks, snapModeOf, type SnapMode } from "../model/attach";
 import { MIN_NODE_PX } from "../constants";
 import { connectorNodeDefaults, defaultCaps, shapeNodeDefaults } from "../model/defaults";
 import { getPreset } from "../model/presets";
 import { mmToPx, pageOriginsPx, pageSizePx, rectContainsPt, type PlacePoint } from "../model/geometry";
-import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageId, Paint, ShapeNode, Stroke } from "../model/types";
+import type { Cap, ConnectorNode, Document, End, Node, NodeId, Page, PageAnchor, PageId, Paint, ShapeNode, Stroke } from "../model/types";
 import type { Registries } from "../registry";
 import { CommandError, unreadableIn, type Command, type CommandContext, type DragTargets, type ToolPreview } from "../registry/command";
 import { COLOR_PATTERN, isCap, judgingPatch, paramError, type ParamSpec } from "../registry/params";
@@ -675,16 +675,29 @@ function snapModeIn(ctx: CommandContext): SnapMode {
   return snapModeOf(ctx.view?.viewOption(SNAP_MODE_OPTION));
 }
 
-/** The two ends the Connector tool's drag from `from` to `to` gives (see `endAt`), each rounded as a drag's positions are. */
+/**
+ * The two ends the Connector tool's drag from `from` to `to` gives (see `endAt`), each rounded as a drag's positions
+ * are. An end that would be free over a page's paper (`targets.fromPage`, `targets.toPage`), while the other end is
+ * on an item that may be tied to pages (a card), is tied to that page instead: at the paper's anchor nearest the point
+ * (`n`, `e`, `s`, `w`), or at its centre in centre mode. That makes the connector an association.
+ */
 function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets: DragTargets): [End, End] {
   const mode = snapModeIn(ctx);
   const doc = ctx.store.doc;
   const page = from.page.id;
+  const unreadable = unreadableIn(ctx);
   const at = (p: PlacePoint) => ({ x: roundPx(p.x), y: roundPx(p.y) });
-  return [
-    endAt(doc, ctx.registries, page, at(from), targets.from, mode, undefined, targets.reach, unreadableIn(ctx)),
-    endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach, unreadableIn(ctx)),
+  const ends: [End, End] = [
+    endAt(doc, ctx.registries, page, at(from), targets.from, mode, undefined, targets.reach, unreadable),
+    endAt(doc, ctx.registries, page, at(to), targets.to, mode, undefined, targets.reach, unreadable),
   ];
+  const tie = (end: End, other: End, paper: PageId | null | undefined, point: PlacePoint): End => {
+    if (end.kind !== "free" || !paper || !onPageTiedItem(doc, ctx.registries, other, unreadable)) return end;
+    const target = pageTarget(doc, paper, page);
+    if (!target || mode === "center") return { kind: "page", page: paper };
+    return { kind: "page", page: paper, anchor: nearestAnchor(target.anchors, at(point)).id as PageAnchor };
+  };
+  return [tie(ends[0], ends[1], targets.fromPage, from), tie(ends[1], ends[0], targets.toPage, to)];
 }
 
 /**
@@ -692,7 +705,8 @@ function toolEnds(ctx: CommandContext, from: PlacePoint, to: PlacePoint, targets
  * release, as a script would run it. Each end dropped on an item that can be attached to attaches to it, at its nearest
  * anchor or at its centre by the view's snap mode (`connector.snap-mode`); anywhere else it is free there. A click draws
  * nothing. While it is armed, the item under the pointer shows its anchors (its centre in centre mode), and a drag shows
- * the line it would make.
+ * the line it would make. It is pressed off the paper too, so a drag can start on a card beside a page; an end from a
+ * card dropped on a page's paper ties the card to that page (see `toolEnds`), and the page's anchors show meanwhile.
  */
 const connectorTool: Command = {
   id: "tool.connector",
@@ -701,6 +715,7 @@ const connectorTool: Command = {
   group: "insert",
   menu: ["page"],
   needsView: true,
+  pressOffPaper: true,
   applies: (ctx) => !!ctx.page,
   run: (ctx) => ctx.view?.armTool(connectorTool),
   placeDrag(ctx, from, to, _mods, targets) {
@@ -714,8 +729,12 @@ const connectorTool: Command = {
     const marks = snapMarks(ctx.store.doc, ctx.registries, to.page.id, at, targets.to, snapModeIn(ctx), undefined, targets.reach, unreadableIn(ctx));
     if (!from) return { marks };
     const doc = ctx.store.doc;
-    const line = connectorNodeDefaults(from.page, { ends: toolEnds(ctx, from, to, targets), caps: defaultCaps() }, doc.nodes.map((n) => n.id));
-    return { path: resolveConnector(doc, line, ctx.registries, unreadableIn(ctx)).path, marks };
+    const ends = toolEnds(ctx, from, to, targets);
+    const line = connectorNodeDefaults(from.page, { ends, caps: defaultCaps() }, doc.nodes.map((n) => n.id));
+    // Tied to a page: that page's anchors (its centre in centre mode), in the press page's px.
+    const tied = ends[1].kind === "page" ? pageTarget(doc, ends[1].page, from.page.id) : null;
+    const pageMarks = tied && (ends[1].kind === "page" && ends[1].anchor === undefined ? [tied.center] : tied.anchors.map(({ x, y }) => ({ x, y })));
+    return { path: resolveConnector(doc, line, ctx.registries, unreadableIn(ctx)).path, marks: pageMarks ?? marks };
   },
 };
 

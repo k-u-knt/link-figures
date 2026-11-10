@@ -8,7 +8,7 @@ import type { FileNode, NodeId, Page } from "../model/types";
 import type { LinkFiguresView } from "../view/figure-view";
 import { isEditable } from "../view/pointer";
 import { roundPx } from "../view/pointer-math";
-import { pagePointAt, pageWorldRect } from "../view/viewport";
+import { nearestPaperPoint, pagePointAt, pageWorldRect } from "../view/viewport";
 import { classifyDrop, classifyPaste, dedupeName, extensionOf, linkSafeName, type DropData, type IntakeAction } from "./intake-classify";
 import { linkForImage, linkForText, matchSelection, type NoteDropHost, type OpenNoteSelection } from "./note-drop";
 import { isPanelExtension, resolveFileNode } from "./resolver";
@@ -21,8 +21,11 @@ const IMAGE_LOAD_TIMEOUT_MS = 15000;
 
 type Size = { width: number; height: number };
 
-/** Where new nodes go: a page, and a position on it in that page's pixels. */
-export type IntakeTarget = PlacePoint;
+/**
+ * Where new nodes go: a page, and a position on it in that page's pixels. `offPaper`: the drop landed off every page's
+ * paper, where a note (its content) becomes a note card, placed against the page whose paper is nearest, at that point.
+ */
+export type IntakeTarget = PlacePoint & { offPaper?: PlacePoint };
 
 /**
  * What a node is to link to, and how it is to show it (and, for an image shown from a note, which of the note's images,
@@ -241,14 +244,17 @@ export class Intake {
       });
   }
 
-  /** The page under a world point (else the page nearest the middle of the stage) and the point in that page's own pixels. */
+  /**
+   * The page under a world point (else the page nearest the middle of the stage) and the point in that page's own
+   * pixels; off every paper, also the point on the page whose paper is nearest (`offPaper`), for a note card.
+   */
   private placeAt(world: Pt): IntakeTarget {
     const doc = this.view.store.doc;
     const under = pagePointAt(doc, world);
     if (under) return under;
     const page = this.view.currentPage();
     const origin = pageWorldRect(doc, page);
-    return { page, x: world.x - origin.x, y: world.y - origin.y };
+    return { page, x: world.x - origin.x, y: world.y - origin.y, offPaper: nearestPaperPoint(doc, world) ?? undefined };
   }
 
   /** A paste has no pointer: the middle of the stage, kept on the page so that a node of the default size fits on it. */
@@ -448,7 +454,7 @@ export class Intake {
   }
 
   /**
-   * The one commit: a `panel.create` per item, run together as one commit labelled "insert", which is an undo step of its
+   * The one commit: a `panel.create` per item (a `card.create` for a note dropped off every paper, see `IntakeTarget`), run together as one commit labelled "insert", which is an undo step of its
    * own. Everything awaited so far may have outlived the document, so the page and the store are looked up afresh.
    */
   private insert(items: Measured[], at: IntakeTarget): NodeId[] {
@@ -463,8 +469,21 @@ export class Intake {
     const { registries } = view.plugin;
     // The width is the default (a share of the page's); the height follows the picture.
     const width = fileNodeDefaults(page, { file: "", subpath: "", show: "image" }, []).width;
+    // Off every paper, a note's content goes on a note card beside the nearest page (cards are never artwork).
+    const cardAt = at.offPaper && store.doc.pages.some((p) => p.id === at.offPaper?.page.id) ? at.offPaper : undefined;
     const calls = items.map((item, i) =>
-      prepareCall(registries, {
+      cardAt && item.show === "content"
+        ? prepareCall(registries, {
+            id: "card.create",
+            args: {
+              page: cardAt.page.id,
+              file: item.file,
+              ...(item.subpath !== "" ? { subpath: item.subpath } : {}),
+              x: roundPx(cardAt.x),
+              y: roundPx(cardAt.y + i * mmToPx(STAGGER_MM)),
+            },
+          })
+        : prepareCall(registries, {
         id: "panel.create",
         args: {
           page: page.id,

@@ -1,6 +1,6 @@
 import { PT_TO_PX } from "../constants";
 import { resolveConnector } from "../connectors/geometry";
-import { attachTarget, endAt, endError, nearestAnchor, pageEndsError, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
+import { attachTarget, endAt, endError, isAssociation, nearestAnchor, pageEndsError, SNAP_MODE_OPTION, snapMarks, snapModeOf } from "../model/attach";
 import { rectContainsPt, type Pt, type Rect } from "../model/geometry";
 import { nodeLabel } from "../model/labels";
 import { distanceToPath, toSvgPath, type PathData } from "../model/path";
@@ -102,6 +102,8 @@ class ConnectorNodeRenderer implements NodeRenderer {
     style.height = `${height}px`;
     style.zIndex = String(node.z);
     style.opacity = node.opacity === 1 ? "" : String(node.opacity);
+    // A card's tie to a page is not artwork: it is drawn dashed in the interface colour (styles.css), whatever its stroke.
+    this.el.classList.toggle("lf-association", isAssociation(this.ctx.doc(), node, this.ctx.registries, this.ctx.unreadable));
 
     const markup =
       `<svg xmlns="${SVG_NS}" viewBox="${bounds.x} ${bounds.y} ${width} ${height}" preserveAspectRatio="none">` +

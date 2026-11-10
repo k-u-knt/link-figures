@@ -1,6 +1,7 @@
 import { resolveConnector } from "../connectors/geometry";
 import { DEFAULT_PAGE_LIMIT_MM, MIN_NODE_PX } from "../constants";
 import { joinLinktext } from "../format/links-section";
+import { linkOf } from "../format/node-links";
 import { createPage, newId, textNodeDefaults } from "../model/defaults";
 import { mmToPx, pageOriginsPx, pageSizePx, type PlacePoint, type Rect } from "../model/geometry";
 import { commonParent, expandUnits, isGroup, isLocked, unitsOf } from "../model/groups";
@@ -467,11 +468,15 @@ function placeText(ctx: CommandContext, at: PlacePoint): void {
   view.activateNode(node.id);
 }
 
-/** The one file node with a link that is selected, if that is what is selected. */
-function linkedFileNode(ctx: CommandContext): Extract<Node, { type: "file" }> | undefined {
+/**
+ * The link of the one item selected, if that is what is selected and it has one: a file panel's, a note card's (any
+ * type that keeps a link, see `linkOf`).
+ */
+function selectedLink(ctx: CommandContext): { file: string; subpath: string } | undefined {
   if (ctx.selection.length !== 1) return undefined;
   const node = ctx.store.doc.nodes.find((n) => n.id === ctx.selection[0]);
-  return node?.type === "file" && node.file !== "" ? node : undefined;
+  const link = node && linkOf(node);
+  return link && link.file !== "" ? link : undefined;
 }
 
 /**
@@ -604,10 +609,10 @@ function builtinCommands(): Command[] {
       group: "edit",
       menu: ["item"],
       needsView: true,
-      applies: (ctx) => linkedFileNode(ctx) !== undefined,
+      applies: (ctx) => selectedLink(ctx) !== undefined,
       run(ctx) {
-        const node = linkedFileNode(ctx);
-        if (node) editor(ctx).openLink(joinLinktext(node.file, node.subpath));
+        const link = selectedLink(ctx);
+        if (link) editor(ctx).openLink(joinLinktext(link.file, link.subpath));
       },
     },
     lockCommand("lock", "Lock", "lock", true),

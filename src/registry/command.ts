@@ -2,7 +2,7 @@ import type { App, Hotkey } from "obsidian";
 import type { PlacePoint, Pt } from "../model/geometry";
 import type { PathData } from "../model/path";
 import type { DocumentStore } from "../model/store";
-import type { NodeId, Page } from "../model/types";
+import type { NodeId, Page, PageId } from "../model/types";
 import type { Registries } from "./index";
 import type { ParamSpec } from "./params";
 
@@ -66,6 +66,12 @@ export interface DragTargets {
   from: NodeId[];
   to: NodeId[];
   reach: number;
+  /**
+   * The page whose paper is under the press (`fromPage`) and under the release (`toPage`), any page of the figure, or
+   * null over no paper; absent when not known. A tool may tie an end there (the Connector tool: a card's association).
+   */
+  fromPage?: PageId | null;
+  toPage?: PageId | null;
 }
 
 /**
@@ -189,6 +195,13 @@ export interface Command<A = unknown, R = unknown> {
    * box as the drag's preview and nothing while hovering.
    */
   preview?(ctx: CommandContext, from: PlacePoint | null, to: PlacePoint, targets: DragTargets): ToolPreview | null;
+  /**
+   * The tool is pressed off the paper too (on the canvas round the pages), where any other tool is put down. The point
+   * it is given is then on the page the item under the pointer is placed against (a card beside a page), else on the
+   * page whose paper is nearest, and lies outside that page's paper. A `placeDrag` tool pressed there is not clamped to
+   * the paper at the release either.
+   */
+  pressOffPaper?: true;
   /** How the command's toolbar button shows the view's state now (a toggle's mode); without it the button is as the command is. */
   state?(ctx: CommandContext): CommandState;
   /** The CSS cursor over the stage while the tool is armed; `crosshair` when not given. */

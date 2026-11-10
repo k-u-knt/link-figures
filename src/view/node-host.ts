@@ -4,6 +4,7 @@ import { DecodeLimitError } from "../links/decoders/budget";
 import { isVectorFile } from "../links/intake-classify";
 import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
+import { fileNodeDefaults } from "../model/defaults";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
 import { viewNodeType } from "../nodes/placeholder-node";
@@ -41,6 +42,24 @@ function linkKey(node: FileNode): string {
 /** Which file (and which image in it) a file node shows; not what it draws it with (page, range, adjustments). */
 function fileIdentity(node: FileNode): string {
   return JSON.stringify([node.file, node.subpath, node.show, node.imageIndex]);
+}
+
+/**
+ * What `node`'s link is resolved as: a file panel itself, and for a node whose type names a link it shows
+ * (`NodeType.linkTarget`, a note card) a panel of that link; null for a node that has none.
+ */
+function resolvableAs(registries: Registries, node: Node, doc: Document, unreadable?: ReadonlySet<NodeId>): FileNode | null {
+  if (node.type === "file") return node;
+  let target;
+  try {
+    target = nodeTypeFor(registries, node, unreadable)?.linkTarget?.(node);
+  } catch (error) {
+    console.error(`Link Figures: could not tell what node ${node.id} links to`, error);
+    return null;
+  }
+  const page = doc.pages.find((p) => p.id === node.page);
+  if (!target || !page) return null;
+  return { ...fileNodeDefaults(page, target, []), id: node.id };
 }
 
 /**
@@ -123,7 +142,8 @@ export class NodeHost {
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     for (const id of this.knownIds()) {
       const node = byId.get(id);
-      if (node?.type !== "file" || this.resolvedKeys.get(id) !== linkKey(node)) this.forgetResolution(id);
+      const asFile = node && this.asFile(node, doc);
+      if (!asFile || this.resolvedKeys.get(id) !== linkKey(asFile)) this.forgetResolution(id);
     }
     for (const node of doc.nodes) this.mountNode(node);
   }
@@ -136,15 +156,21 @@ export class NodeHost {
 
   /** Resolves the file nodes of the view's document whose link has not been resolved yet, or has changed since. */
   resolveStale(): Promise<void> {
-    const stale = this.view.store.doc.nodes.filter((n) => n.type === "file" && this.resolvedKeys.get(n.id) !== linkKey(n));
+    const doc = this.view.store.doc;
+    const stale = doc.nodes.filter((n) => {
+      const asFile = this.asFile(n, doc);
+      return !!asFile && this.resolvedKeys.get(n.id) !== linkKey(asFile);
+    });
     return this.resolve(stale.map((n) => n.id));
   }
 
   /**
    * Brings the drawn nodes in line with `doc` after `changed` nodes were added, removed or edited, and draws again each
-   * node that is drawn from one of them (see `NodeType.dependsOn`). Pages are already rendered.
+   * node that is drawn from one of them (see `NodeType.dependsOn`), and with `pagesChanged` (a page added, removed,
+   * reordered or resized) each node tied to pages (see `NodeType.tiedPages`, an association), which is drawn from
+   * where its pages are. Pages are already rendered.
    */
-  applyChange(doc: Document, changed: Set<NodeId>): void {
+  applyChange(doc: Document, changed: Set<NodeId>, pagesChanged = false): void {
     this.samplesDecoded.clear();
     const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
     const stale: NodeId[] = [];
@@ -165,12 +191,20 @@ export class NodeHost {
       } else {
         this.updateEntry(entry, node);
       }
-      if (node.type === "file" && this.resolvedKeys.get(id) !== linkKey(node)) stale.push(id);
+      const asFile = this.asFile(node, doc);
+      if (asFile) {
+        if (this.resolvedKeys.get(id) !== linkKey(asFile)) stale.push(id);
+      } else if (this.resolvedKeys.has(id)) {
+        // Its link is gone (a note card made a text card): what was resolved for it is not its any more.
+        this.forgetResolution(id);
+      }
     }
     for (const node of doc.nodes) {
       if (changed.has(node.id)) continue;
-      const deps = nodeTypeFor(this.registries, node, this.view.unreadableNodes)?.dependsOn?.(node);
-      const entry = deps?.some((dep) => changed.has(dep)) ? this.entries.get(node.id) : undefined;
+      const type = nodeTypeFor(this.registries, node, this.view.unreadableNodes);
+      const deps = type?.dependsOn?.(node);
+      const tied = pagesChanged && (type?.tiedPages?.(node).length ?? 0) > 0;
+      const entry = tied || deps?.some((dep) => changed.has(dep)) ? this.entries.get(node.id) : undefined;
       if (entry) this.updateEntry(entry, node);
     }
     if (stale.length > 0) void this.resolve(stale);
@@ -284,8 +318,9 @@ export class NodeHost {
     const pending: Promise<void>[] = [];
     for (const id of ids) {
       const node = byId.get(id);
-      if (node?.type !== "file") continue;
-      const resolution = this.resolveFile(node, figure.path);
+      const asFile = node && this.asFile(node, this.view.store.doc);
+      if (!asFile) continue;
+      const resolution = this.resolveFile(asFile, figure.path);
       this.inFlight.add(resolution);
       void resolution.then(() => this.inFlight.delete(resolution));
       pending.push(resolution);
@@ -366,6 +401,11 @@ export class NodeHost {
       this.warnedUnknown.add(type);
       console.warn(`Link Figures: no adjustment "${type}" is registered, so it is skipped when drawing (it stays in the file)`);
     }
+  }
+
+  /** What `node`'s link is resolved as (see `resolvableAs`), or null when it has none. */
+  private asFile(node: Node, doc: Document): FileNode | null {
+    return resolvableAs(this.registries, node, doc, this.view.unreadableNodes);
   }
 
   private mountNode(node: Node): void {

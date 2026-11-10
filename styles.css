@@ -575,6 +575,84 @@
   text-align: center;
 }
 
+/* A card beside the figure (see `card-node.ts`): drawn as an Obsidian Canvas card is, a rounded border in the interface
+   colour on the theme's background, so it never reads as artwork. It is off the paper, so it takes the theme's text
+   colours back from the paper's ink. */
+.lf-card {
+  border: calc(2px / var(--lf-zoom, 1)) solid var(--interactive-accent);
+  border-radius: var(--radius-m, 8px);
+  background-color: var(--background-primary);
+  overflow: hidden;
+  color: var(--lf-ui-normal);
+  --text-normal: var(--lf-ui-normal);
+  --text-muted: var(--lf-ui-muted);
+  --text-faint: var(--lf-ui-faint);
+}
+
+/* A note card shows a section of a note: a shade apart from a typed card. */
+.lf-card.is-note {
+  background-color: var(--background-secondary);
+}
+
+.lf-card-body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.lf-card-content {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: var(--size-4-2) var(--size-4-3);
+  font-size: var(--font-text-size);
+  user-select: none;
+}
+
+.lf-card-content > :first-child {
+  margin-top: 0;
+}
+
+/* An empty text card says what it is for. */
+.lf-card-content:empty::before {
+  content: "Double-click to write";
+  color: var(--lf-ui-faint);
+}
+
+/* A note card whose section is not shown (not resolved yet, or not found): its link, quietly. */
+.lf-card-link {
+  color: var(--lf-ui-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+
+/* Editing a text card's Markdown in place: a plain textarea filling the card. */
+.lf-card-editor {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  border-radius: 0;
+  padding: var(--size-4-2) var(--size-4-3);
+  background: transparent;
+  color: var(--lf-ui-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-text-size);
+}
+
+/* A card's tie to a page (an association): dashed, in the interface colour, whatever paint the connector has. The line
+   is its one unfilled path; its caps are filled paths. */
+.lf-association path[fill="none"] {
+  stroke: var(--interactive-accent) !important;
+  stroke-dasharray: calc(6px / var(--lf-zoom, 1)) calc(4px / var(--lf-zoom, 1));
+}
+
+.lf-association path:not([fill="none"]) {
+  fill: var(--interactive-accent) !important;
+}
+
 /* A text node: its text fills the box and is clipped to it. Double-click edits it in place (see `text-node.ts`). */
 .lf-text {
   width: 100%;

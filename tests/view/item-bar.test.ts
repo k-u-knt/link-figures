@@ -455,6 +455,49 @@ describe("the item bar", () => {
     expect(s.chosen()).toBe("Figure 2");
   });
 
+  test("the dropdown follows every change of the document while the card stays selected: a second tie reads 'Several pages' at once", async () => {
+    const s = setup();
+    s.select(["C"]);
+    await s.call("card.tie", { id: "C", page: "pg-1" });
+    expect(s.chosen()).toBe("Figure 1");
+    // A second tie to the same page, made while the card stays selected (the selection is not touched).
+    const first = s.ties("C")[0];
+    s.store.commit("add", (d) => void d.nodes.push({ ...first, id: "tie-2", z: first.z + 1 }));
+    expect(s.view.selectedIds()).toEqual(["C"]);
+    expect(s.ties("C")).toHaveLength(2);
+    expect(s.chosen()).toBe("Several pages");
+    // And back: one of them deleted, the dropdown reads the page again.
+    s.store.commit("delete", (d) => void (d.nodes = d.nodes.filter((n) => n.id !== "tie-2")));
+    expect(s.chosen()).toBe("Figure 1");
+  });
+
+  test("a hidden bar keeps no stale dropdown: shown again, it reads the figure as it is now", async () => {
+    const s = setup();
+    s.select(["C"]);
+    await s.call("card.tie", { id: "C", page: "pg-1" });
+    expect(s.chosen()).toBe("Figure 1");
+    // The selection moves on (a line drawn from the card selects the line), and a second tie is made meanwhile.
+    s.select(["A"]);
+    expect(s.bar.el.hidden).toBe(true);
+    const first = s.ties("C")[0];
+    s.store.commit("add", (d) => void d.nodes.push({ ...first, id: "tie-2", z: first.z + 1 }));
+    expect(s.bar.el.querySelector("select")).toBeNull();
+    s.select(["C"]);
+    expect(s.chosen()).toBe("Several pages");
+  });
+
+  test("on every change of the document the dropdown is set to what the figure says, even when its entries are unchanged", async () => {
+    const s = setup();
+    s.select(["C"]);
+    await s.call("card.tie", { id: "C", page: "pg-1" });
+    const select = s.dropdown();
+    // Its value left as something the figure does not say (a choice that never ran).
+    select.value = "none";
+    await s.call("node.move", { ids: ["D"], dx: 10, dy: 0 });
+    expect(s.dropdown()).toBe(select);
+    expect(s.chosen()).toBe("Figure 1");
+  });
+
   test("the wiring brings the bar in line on a pan, an edit, and the end of a gesture", () => {
     const s = setup();
     s.select(["C"]);

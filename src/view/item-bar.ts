@@ -83,9 +83,10 @@ const MIXED = "mixed";
  * node type (`Command.itemBar`), run through the view (`runCommandById`) as a script runs them. It shows only for
  * exactly one item selected at the current group level (in a read-only view with only what changes nothing, see
  * `Command.readOnlySafe`), and hides for a multi-selection, during a drag or a resize (`gestureUnderWay`), while the item is edited in place (`EDITING_CLASS`) and while the item
- * is off the stage. Its entries are
- * rebuilt whenever what they show changes (a page added, renamed or deleted, a tie made), so a dropdown never offers
- * a page that has gone; a choice that lands after its page went is refused by its command.
+ * is off the stage. It is brought in line on every change of the document and the selection while it shows: its entries
+ * are rebuilt whenever what they show changes (a page added, renamed or deleted, a tie made), so a dropdown never offers
+ * a page that has gone, and a dropdown left as it is reads what the figure says; a choice that lands after its page
+ * went is refused by its command. A hidden bar is emptied.
  */
 export class ItemBar {
   readonly el: HTMLElement;
@@ -93,6 +94,8 @@ export class ItemBar {
   private item: NodeId | null = null;
   /** What the entries were built from, so an unchanged bar keeps its DOM (and an open dropdown stays open). */
   private built = "";
+  /** The dropdowns built, each with the choice it shows: set to that choice on every `sync` (see `showChoices`). */
+  private choices: { select: HTMLSelectElement; choice: ItemBarChoice }[] = [];
 
   constructor(parent: HTMLElement) {
     const doc = parent.ownerDocument;
@@ -113,12 +116,15 @@ export class ItemBar {
     const node = barItem(view);
     const entries = node ? itemBarModel(view.plugin.registries, view.commandContext(), node, view.readOnly) : [];
     if (!node || entries.length === 0) {
+      // Emptied, not just hidden: nothing stale is left in it, and it is built afresh when it shows again.
       this.item = null;
       this.el.hidden = true;
+      this.clear();
       return;
     }
     const signature = JSON.stringify([node.id, entries]);
     if (rebuild || signature !== this.built || this.item !== node.id) this.build(node.id, entries, signature);
+    else this.showChoices();
     this.item = node.id;
     // Shown before it is placed, so that it can be measured; hidden again while its item is off the stage.
     this.el.hidden = false;
@@ -159,9 +165,27 @@ export class ItemBar {
     return true;
   }
 
-  private build(id: NodeId, entries: ItemBarEntry[], signature: string): void {
-    this.built = signature;
+  /** Empties the bar: no entries, nothing built. */
+  private clear(): void {
+    this.built = "";
+    this.choices = [];
     while (this.el.firstChild) this.el.removeChild(this.el.firstChild);
+  }
+
+  /**
+   * Sets each dropdown to the value its choice says, where the DOM says another (one left on an entry that never ran):
+   * an unchanged bar keeps its elements, so an open dropdown stays open, but never shows what the figure does not say.
+   */
+  private showChoices(): void {
+    for (const { select, choice } of this.choices) {
+      const value = choice.value === undefined ? MIXED : encode(choice.value);
+      if (select.value !== value) select.value = value;
+    }
+  }
+
+  private build(id: NodeId, entries: ItemBarEntry[], signature: string): void {
+    this.clear();
+    this.built = signature;
     const doc = this.el.ownerDocument;
     for (const entry of entries) {
       if (entry.choice) {
@@ -195,6 +219,7 @@ export class ItemBar {
     if (choice.value === undefined) option(MIXED, choice.mixed ?? "", true);
     for (const o of choice.options) option(encode(o.value), o.label);
     select.value = choice.value === undefined ? MIXED : encode(choice.value);
+    this.choices.push({ select, choice });
     select.addEventListener("change", () => {
       const raw = select.value;
       if (raw === MIXED) return;

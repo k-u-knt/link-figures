@@ -219,7 +219,11 @@ export class PointerController {
     on("pointerup", (ev) => this.onPointerUp(ev));
     on("pointercancel", (ev) => this.onPointerLost(ev));
     on("lostpointercapture", (ev) => this.onPointerLost(ev));
-    on("pointerleave", () => this.clearHover());
+    on("pointerleave", () => {
+      this.clearHover();
+      // A link press is not captured: once the pointer leaves, its release may never reach the stage.
+      if (this.gesture.kind === "link") this.endGesture();
+    });
     // A press the controller took is not also a text selection or a native drag: that is the mouse event's default.
     on("mousedown", (ev) => {
       if (this.gesture.kind !== "idle" && ev.button === 0) ev.preventDefault();
@@ -475,6 +479,11 @@ export class PointerController {
       return;
     }
     if (g.kind === "link") {
+      // The button was let go where the stage did not hear it (outside it): the press is over.
+      if ((ev.buttons & 1) === 0) {
+        this.endGesture();
+        return;
+      }
       if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) < DRAG_THRESHOLD_PX) return;
       // Dragged from the link: the press is the card's after all, taken where it began.
       this.gesture = { kind: "idle" };

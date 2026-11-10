@@ -320,12 +320,13 @@ function roundAway(value: number, dir: number): number {
  * every page's paper: one that overlaps a paper (it was moved, created or resized there, or a page was added, resized or
  * moved under it) is moved by the smallest move clear of all of them (`pushOffPaper`), on its own page, in the same
  * commit. Its box (`bounds`) is what is kept clear; its position is rounded to 0.01 px away from the paper. Nothing else
- * changes, and an item already clear is not written.
+ * changes, and an item already clear is not written. An item its plugin could not read is kept clear by its box.
  */
 export function offPaperNormaliser(registries: Registries): Normaliser {
   return (draft, _before, ctx) => {
     const unreadable = ctx?.unreadable;
-    const typeOf = (n: Node) => nodeTypeFor(registries, n, unreadable);
+    // The flag is the type's, not the node's: a card its plugin could not read is still a card, kept clear by its box.
+    const typeOf = (n: Node) => registries.nodeTypes.get(n.type);
     if (!draft.nodes.some((n) => typeOf(n)?.offPaper === true)) return;
     const snapshot: Document = isDraft(draft) ? current(draft) : draft;
     const papers = paperRectsWorld(snapshot);
@@ -336,7 +337,8 @@ export function offPaperNormaliser(registries: Registries): Normaliser {
       const was = plain.get(node.id);
       const origin = origins.get(node.page);
       if (type?.offPaper !== true || !was || !origin) continue;
-      const box = type.bounds(was);
+      const hooks = nodeTypeFor(registries, was, unreadable);
+      const box = hooks ? hooks.bounds(was) : { x: was.x, y: was.y, width: was.width, height: was.height };
       const world = { x: origin.x + box.x, y: origin.y + box.y, width: box.width, height: box.height };
       const out = pushOffPaper(world, papers);
       if (out === world) continue;

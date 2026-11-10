@@ -242,11 +242,15 @@ export function pageTarget(doc: Document, page: PageId, inPage: PageId): AttachT
   return { outline: rectPath(box, 0), anchors: boxAnchors(box), center: { x: box.x + box.width / 2, y: box.y + box.height / 2 } };
 }
 
-/** Whether `end` is attached to an item whose type may be tied to pages (`NodeType.pageTies`: a card). */
-export function onPageTiedItem(doc: Document, registries: Registries, end: End | undefined, unreadable?: ReadonlySet<NodeId>): boolean {
+/**
+ * Whether `end` is attached to an item whose type may be tied to pages (`NodeType.pageTies`: a card). Asked of its type
+ * even when its plugin could not read the item: the flag is the type's, not the node's, so such a card keeps its
+ * associations.
+ */
+export function onPageTiedItem(doc: Document, registries: Registries, end: End | undefined, _unreadable?: ReadonlySet<NodeId>): boolean {
   if (end?.kind !== "attached") return false;
   const node = doc.nodes.find((n) => n.id === end.node);
-  return !!node && nodeTypeFor(registries, node, unreadable)?.pageTies === true;
+  return !!node && registries.nodeTypes.get(node.type)?.pageTies === true;
 }
 
 /**

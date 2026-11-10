@@ -610,7 +610,9 @@
   user-select: none;
 }
 
-.lf-card-content > :first-child {
+/* The first thing drawn starts at the padding: the first child, or (a note's) what follows its hidden front matter. */
+.lf-card-content > :first-child,
+.lf-card-content > .frontmatter:first-child + * {
   margin-top: 0;
 }
 

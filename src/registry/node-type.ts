@@ -46,6 +46,18 @@ export interface RenderContext {
  * (as a node writes it) led to before the rename, or null, and `linktext` is what a link to the renamed file is written
  * as now, from the figure's place in the vault (Obsidian's link text for it, in the user's link format).
  */
+/** What `NodeType.linkedPaths` may ask about: the figure's place in the vault, and what the stage resolved for a node. */
+export interface LinkedPathsContext {
+  figurePath: string;
+  resolved(id: NodeId): Resolved | undefined;
+}
+
+/** A vault link a node's drawing reads: `link` as written (`file`, `file#subpath`), resolved from the file `from`. */
+export interface LinkedPath {
+  link: string;
+  from: string;
+}
+
 export interface LinkRename {
   oldPath: string;
   linktext: string;
@@ -55,6 +67,11 @@ export interface LinkRename {
 export interface NodeRenderer {
   update(node: Node): void;
   unmount(): void;
+  /**
+   * A file the drawing reads (see `NodeType.linkedPaths`) changed: draw again from scratch, even though the node did
+   * not change (a text card renders its embeds afresh).
+   */
+  refresh?(): void;
   /**
    * A file a link leads to was renamed (`NodeType.renameLinks`): what the renderer holds of the node that the model
    * does not (an open editor's text, typed and not yet committed) follows it too.
@@ -345,6 +362,13 @@ export interface NodeType<N extends Node = Node> {
    * null when it has none. Without it, the node's own link (`linkField`, see `linkOf`) is opened.
    */
   sourceLink?(node: N): { file: string; subpath: string } | null;
+  /**
+   * The vault links the node's drawing reads besides its own `linkTarget` (a text card's links and embeds; the links in
+   * the section a note card shows), each with the file it is resolved from. When one of their files changes, or a note
+   * embedded in one (however deep), the stage resolves the node again if it has a `linkTarget`, and otherwise draws it
+   * again (`NodeRenderer.refresh`); when a file appears while one of them finds none, too. Absent: nothing besides.
+   */
+  linkedPaths?(node: N, ctx: LinkedPathsContext): LinkedPath[];
   /**
    * For a type whose nodes hold links in their own fields, which Obsidian's link updater cannot see (a text card's
    * `[[…]]` in its text; a link in the Links section, `linkField`, is Obsidian's to rewrite): the node with each link

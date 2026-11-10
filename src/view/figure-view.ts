@@ -193,9 +193,9 @@ export class LinkFiguresView extends TextFileView implements EditorView {
       plugin.app,
       this.index,
       (ids) => {
-        void this.nodeHost.resolve(ids);
+        void this.nodeHost.invalidate(ids);
       },
-      () => missingNodeIds(this.store.doc.nodes, this.resolvedCache),
+      () => [...missingNodeIds(this.store.doc.nodes, this.resolvedCache), ...this.nodeHost.unresolvedLinkers()],
     );
   }
 

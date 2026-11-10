@@ -4,8 +4,8 @@ import { newId } from "../model/defaults";
 import { mmToPx, type Rect } from "../model/geometry";
 import type { Resolved } from "../links/types";
 import type { CardNode, Node, Page } from "../model/types";
-import { firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
-import type { LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
+import { cardLinks, firstLink, mapOffset, renameEdits, renameInCardText, applyEdits } from "../model/card-links";
+import type { LinkedPath, LinkRename, NodeRenderer, NodeType, RenderContext, UpdateContext } from "../registry/node-type";
 import { attachLinkSuggest, type BlockIdWriter } from "../view/card-link-suggest";
 import { openCardLink, renderCard, type CardBody } from "../view/card-render";
 
@@ -115,6 +115,12 @@ class CardNodeRenderer implements NodeRenderer {
 
   drawn(): Promise<void> {
     return this.shown?.drawn ?? Promise.resolve();
+  }
+
+  /** A note it links or embeds changed: drawn again from scratch (its embeds rendered afresh), unless it is being edited. */
+  refresh(): void {
+    this.drawnFrom = null;
+    if (!this.editor) this.draw();
   }
 
   /**
@@ -236,6 +242,20 @@ export const cardNodeType: NodeType<CardNode> = {
     if (node.file !== undefined) return { file: node.file, subpath: node.subpath ?? "" };
     const link = firstLink(node.text ?? "");
     return link ? { file: link.target, subpath: link.subpath } : null;
+  },
+
+  /**
+   * What the card's drawing reads: a text card's links and embeds (outside code), from the figure's place; a note card's,
+   * the links in the section it shows, from the note's place (the note itself is its `linkTarget`).
+   */
+  linkedPaths(node: CardNode, ctx): LinkedPath[] {
+    const resolved = node.file === undefined ? undefined : ctx.resolved(node.id);
+    const from = node.file === undefined ? ctx.figurePath : resolved?.kind === "content" ? resolved.file.path : null;
+    const text = node.file === undefined ? (node.text ?? "") : resolved?.kind === "content" ? resolved.markdown : "";
+    if (from === null) return [];
+    return cardLinks(text)
+      .filter((link) => link.target !== "")
+      .map((link) => ({ link: link.target, from }));
   },
 
   /** A text card's `[[…]]` and `![[…]]` that led to the renamed file (a note card's link is in the Links section, Obsidian's to rewrite). */

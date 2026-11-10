@@ -2,13 +2,14 @@ import { Keymap } from "obsidian";
 import type { Plane } from "../links/decoders/tiff-convert";
 import { DecodeLimitError } from "../links/decoders/budget";
 import { isVectorFile } from "../links/intake-classify";
+import { linkedFiles } from "../links/linked-files";
 import { resolveFileNode, samplesKey } from "../links/resolver";
 import type { Resolved } from "../links/types";
 import { fileNodeDefaults } from "../model/defaults";
 import type { Document, FileNode, Node, NodeId, PageId } from "../model/types";
 import type { Registries } from "../registry";
 import { viewNodeType } from "../nodes/placeholder-node";
-import { nodeTypeFor, type ImageState, type LinkRename, type NodeRenderer, type RenderContext } from "../registry/node-type";
+import { nodeTypeFor, type ImageState, type LinkedPath, type LinkRename, type NodeRenderer, type RenderContext } from "../registry/node-type";
 import type { LinkFiguresView } from "./figure-view";
 import type { PageLayer } from "./page-layer";
 
@@ -99,6 +100,13 @@ export class NodeHost {
    * can be had. Kept with the node's `fileIdentity` then: a relink is not a change of the file.
    */
   private readonly askedKeys = new Map<NodeId, { key: string; identity: string }>();
+  /**
+   * For each node whose type lists the links its drawing reads (`NodeType.linkedPaths`), what they were when its files
+   * were last tracked (on the index's `"linked"` channel); a node whose links are unchanged is not tracked again.
+   */
+  private readonly linkedKeys = new Map<NodeId, string>();
+  /** Nodes with a link among those that finds no file: a file that appears may be it (see `unresolvedLinkers`). */
+  private readonly unresolvedLinks = new Set<NodeId>();
   /** Adjustment types already warned about as not registered: one warning per type per view. */
   private readonly warnedUnknown = new Set<string>();
   private readonly ctx: RenderContext;
@@ -135,6 +143,8 @@ export class NodeHost {
     this.samplesDecoded.clear();
     for (const [id, entry] of this.entries) this.unmountEntry(id, entry);
     this.entries.clear();
+    const present = new Set(doc.nodes.map((n) => n.id));
+    for (const id of [...this.linkedKeys.keys()]) if (!present.has(id)) this.forgetLinked(id);
     // The same page ids survive an external reload, so what the old nodes left in their hosts is cleared explicitly.
     for (const page of doc.pages) this.hostFor(page.id)?.replaceChildren();
 
@@ -151,6 +161,40 @@ export class NodeHost {
   reset(): void {
     this.samplesDecoded.clear();
     for (const id of this.knownIds()) this.forgetResolution(id);
+    for (const id of [...this.linkedKeys.keys()]) this.forgetLinked(id);
+  }
+
+  /**
+   * The watcher says files that `ids` depend on changed: each node that resolves a link (`linkTarget`) is resolved
+   * again, which draws it; any other is drawn again from scratch (`NodeRenderer.refresh`). Both track their linked
+   * files afresh, as what an embedded note embeds may have changed.
+   */
+  async invalidate(ids: NodeId[]): Promise<void> {
+    const doc = this.view.store.doc;
+    const byId = new Map(doc.nodes.map((n) => [n.id, n] as const));
+    const toResolve: NodeId[] = [];
+    for (const id of new Set(ids)) {
+      const node = byId.get(id);
+      if (!node) continue;
+      this.linkedKeys.delete(id);
+      if (this.asFile(node, doc)) {
+        toResolve.push(id);
+        continue;
+      }
+      const entry = this.entries.get(id);
+      try {
+        entry?.renderer.refresh?.();
+      } catch (error) {
+        console.error(`Link Figures: could not redraw node ${id}`, error);
+      }
+      this.trackLinked(node);
+    }
+    await this.resolve(toResolve);
+  }
+
+  /** The nodes with a link their drawing reads that finds no file (see `NodeType.linkedPaths`): a new file may mend them. */
+  unresolvedLinkers(): NodeId[] {
+    return [...this.unresolvedLinks];
   }
 
   /** Resolves the file nodes of the view's document whose link has not been resolved yet, or has changed since. */
@@ -430,6 +474,7 @@ export class NodeHost {
     } catch (error) {
       console.error(`Link Figures: could not draw node ${node.id}`, error);
     }
+    this.trackLinked(node);
   }
 
   private updateEntry(entry: Entry, node: Node): void {
@@ -438,6 +483,36 @@ export class NodeHost {
     } catch (error) {
       console.error(`Link Figures: could not redraw node ${node.id}`, error);
     }
+    this.trackLinked(node);
+  }
+
+  /**
+   * Tracks the files `node`'s drawing reads (see `NodeType.linkedPaths` and `linkedFiles`) on the index's `"linked"`
+   * channel, so the watcher finds the node when one of them changes. Nothing is done while its links are what they were.
+   */
+  private trackLinked(node: Node): void {
+    const type = nodeTypeFor(this.registries, node, this.view.unreadableNodes);
+    if (!type?.linkedPaths) return;
+    let links: LinkedPath[];
+    try {
+      links = type.linkedPaths(node, { figurePath: this.ctx.figurePath, resolved: (id) => this.view.resolvedCache.get(id) });
+    } catch (error) {
+      console.error(`Link Figures: could not tell what node ${node.id} links to`, error);
+      links = [];
+    }
+    const key = JSON.stringify(links);
+    if (this.linkedKeys.get(node.id) === key) return;
+    this.linkedKeys.set(node.id, key);
+    const { paths, unresolved } = linkedFiles(links, this.view.plugin.access);
+    this.view.index.track(node.id, paths, "linked");
+    if (unresolved) this.unresolvedLinks.add(node.id);
+    else this.unresolvedLinks.delete(node.id);
+  }
+
+  private forgetLinked(id: NodeId): void {
+    this.linkedKeys.delete(id);
+    this.unresolvedLinks.delete(id);
+    this.view.index.track(id, [], "linked");
   }
 
   private unmountEntry(id: NodeId, entry: Entry): void {
@@ -454,6 +529,7 @@ export class NodeHost {
     if (entry) this.unmountEntry(id, entry);
     this.entries.delete(id);
     this.forgetResolution(id);
+    this.forgetLinked(id);
   }
 
   /** Every node that has a resolution, or one under way. */
@@ -468,7 +544,8 @@ export class NodeHost {
     this.resolvedIdentity.delete(id);
     this.awaitingResolution.delete(id);
     this.askedKeys.delete(id);
-    this.view.index.untrack(id);
+    // What its link resolved to; what its drawing reads besides (the "linked" channel) is the node's while it is drawn.
+    this.view.index.track(id, []);
   }
 
   /** The page's node host, or undefined for a page that is not rendered (a node pointing at it is skipped, not fatal). */

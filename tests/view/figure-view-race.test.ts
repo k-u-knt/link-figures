@@ -271,7 +271,7 @@ function setup(initialText = newFigureText("a4-portrait", 1), options: { linkQue
         style: { setProperty: vi.fn(), removeProperty: vi.fn() },
       },
       viewportEl: { show: () => {}, hide: () => {}, style: { transform: "", setProperty: vi.fn() } },
-      nodeHost: { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn() },
+      nodeHost: { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn(), invalidate: vi.fn(async () => {}), unresolvedLinkers: () => [] },
       pageLayer: { render: vi.fn() },
       pointer: { commitTime: () => 0, select: vi.fn(), rebind: vi.fn(), attach: vi.fn(), detach: vi.fn(), finishCrop: vi.fn() },
       intake: { attach: vi.fn() },

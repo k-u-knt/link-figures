@@ -81,7 +81,7 @@ function setup(initial: Document = figure()) {
   const view = new LinkFiguresView({ app } as never, plugin as never);
   const internals = view as unknown as Record<string, unknown>;
 
-  const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn() };
+  const nodeHost = { reset: vi.fn(), renderAll: vi.fn(), resolveStale: vi.fn(async () => {}), applyChange: vi.fn(), invalidate: vi.fn(async () => {}), unresolvedLinkers: () => [] };
   const pointer = { commitTime: () => 0, rebind: vi.fn(), attach: vi.fn(), detach: vi.fn(), finishCrop: vi.fn() };
   const selection = { clear: vi.fn(), onChange: vi.fn(), ids: [] as string[] };
   const toolbar = { render: vi.fn() };

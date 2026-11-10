@@ -8,6 +8,23 @@ test("rename moves deps", () => { const i = new InvalidationIndex(); i.track("p-
 test("rename keeps the node's other deps and drops the old path", () => { const i = new InvalidationIndex(); i.track("p-1", ["a.md", "b.png"]); i.rename("a.md", "z.md"); expect(i.nodesFor("a.md")).toEqual([]); expect(i.nodesFor("b.png")).toEqual(["p-1"]); i.track("p-1", ["b.png"]); expect(i.nodesFor("z.md")).toEqual([]); });
 test("rename merges into a path that already has nodes", () => { const i = new InvalidationIndex(); i.track("p-1", ["a.md"]); i.track("p-2", ["z.md"]); i.rename("a.md", "z.md"); expect(i.nodesFor("z.md").sort()).toEqual(["p-1", "p-2"]); });
 test("unknown paths and nodes are harmless", () => { const i = new InvalidationIndex(); expect(i.nodesFor("nope.md")).toEqual([]); i.untrack("p-9"); i.rename("nope.md", "x.md"); expect(i.nodesFor("x.md")).toEqual([]); });
+test("a node's deps on another channel are its own: replacing one channel keeps the other, untrack drops both", () => {
+  const i = new InvalidationIndex();
+  i.track("c", ["a.md"]);
+  i.track("c", ["b.md", "a.md"], "linked");
+  expect(i.nodesFor("a.md")).toEqual(["c"]);
+  expect(i.nodesFor("b.md")).toEqual(["c"]);
+  i.track("c", [], "linked");
+  expect(i.nodesFor("a.md")).toEqual(["c"]);
+  expect(i.nodesFor("b.md")).toEqual([]);
+  i.track("c", ["b.md"], "linked");
+  i.rename("b.md", "z.md");
+  expect(i.nodesFor("z.md")).toEqual(["c"]);
+  i.track("c", []);
+  expect(i.nodesFor("z.md")).toEqual(["c"]);
+  i.untrack("c");
+  expect([i.has("a.md"), i.has("z.md")]).toEqual([false, false]);
+});
 test("duplicate deps are tracked once", () => { const i = new InvalidationIndex(); i.track("p-1", ["a.md", "a.md"]); expect(i.nodesFor("a.md")).toEqual(["p-1"]); });
 
 describe("missingNodeIds", () => {

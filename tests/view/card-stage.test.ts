@@ -687,6 +687,55 @@ describe("links in a card", () => {
   });
 });
 
+describe("a card follows the files it links and embeds", () => {
+  test("a text card, and a note card's section, are drawn again when a note they link or embed (or one embedded in it) changes", async () => {
+    const s = setup();
+    await s.call("node.update", { id: "C", patch: { text: "Fig ![[Notes/a#Legend]], [[Notes/c|c]], `[[Notes/d]]` and [[Nope]]" } });
+    const hosts = new Map(s.store.doc.pages.map((p) => [p.id, document.createElement("div")]));
+    const access = new FakeAccess({
+      files: { "Notes/a.md": "# A\n## Legend\nBody ![[Notes/b]]", "Notes/b.md": "Nested", "Notes/c.md": "C", "Notes/d.md": "D" },
+      headings: { "Notes/a.md": { Legend: { start: 4, end: null } } },
+      embeds: { "Notes/a.md": [{ link: "Notes/b", offset: 19 }] },
+    });
+    const view: any = {
+      app: {},
+      file: { path: "fig.lnkfig.md" },
+      store: s.store,
+      resolvedCache: new Map<string, Resolved>(),
+      index: new InvalidationIndex(),
+      plugin: { access, decoders: {}, registries: { ...s.r, adjustments: { get: () => undefined } } },
+      openLink: vi.fn(),
+      samplesLanded: vi.fn(),
+      addChild: vi.fn(),
+      removeChild: vi.fn(),
+    };
+    const nodeHost = new NodeHost(view, { nodesHost: (id: string) => hosts.get(id)! } as never, s.r);
+    nodeHost.renderAll(s.store.doc);
+    await nodeHost.resolveStale();
+    // What each card's drawing reads: its links and embeds (not those in code), and what an embedded note embeds.
+    expect(view.index.nodesFor("Notes/a.md").sort()).toEqual(["C", "N"]);
+    expect(view.index.nodesFor("Notes/b.md").sort()).toEqual(["C", "N"]);
+    expect(view.index.nodesFor("Notes/c.md")).toEqual(["C"]);
+    expect(view.index.nodesFor("Notes/d.md")).toEqual([]);
+    // A link that finds no file yet is mended by a file that appears: the card is among those to look at again then.
+    expect(nodeHost.unresolvedLinkers()).toEqual(["C"]);
+
+    // The watcher says a note changed: the text card is drawn again (its embeds rendered afresh)...
+    render.mockClear();
+    await nodeHost.invalidate(["C"]);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenLastCalledWith({}, "Fig ![[Notes/a#Legend]], [[Notes/c|c]], `[[Notes/d]]` and [[Nope]]", expect.anything(), "fig.lnkfig.md", expect.anything());
+    // ...and the note card's section is read again and drawn from what it says now.
+    access["vault"].files["Notes/a.md"] = "# A\n## Legend\nNew body";
+    render.mockClear();
+    await nodeHost.invalidate(["N"]);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenLastCalledWith({}, "## Legend\nNew body", expect.anything(), "Notes/a.md", expect.anything());
+    // Its section no longer embeds Notes/b, so it no longer follows it.
+    expect(view.index.nodesFor("Notes/b.md")).toEqual(["C"]);
+  });
+});
+
 describe("note cards", () => {
   test("a note card shows Open source in its menu", () => {
     const s = setup();

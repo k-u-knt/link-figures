@@ -24,7 +24,7 @@ export function sourceKindOf(ext: string): SourceKind {
 }
 
 /** Drops an alias or size suffix (`|300`, `|label`) and surrounding whitespace from a linktext, then splits it into file and subpath. */
-function splitWithoutAlias(linktext: string): { file: string; subpath: string } {
+export function splitWithoutAlias(linktext: string): { file: string; subpath: string } {
   const bar = linktext.indexOf("|");
   return splitLinktext((bar === -1 ? linktext : linktext.slice(0, bar)).trim());
 }

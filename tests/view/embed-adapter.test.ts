@@ -87,23 +87,72 @@ describe("openEmbed", () => {
     expect(embed.calls.filter((c) => c === "unload")).toHaveLength(1);
   });
 
-  test("a missing member gives null with a single warning per app; a creator that throws too", () => {
+  test("a missing member gives null with a single warning per app, saying why and that notes are shown read-only; a creator that throws too", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const app = {};
     expect(openEmbed(app as never, file as never, "", container(), "f")).toBeNull();
     expect(openEmbed(app as never, file as never, "", container(), "f")).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toMatch(/Link Figures: .*read-only/);
+    expect(String(warn.mock.calls[0][0])).toBe("Link Figures: notes on cards cannot be edited here (Obsidian's embed is not available); they are shown read-only.");
 
     const { registry } = fakeEmbedRegistry();
     // An embed without `showEditor`.
     const broken = { getEmbedCreator: () => (ctx: never, f: never, s: string) => Object.assign(registry.getEmbedCreator(file)!(ctx, f, s), { showEditor: undefined }) };
     expect(openEmbed({ embedRegistry: broken } as never, file as never, "", container(), "f")).toBeNull();
+    expect(String(warn.mock.calls[1][0])).toBe("Link Figures: notes on cards cannot be edited here (Obsidian's note embed has changed: it has no showEditor()); they are shown read-only.");
     const throwing = { getEmbedCreator: () => () => { throw new Error("boom"); } };
     expect(openEmbed({ embedRegistry: throwing } as never, file as never, "", container(), "f")).toBeNull();
-    // No creator for the file (not a note).
+    expect(String(warn.mock.calls[2][0])).toBe("Link Figures: notes on cards cannot be edited here (Obsidian's note embed failed: boom); they are shown read-only.");
+    // No creator for a note.
     expect(openEmbed({ embedRegistry: { getEmbedCreator: () => null } } as never, file as never, "", container(), "f")).toBeNull();
+    expect(String(warn.mock.calls[3][0])).toBe("Link Figures: notes on cards cannot be edited here (Obsidian has no embed for notes); they are shown read-only.");
     expect(warn).toHaveBeenCalledTimes(4);
+  });
+
+  test("a file that is not a note has no creator: null, and the one warning is not used up", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { registry } = fakeEmbedRegistry();
+    const app = { embedRegistry: registry };
+    expect(openEmbed(app as never, { path: "a.png", extension: "png" } as never, "", container(), "f")).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    expect(openEmbed({ embedRegistry: { getEmbedCreator: () => null } } as never, { path: "a.pdf", extension: "pdf" } as never, "", container(), "f")).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test("a save that throws as the edit ends does not keep the embed loaded", () => {
+    const { registry, embeds } = fakeEmbedRegistry();
+    const live = openEmbed({ embedRegistry: registry } as never, file as never, "", container(), "f")!;
+    const embed = embeds[0];
+    live.edit();
+    embed.showPreview = () => {
+      throw new Error("disk full");
+    };
+    expect(() => live.unload()).toThrow("disk full");
+    expect(embed.unloaded).toBe(true);
+    // Once, even so.
+    live.unload();
+    expect(embed.calls.filter((c) => c === "unload")).toHaveLength(1);
+  });
+
+  test("an editor that cannot report its end (no editMode.register) is closed again with a save, with one warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { registry, embeds } = fakeEmbedRegistry();
+    const changes: boolean[] = [];
+    const app = { embedRegistry: registry };
+    const live = openEmbed(app as never, file as never, "", container(), "f", { onEditingChange: (e) => changes.push(e) })!;
+    const embed = embeds[0];
+    const showEditor = embed.showEditor.bind(embed);
+    embed.showEditor = (at?: unknown) => {
+      showEditor(at);
+      (embed.editMode as { register?: unknown }).register = undefined;
+    };
+    live.edit();
+    expect(live.editing()).toBe(false);
+    expect(embed.calls).toContain("showPreview(true)");
+    expect(changes).toEqual([]);
+    live.edit();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/^Link Figures: notes on cards cannot be edited here \(Obsidian's note editor has changed: .*register.*\); they are shown read-only\.$/);
   });
 });
 

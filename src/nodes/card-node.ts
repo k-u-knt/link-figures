@@ -170,6 +170,14 @@ class CardNodeRenderer implements NodeRenderer {
     return this.live?.embed.flush() ?? Promise.resolve();
   }
 
+  /**
+   * Ends a note's edit with a save. A text card's textarea is left alone: it is not in an iframe, and its edit ends by
+   * itself (writing through the store) when it loses the focus.
+   */
+  stopEditing(): void {
+    this.live?.embed.stopEditing();
+  }
+
   /** While the embed's note is in the vault, the embed follows it: the watcher need not resolve the card again. */
   followsFile(): boolean {
     const live = this.live;

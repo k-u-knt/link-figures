@@ -59,18 +59,22 @@ const warned = new WeakSet<object>();
 function warnOnce(app: App, reason: string, error?: unknown): void {
   if (warned.has(app)) return;
   warned.add(app);
-  const message = `Link Figures: note cards are read-only, as Obsidian's editable note embed is not available (${reason})`;
+  const message = `Link Figures: notes on cards cannot be edited here (${reason}); they are shown read-only.`;
   if (error === undefined) console.warn(message);
   else console.warn(message, error);
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** What is missing from `embed` of what is used here, or null when nothing is. */
 function missingMember(embed: unknown): string | null {
-  if (typeof embed !== "object" || embed === null) return "the creator made no embed";
+  if (typeof embed !== "object" || embed === null) return "it made nothing";
   const e = embed as Record<string, unknown>;
-  for (const name of EMBED_METHODS) if (typeof e[name] !== "function") return `the embed has no ${name}()`;
+  for (const name of EMBED_METHODS) if (typeof e[name] !== "function") return `it has no ${name}()`;
   const save = e.requestSave as ((() => void) & { run?: unknown }) | undefined;
-  if (typeof save !== "function" || typeof save.run !== "function") return "the embed has no requestSave.run()";
+  if (typeof save !== "function" || typeof save.run !== "function") return "it has no requestSave.run()";
   return null;
 }
 
@@ -88,21 +92,35 @@ export function noteFile(app: App, path: string): TFile | null {
 export function openEmbed(app: App, file: TFile, subpath: string, containerEl: HTMLElement, sourcePath: string, options: EmbedOptions = {}): LiveEmbed | null {
   const registry = (app as unknown as { embedRegistry?: { getEmbedCreator?: unknown } }).embedRegistry;
   if (typeof registry?.getEmbedCreator !== "function") {
-    warnOnce(app, "no embedRegistry.getEmbedCreator");
+    warnOnce(app, "Obsidian's embed is not available");
+    return null;
+  }
+  let creator: unknown;
+  try {
+    creator = (registry.getEmbedCreator as (file: TFile) => unknown).call(registry, file);
+  } catch (error) {
+    warnOnce(app, `Obsidian's note embed failed: ${errorText(error)}`, error);
+    return null;
+  }
+  if (typeof creator !== "function") {
+    // A file that is not a note has no editable embed to give, and that is not Obsidian failing.
+    if (file.extension === "md") warnOnce(app, "Obsidian has no embed for notes");
     return null;
   }
   const el = containerEl.appendChild(containerEl.ownerDocument.createElement("div"));
   let embed: MarkdownEmbed;
   try {
-    const creator = (registry.getEmbedCreator as (file: TFile) => unknown).call(registry, file);
-    if (typeof creator !== "function") throw new Error(`no embed creator for .${file.extension}`);
     const made = (creator as EmbedCreator)({ app, linktext: file.path + subpath, sourcePath, containerEl: el, depth: 0 }, file, subpath);
     const missing = missingMember(made);
-    if (missing !== null) throw new Error(missing);
+    if (missing !== null) {
+      el.remove();
+      warnOnce(app, `Obsidian's note embed has changed: ${missing}`);
+      return null;
+    }
     embed = made as MarkdownEmbed;
   } catch (error) {
     el.remove();
-    warnOnce(app, error instanceof Error ? error.message : String(error), error);
+    warnOnce(app, `Obsidian's note embed failed: ${errorText(error)}`, error);
     return null;
   }
 
@@ -116,6 +134,12 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
       // Read afresh: `showEditor` made it (or did not, for an embed that is not editable).
       const editor = embed.editMode as MarkdownEmbed["editMode"];
       if (!editor) return;
+      if (typeof (editor as Partial<NonNullable<MarkdownEmbed["editMode"]>>).register !== "function") {
+        // The card could not tell when the edit ends: the editor is closed again, with a save, and not used.
+        warnOnce(app, "Obsidian's note editor has changed: it has no editMode.register()");
+        embed.showPreview(true);
+        return;
+      }
       editor.register(() => options.onEditingChange?.(false));
       options.onEditingChange?.(true);
     },
@@ -129,10 +153,14 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
     },
     unload() {
       if (unloaded) return;
-      // Obsidian's unload drops the editor without saving it: the edit is ended (and saved) first.
-      live.stopEditing();
-      unloaded = true;
-      embed.unload();
+      // Obsidian's unload drops the editor without saving it: the edit is ended (and saved) first. A save that throws
+      // does not keep the embed loaded.
+      try {
+        live.stopEditing();
+      } finally {
+        unloaded = true;
+        embed.unload();
+      }
     },
     ready: Promise.resolve(),
   };
@@ -150,7 +178,7 @@ export function openEmbed(app: App, file: TFile, subpath: string, containerEl: H
       // Half loaded: whatever it made goes with its element.
     }
     el.remove();
-    warnOnce(app, error instanceof Error ? error.message : String(error), error);
+    warnOnce(app, `Obsidian's note embed failed: ${errorText(error)}`, error);
     return null;
   }
   return live;

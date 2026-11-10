@@ -326,6 +326,20 @@ export class NodeHost {
     return false;
   }
 
+  /**
+   * Ends every edit in place under way, with a save (`NodeRenderer.stopEditing`): before the pages' sheets move or go,
+   * which reloads the iframes in them (see `PageLayer`).
+   */
+  endEdits(): void {
+    for (const [id, { renderer }] of this.entries) {
+      try {
+        if (renderer.isEditing?.()) renderer.stopEditing?.();
+      } catch (error) {
+        console.error(`Link Figures: could not end the edit of node ${id}`, error);
+      }
+    }
+  }
+
   /** Writes what every editor in place holds and has not saved yet (`NodeRenderer.flush`). Never rejects. */
   async flushAll(): Promise<void> {
     await Promise.all(

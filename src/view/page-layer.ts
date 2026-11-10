@@ -27,16 +27,35 @@ const hasMargins = (m: Margins): boolean => m.top > 0 || m.right > 0 || m.bottom
 export class PageLayer {
   private readonly pages = new Map<PageId, PageParts>();
 
-  constructor(private readonly viewportEl: HTMLElement) {}
+  /**
+   * `beforeDetach` is told, once per render, just before a sheet already in the viewport is removed or moved (a page
+   * deleted or reordered): an element that moves reloads the iframes it hosts (a note card's editor), so what is being
+   * edited in them is ended first (see `NodeHost.endEdits`).
+   */
+  constructor(
+    private readonly viewportEl: HTMLElement,
+    private readonly beforeDetach?: () => void,
+  ) {}
 
   /** Brings the sheets in line with `doc`: one `.lf-page` per page, in document order. */
   render(doc: Document): void {
     const origins = pageOriginsPx(doc);
     const live = new Set(doc.pages.map((page) => page.id));
+    let told = false;
+    const detaching = (): void => {
+      if (told) return;
+      told = true;
+      try {
+        this.beforeDetach?.();
+      } catch (error) {
+        console.error("Link Figures: could not end the edits on the pages before moving them", error);
+      }
+    };
 
     // Dead sheets go first: reordering the survivors around them would move elements, which reloads whatever they host.
     for (const [id, parts] of this.pages) {
       if (live.has(id)) continue;
+      detaching();
       parts.page.remove();
       this.pages.delete(id);
     }
@@ -52,7 +71,11 @@ export class PageLayer {
 
       // Only moves an element that is not already in its place, so a stable document touches nothing.
       const expected: ChildNode | null = previous ? previous.nextSibling : this.viewportEl.firstChild;
-      if (parts.page !== expected) this.viewportEl.insertBefore(parts.page, expected);
+      if (parts.page !== expected) {
+        // A sheet that is already there is moved: what it hosts is told first. A new one is only put in.
+        if (parts.page.parentNode === this.viewportEl) detaching();
+        this.viewportEl.insertBefore(parts.page, expected);
+      }
       previous = parts.page;
     }
   }

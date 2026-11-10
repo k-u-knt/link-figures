@@ -795,6 +795,15 @@ describe("note cards", () => {
     expect(entry(["C"])).toMatchObject({ disabled: true });
   });
 
+  test("a note card mounted where there is no vault or embed registry (as in these tests) prints no fallback warning", async () => {
+    const warn = vi.spyOn(console, "warn");
+    const s = setup();
+    const content: Resolved = { kind: "content", file: { path: "Notes/a.md", extension: "md" }, markdown: "## Legend\nBody", deps: ["Notes/a.md"] };
+    mountCard(s, "N", () => content);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   test("a note card's link is resolved as a content panel's is", async () => {
     const s = setup();
     const hosts = new Map(s.store.doc.pages.map((p) => [p.id, document.createElement("div")]));

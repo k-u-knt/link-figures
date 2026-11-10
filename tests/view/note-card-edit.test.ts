@@ -391,6 +391,22 @@ describe("ending and unloading", () => {
     expect(s.node<CardNode>("N").text).toMatch(/^!\[\[.*#Legend\]\]$/);
   });
 
+  test("endEdits (before the pages' sheets move) ends every open edit with a save, and keeps the embeds", async () => {
+    const s = await setup();
+    const embed = s.embedOf("N");
+    await s.click("N");
+    await s.click("N");
+    embed.type("Typed");
+    s.nodeHost.endEdits();
+    expect(embed.writes).toEqual(["Typed"]);
+    expect(embed.editMode).toBeNull();
+    expect(embed.unloaded).toBe(false);
+    expect(s.el("N").classList.contains(EDITING_CLASS)).toBe(false);
+    // Nothing being edited: nothing done.
+    s.nodeHost.endEdits();
+    expect(embed.calls.filter((c) => c.startsWith("showPreview"))).toHaveLength(1);
+  });
+
   test("closing the figure flushes, then unloads every embed", async () => {
     const s = await setup();
     const embed = s.embedOf("N");

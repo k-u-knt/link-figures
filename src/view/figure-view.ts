@@ -1120,7 +1120,8 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.stageEl.tabIndex = 0;
     this.viewportEl = this.stageEl.createDiv({ cls: "lf-viewport" });
     this.inspectorEl = main.createDiv({ cls: "lf-inspector" });
-    this.pageLayer = new PageLayer(this.viewportEl);
+    // Before a sheet moves (its iframes reload), the note cards' editors on it are ended, with a save.
+    this.pageLayer = new PageLayer(this.viewportEl, () => this.nodeHost?.endEdits());
     // Made here, not in `onOpen`, because this is what makes sure a page layer exists whichever of the two runs first.
     this.nodeHost = new NodeHost(this, this.pageLayer, this.plugin.registries);
     this.selection = new SelectionState();

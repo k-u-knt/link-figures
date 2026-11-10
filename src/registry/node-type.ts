@@ -93,6 +93,11 @@ export interface NodeRenderer {
    * a click on the node.
    */
   edit?(target: EventTarget | null, at: Pt): boolean;
+  /**
+   * Ends an edit in place that is under way, saving it, and shows the node as it is drawn (a note card's editor, before
+   * the sheet it is on moves and its iframe would reload). Nothing when not editing.
+   */
+  stopEditing?(): void;
   /** Writes what an editor in place holds and has not saved yet (a note card's note), before something reads it. */
   flush?(): Promise<void>;
   /**

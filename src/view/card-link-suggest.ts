@@ -447,9 +447,11 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
   textarea.addEventListener("scroll", onScroll);
   const win = doc.defaultView;
   win?.addEventListener("resize", onScroll);
-  // A wheel anywhere but over the list (the canvas zooming or panning) moves the textarea away: the list closes.
+  // A wheel anywhere but over the list (the canvas zooming or panning) moves the textarea away: the list closes. One over
+  // the textarea scrolls it, and the list follows (`onScroll`).
   const onWheel = (ev: WheelEvent) => {
-    if (container && !(ev.target && container.contains(ev.target as Node))) onBlur();
+    const over = (el: Node | null) => !!el && !!ev.target && el.contains(ev.target as Node);
+    if (container && !over(container) && !over(textarea)) onBlur();
   };
   doc.addEventListener("wheel", onWheel, { capture: true });
   return () => {

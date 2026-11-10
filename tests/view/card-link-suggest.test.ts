@@ -397,8 +397,11 @@ describe("link suggestions in a card's editor", () => {
       area.getBoundingClientRect = () => ({ left: 200, top: 50, width: 400, height: 200 }) as DOMRect;
       window.dispatchEvent(new Event("resize"));
       expect(list()!.style.left).toBe("230px");
-      // A wheel over the list scrolls the list; one anywhere else (the canvas zooming or panning) closes it.
+      // A wheel over the list scrolls the list, and one over the textarea scrolls the textarea (the list follows); one
+      // anywhere else (the canvas zooming or panning) closes it.
       list()!.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+      expect(list()).not.toBeNull();
+      area.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
       expect(list()).not.toBeNull();
       document.body.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
       expect(list()).toBeNull();

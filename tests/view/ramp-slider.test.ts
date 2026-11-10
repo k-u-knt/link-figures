@@ -8,7 +8,8 @@ import { builtinRampGeometries, builtinRampPresets } from "../../src/paint/ramp"
 import { createRegistries } from "../../src/registry";
 import { builtinShapeKinds } from "../../src/shapes/builtin";
 import { Inspector } from "../../src/view/inspector";
-import { DROP_OFF_PX } from "../../src/view/ramp-slider";
+import { DOUBLE_PRESS_MS, DROP_OFF_PX } from "../../src/view/ramp-slider";
+import { readFileSync } from "node:fs";
 import { SelectionState } from "../../src/view/selection";
 import { pageInFocus } from "../../src/view/viewport";
 import { obsidianWindow } from "../support/obsidian-dom";
@@ -400,16 +401,6 @@ describe("the selected stop's row", () => {
     opacity.dispatchEvent(new t.window.Event("change") as never);
     expect(t.fillNow()).toEqual({ type: "solid", color: "#ff0000", opacity: 0.5 });
   });
-
-  test("a double click on a handle opens its colour picker", () => {
-    const t = setup(BLACK_WHITE);
-    t.handles()[1].focus();
-    const color = t.q<HTMLInputElement>('[data-key="fill.stop.color"]');
-    let opened = 0;
-    color.addEventListener("click", () => opened++);
-    t.handles()[1].dispatchEvent(new t.window.MouseEvent("dblclick", { bubbles: true }) as never);
-    expect(opened).toBe(1);
-  });
 });
 
 describe("writes that drop a key", () => {
@@ -579,5 +570,194 @@ describe("review fixes", () => {
     expect(t.listening()).toEqual(["pointerdown"]);
     t.selection.set([]);
     expect(t.listening()).toEqual([]);
+  });
+});
+
+describe("in-app findings", () => {
+  /** Counts the opening of the selected stop's colour picker (a click on its colour input). */
+  const pickerOpens = (t: ReturnType<typeof setup>) => {
+    let opened = 0;
+    t.holder().addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).getAttribute?.("data-key") === "fill.stop.color") opened++;
+    });
+    return () => opened;
+  };
+  const press = (t: ReturnType<typeof setup>, i: number, dx = 0) => {
+    const h = t.handles()[i];
+    const x = Number.parseFloat(h.style.left) * 2 + dx;
+    t.pointer(h, "pointerdown", x, 20);
+    t.pointer(t.q(".lf-ramp-track"), "pointerup", x, 20);
+  };
+
+  test("two presses on one handle within 400 ms and 4 px, with no drag between, open its colour picker", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 0.5, color: "#ff0000" }, { offset: 1, color: "#ffffff" }] });
+    const opens = pickerOpens(t);
+    press(t, 1);
+    press(t, 1, 3);
+    expect(opens()).toBe(1);
+    expect(t.q<HTMLInputElement>('[data-key="fill.stop.color"]').value).toBe("#ff0000");
+    expect(t.labels).toEqual([]);
+    // A third press is a new first press.
+    press(t, 1);
+    expect(opens()).toBe(1);
+  });
+
+  test("presses too far apart in time or space, on two handles, or with a drag between, do not", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 0.5, color: "#ff0000" }, { offset: 1, color: "#ffffff" }] });
+    const opens = pickerOpens(t);
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+    press(t, 1);
+    clock += DOUBLE_PRESS_MS + 1;
+    press(t, 1);
+    clock += 10;
+    press(t, 1, 5);
+    clock += 10;
+    press(t, 0);
+    clock += 10;
+    press(t, 1);
+    now.mockRestore();
+    t.drag(1, [110]);
+    press(t, 1);
+    expect(opens()).toBe(0);
+  });
+
+  test("a typed Offset equal to a neighbour's, committed with Enter (and the change that follows), is exactly one undo step", () => {
+    const t = setup(BLACK_WHITE);
+    t.handles()[1].focus();
+    const offset = t.q<HTMLInputElement>('[data-key="fill.stop.offset"]');
+    offset.focus();
+    offset.value = "0";
+    offset.dispatchEvent(new t.window.Event("input") as never);
+    offset.dispatchEvent(new t.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }) as never);
+    // What a browser may still send for the same edit: a change, on the input that was there, and on the one there now.
+    offset.dispatchEvent(new t.window.Event("change") as never);
+    const now = t.q<HTMLInputElement>('[data-key="fill.stop.offset"]');
+    now.dispatchEvent(new t.window.Event("change") as never);
+    now.dispatchEvent(new t.window.Event("blur") as never);
+    expect(t.labels).toEqual(["inspect:fill"]);
+    expect((t.fillNow().stops as { color: string; offset: number }[]).map((s) => [s.color, s.offset])).toEqual([["#ffffff", 0], ["#000000", 0]]);
+    t.store.undo();
+    expect(t.fillNow()).toEqual(BLACK_WHITE);
+    expect(t.store.canUndo()).toBe(false);
+  });
+
+  test("a press on the bar within 8 px of a handle takes that handle (selects and drags it); only one clearly away adds a stop", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 0.5, color: "#ff0000" }, { offset: 1, color: "#ffffff" }] });
+    const bar = t.q(".lf-ramp-bar");
+    t.pointer(bar, "pointerdown", 107);
+    expect(t.handles()[1].classList.contains("lf-ramp-handle-selected")).toBe(true);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 120);
+    t.pointer(t.q(".lf-ramp-track"), "pointerup", 120);
+    expect((t.fillNow().stops as unknown[]).length).toBe(3);
+    expect((t.fillNow().stops as { offset: number }[])[1].offset).toBe(0.6);
+    t.pointer(bar, "pointerdown", 160);
+    t.pointer(t.q(".lf-ramp-track"), "pointerup", 160);
+    expect((t.fillNow().stops as unknown[]).length).toBe(4);
+  });
+
+  test("a handle's hit area is at least 20 px, and it says what it does", () => {
+    const t = setup(BLACK_WHITE);
+    expect(t.handles()[0].getAttribute("title")).toBe("Drag to move · double-click for colour · drag down or Delete to remove");
+    const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    const style = t.document.createElement("style");
+    style.textContent = css;
+    t.document.head.appendChild(style);
+    const after = (t.window.getComputedStyle as unknown as (el: unknown, pseudo: string) => { width: string })(t.handles()[0], "::after");
+    const hit = Number.parseFloat(after.width) || 0;
+    // The ::after rule may not compute in happy-dom: then read the rule itself.
+    const rule = /\.lf-ramp-handle::after\s*{([^}]*)}/.exec(css)?.[1] ?? "";
+    const inset = Number.parseFloat(/inset:\s*-(\d+(?:\.\d+)?)px/.exec(rule)?.[1] ?? "0");
+    expect(Math.max(hit, 12 + 2 * 2 + 2 * inset)).toBeGreaterThanOrEqual(20);
+  });
+
+  test("stacked stops: a press on the stack selects the next one in turn, and the selected one is drawn on top", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0.5, color: "#ff0000" }, { offset: 0.5, color: "#00ff00" }, { offset: 0.5, color: "#0000ff" }, { offset: 1, color: "#ffffff" }] });
+    const selectedColor = () => t.q<HTMLInputElement>('[data-key="fill.stop.color"]').value;
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => (clock += 1000));
+    const seen: string[] = [];
+    for (let k = 0; k < 4; k++) {
+      const top = t.handles().find((h) => h.classList.contains("lf-ramp-handle-selected") && h.style.left === "50%") ?? t.handles()[0];
+      t.pointer(top, "pointerdown", 100, 20);
+      t.pointer(t.q(".lf-ramp-track"), "pointerup", 100, 20);
+      seen.push(selectedColor());
+    }
+    now.mockRestore();
+    expect(seen).toEqual(["#00ff00", "#0000ff", "#ff0000", "#00ff00"]);
+    expect(t.labels).toEqual([]);
+    const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    expect(/\.lf-ramp-handle\.lf-ramp-handle-selected\s*{[^}]*z-index:\s*[1-9]/.test(css)).toBe(true);
+  });
+
+  test("a handle pulled past the threshold shows a ×, the remove cursor and \"Release to remove\"; brought back, none of them", () => {
+    const t = setup({ type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 0.5, color: "#ff0000" }, { offset: 1, color: "#ffffff" }] });
+    t.pointer(t.handles()[1], "pointerdown", 100, 20);
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 100, TRACK.bottom + DROP_OFF_PX + 1);
+    expect(t.handles()[1].textContent).toBe("×");
+    expect(t.q(".lf-ramp-track").classList.contains("lf-ramp-removing")).toBe(true);
+    expect(t.q(".lf-ramp-status").textContent).toBe("Release to remove");
+    t.pointer(t.q(".lf-ramp-track"), "pointermove", 100, 20);
+    expect(t.handles()[1].textContent).toBe("");
+    expect(t.q(".lf-ramp-track").classList.contains("lf-ramp-removing")).toBe(false);
+    expect(t.q(".lf-ramp-status").textContent).toBe("");
+    t.pointer(t.q(".lf-ramp-track"), "pointerup", 100, 20);
+  });
+
+  test("the kind label keeps its full text in its title", () => {
+    const t = setup({ type: "solid", color: "#ff0000" });
+    expect(t.q(".lf-paint-kind").getAttribute("title")).toBe("Solid");
+    t.pointer(t.q(".lf-ramp-bar"), "pointerdown", 150);
+    expect(t.q(".lf-paint-kind").getAttribute("title")).toBe("Linear gradient");
+  });
+
+  test("the presets menu opens in the flow under the slider's top row, above the bar, never over it", () => {
+    const t = setup(BLACK_WHITE);
+    t.click(t.q(".lf-ramp-presets-button"));
+    const menu = t.q(".lf-ramp-presets");
+    const track = t.q(".lf-ramp-track");
+    // In document order: the head, the menu, then the bar and handles.
+    expect(menu.compareDocumentPosition(track as never) & 4).toBeTruthy();
+    expect(t.q(".lf-ramp-head").compareDocumentPosition(menu as never) & 4).toBeTruthy();
+  });
+
+  test("the slider's styles: the label does not wrap, the menu is not laid over the slider, and rows wrap at narrow widths", () => {
+    const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+    const rule = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|\\n)${escaped}\\s*{([^}]*)}`).exec(css)?.[2] ?? "";
+    };
+    expect(rule(".lf-paint-kind")).toMatch(/white-space:\s*nowrap/);
+    expect(rule(".lf-paint-kind")).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(".lf-paint-kind")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".lf-paint-kind")).toMatch(/min-width:\s*0/);
+    expect(rule(".lf-ramp-presets")).not.toMatch(/position:\s*absolute/);
+    expect(rule(".lf-ramp-head")).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule(".lf-ramp-geometry")).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule(".lf-ramp-stop-buttons")).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule(".lf-ramp-presets")).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  test("the check 18 sequence leaves every border, and every other field than the fill, as it was", () => {
+    const t = setup({ type: "solid", color: "#ff0000" }, [{ type: "solid", color: "#0000ff", opacity: 0.5 }, BLACK_WHITE]);
+    const rest = () => t.store.doc.nodes.map((n) => ({ ...(n as ShapeNode), fill: null }));
+    const before = rest();
+    const opacity = t.q<HTMLInputElement>('[data-key="fill.stop.opacity"]');
+    opacity.value = "0.4";
+    opacity.dispatchEvent(new t.window.Event("change") as never);
+    t.store.undo();
+    t.click(t.q(".lf-ramp-reverse"));
+    t.click(t.q(".lf-ramp-presets-button"));
+    t.click(t.q(".lf-ramp-preset"));
+    t.pointer(t.q(".lf-ramp-bar"), "pointerdown", 150);
+    const select = t.q<HTMLSelectElement>('[data-key="fill.type"]');
+    select.value = "pattern";
+    select.dispatchEvent(new t.window.Event("change") as never);
+    t.store.undo();
+    t.store.undo();
+    expect(rest()).toEqual(before);
+    expect(t.labels.filter((l) => l !== "inspect:fill")).toEqual([]);
   });
 });

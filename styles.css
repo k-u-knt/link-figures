@@ -158,9 +158,21 @@
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
+  min-width: 0;
 }
 
+.lf-paint-head select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* What the paint is, on one line: cut with an ellipsis when narrow (its title holds the whole). */
 .lf-paint-kind {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
@@ -173,8 +185,10 @@
   gap: var(--size-4-2);
 }
 
+/* The head row wraps in a narrow inspector rather than pushing ⋯ out of view. */
 .lf-ramp-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--size-4-1);
 }
@@ -186,7 +200,9 @@
 
 .lf-ramp-geometry {
   display: flex;
-  flex: 1;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 0;
 }
 
@@ -246,8 +262,17 @@
   cursor: ew-resize;
 }
 
+/* The selected handle is drawn on top of others at its offset (a stack of stops). */
 .lf-ramp-handle.lf-ramp-handle-selected {
+  z-index: 2;
   box-shadow: 0 0 0 2px var(--interactive-accent);
+}
+
+/* A hit area of 26 px around the 16 px handle. */
+.lf-ramp-handle::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
 }
 
 .lf-ramp-handle:focus-visible {
@@ -255,9 +280,34 @@
   outline-offset: 2px;
 }
 
-/* A handle pulled off the slider: its release removes the stop. */
+/* A handle pulled off the slider: its release removes the stop (a × on it, the cursor, "Release to remove"). */
 .lf-ramp-handle.lf-ramp-handle-off {
-  opacity: 0.4;
+  opacity: 0.6;
+  background-image: none;
+  background-color: var(--background-modifier-error);
+}
+
+.lf-ramp-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-on-accent);
+}
+
+.lf-ramp-track.lf-ramp-removing,
+.lf-ramp-track.lf-ramp-removing .lf-ramp-handle {
+  cursor: no-drop;
+}
+
+.lf-ramp-status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+
+.lf-ramp-status:empty {
+  display: none;
 }
 
 .lf-ramp-stop {
@@ -268,16 +318,17 @@
 
 .lf-ramp-stop-buttons {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: var(--size-4-1);
 }
 
+/* The presets menu: in the flow under the head row, so it never covers the bar and stays within the inspector. */
 .lf-ramp-presets {
-  position: absolute;
-  top: 28px;
-  right: 0;
-  z-index: var(--layer-menu);
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  gap: var(--size-4-1);
+  max-width: 100%;
   padding: var(--size-4-1);
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);

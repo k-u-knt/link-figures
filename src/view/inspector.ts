@@ -219,7 +219,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
       holder.empty();
       const head = holder.createDiv({ cls: "lf-paint-head" });
       const select = head.createEl("select", { cls: "dropdown", attr: { "data-key": `${field.key}.type`, "aria-label": `${field.label}: kind of paint` } });
-      kind = head.createSpan({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite" } });
+      kind = head.createSpan({ cls: "lf-paint-kind", text: kindName(), attr: { "aria-live": "polite", title: kindName() } });
       const types = paints()?.all() ?? [];
       let colourListed = false;
       for (const type of types) {
@@ -250,6 +250,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
           write: writeRamp,
           endMerge: () => env.endMerge?.(),
           cancelMerge: () => env.cancelMerge?.(),
+          mixed: () => env.mixed?.(field.key) ?? false,
           geometries: () => ramps.rampGeometries.all(),
           presets: () => ramps.rampPresets.all(),
           renderFields: (container, fields, r, w) => renderFields(container, fields, r, w, env),
@@ -262,6 +263,7 @@ function paintComposite(holder: HTMLElement, field: Field, read: Read, write: Wr
       const select = holder.querySelector<HTMLSelectElement>(`[data-key="${field.key}.type"]`);
       if (select) select.value = entryOf();
       kind?.setText(kindName());
+      kind?.setAttribute("title", kindName());
       slider?.sync();
       syncFields(holder, subFields(), read, env);
     },
@@ -534,9 +536,11 @@ export function renderFields(container: HTMLElement, fields: Field[], read: Read
       continue;
     }
     // A label row hands a click anywhere in it to its first control. A nullable colour's first control is its
-    // checkbox, which a stray click must not flip (it writes the document), so that row is a plain div.
+    // checkbox, and an on/off toggle with an `onValue` (Border, Frame) removes a whole value when it goes off: a stray
+    // click must not flip either (it writes the document), so those rows are plain divs.
     const nullable = field.kind === "color" && field.nullable === true;
-    const row = container.createEl(nullable ? "div" : "label", { cls: "lf-field" });
+    const onOff = field.kind === "toggle" && field.onValue !== undefined;
+    const row = container.createEl(nullable || onOff ? "div" : "label", { cls: "lf-field" });
     row.createSpan({ cls: "lf-field-label", text: field.label });
     const holder = row.createDiv({ cls: "lf-field-control" });
     const attr = { "data-key": field.key };

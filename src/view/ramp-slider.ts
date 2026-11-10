@@ -4,8 +4,16 @@ import type { UndoStep } from "../registry/command";
 import type { Field } from "../registry/fields";
 import type { ColorRamp, RampGeometryType, RampPreset } from "../registry/ramp";
 
+/** What a handle's tooltip says it does. */
+export const HANDLE_TITLE = "Drag to move · double-click for colour · drag down or Delete to remove";
+
 /** How far (CSS px) below the slider a handle must be pulled for its release to remove the stop. */
 export const DROP_OFF_PX = 24;
+/** Two presses on one handle within this many ms (and `DOUBLE_PRESS_PX`), with no drag between, open its colour picker. */
+export const DOUBLE_PRESS_MS = 400;
+export const DOUBLE_PRESS_PX = 4;
+/** A press on the bar this near (CSS px) to a handle takes that handle instead of adding a stop. */
+export const HANDLE_REACH_PX = 8;
 /** An arrow key moves the selected stop by this much; with Shift, by `KEY_STEP_LARGE`. */
 export const KEY_STEP = 0.01;
 export const KEY_STEP_LARGE = 0.1;
@@ -25,6 +33,8 @@ export interface RampSliderHost {
   read(): ColorRamp | undefined;
   write(ramp: ColorRamp, step?: UndoStep): void;
   endMerge?(): void;
+  /** Whether the field's items hold different paints now ("Mixed"): every edit is then written, to make them one. */
+  mixed?(): boolean;
   /** Takes back the undo step a drag's writes have been merging into, leaving none (Escape). */
   cancelMerge?(): void;
   geometries(): RampGeometryType[];
@@ -69,6 +79,12 @@ export class RampSlider {
   private readonly handles: HTMLElement;
   private readonly geometryEl: HTMLElement;
   private readonly stopRow: HTMLElement;
+  /** Says what a release will do while a handle is pulled off ("Release to remove"). */
+  private readonly status: HTMLElement;
+  /** The presets menu's place: under the head row, above the bar, in the flow (it never covers the bar). */
+  private readonly menuHolder: HTMLElement;
+  /** The last press on a handle, for a double press (see `DOUBLE_PRESS_MS`); cleared by a drag. */
+  private lastPress: { offset: number; x: number; y: number; at: number } | null = null;
   private readonly presetsButton: HTMLElement;
   private menu: HTMLElement | null = null;
   /** While the menu is open: closes it on a press anywhere outside it (⋯ toggles it itself). */
@@ -108,6 +124,7 @@ export class RampSlider {
     });
     this.presetsButton.addEventListener("click", () => (this.menu ? this.closeMenu() : this.openMenu()));
 
+    this.menuHolder = this.root.createDiv({ cls: "lf-ramp-menu-holder" });
     this.track = this.root.createDiv({ cls: "lf-ramp-track" });
     const bar = this.track.createDiv({ cls: "lf-ramp-bar", attr: { "aria-hidden": "true" } });
     this.fill = bar.createDiv({ cls: "lf-ramp-fill" });
@@ -117,6 +134,7 @@ export class RampSlider {
     this.track.addEventListener("pointerup", (e: Event) => this.endDrag(e as PointerEvent, true));
     for (const type of ["pointercancel", "lostpointercapture"]) this.track.addEventListener(type, (e: Event) => this.endDrag(e as PointerEvent, false));
 
+    this.status = this.root.createDiv({ cls: "lf-ramp-status", attr: { "aria-live": "polite" } });
     this.stopRow = this.root.createDiv({ cls: "lf-ramp-stop" });
     this.sync();
   }
@@ -168,11 +186,12 @@ export class RampSlider {
           "aria-valuenow": String(stop.offset),
           "aria-valuetext": `${percent}%, ${stop.color}`,
           "data-index": String(i),
+          title: HANDLE_TITLE,
           style: `left: ${percent}%; --lf-stop-color: ${stopCss(stop)}`,
         },
       });
-      handle.addEventListener("pointerdown", (e: Event) => this.startDrag(e as PointerEvent, i));
-      handle.addEventListener("dblclick", () => this.openPicker());
+      // A double-click is told from two presses (`pressHandle`): the drag's pointer capture sends `dblclick` to the track.
+      handle.addEventListener("pointerdown", (e: Event) => this.pressHandle(e as PointerEvent, i));
       handle.addEventListener("focus", () => this.select(i));
       handle.addEventListener("keydown", (e: Event) => this.onKey(e as KeyboardEvent, i));
       return handle;
@@ -247,6 +266,10 @@ export class RampSlider {
     const stop = ramp?.stops[i];
     if (!ramp || !stop) return;
     const part = key.slice(key.lastIndexOf(".") + 1);
+    // The value the stop has already (a change the browser sends again after Enter) is no edit: one field edit is one
+    // undo step, and an offset equal to a neighbour's is not moved past it a second time. Mixed items are written all
+    // the same, to make them one paint.
+    if (!this.host.mixed?.() && Object.is(this.readStop(key), value)) return;
     if (part === "offset" && typeof value === "number") {
       const moved = moveStop(ramp, i, value);
       this.state.selected = moved.index;
@@ -307,7 +330,7 @@ export class RampSlider {
 
   private openMenu(): void {
     this.closeMenu();
-    const menu = this.root.createDiv({ cls: "lf-ramp-presets", attr: { role: "menu", "aria-label": "Colour presets" } });
+    const menu = this.menuHolder.createDiv({ cls: "lf-ramp-presets", attr: { role: "menu", "aria-label": "Colour presets" } });
     this.menu = menu;
     this.presetsButton.setAttribute("aria-expanded", "true");
     // In the capture phase, so a press that something else handles (the bar) still closes it.
@@ -343,22 +366,62 @@ export class RampSlider {
   }
 
   /** The pointer's offset along the slider (0-1), and how far below it, in CSS px; null where the slider is not laid out. */
-  private measure(ev: PointerEvent): { offset: number; below: number } | null {
+  private measure(ev: PointerEvent): { offset: number; below: number; width: number } | null {
     const rect = typeof this.track.getBoundingClientRect === "function" ? this.track.getBoundingClientRect() : null;
     if (!rect || rect.width <= 0) return null;
-    return { offset: pointerOffset((ev.clientX - rect.left) / rect.width), below: ev.clientY - rect.bottom };
+    return { offset: pointerOffset((ev.clientX - rect.left) / rect.width), below: ev.clientY - rect.bottom, width: rect.width };
   }
 
-  /** A press on the bar: a stop there, in the ramp's colour there, selected. */
+  /**
+   * A press on the bar: within `HANDLE_REACH_PX` of a handle it takes the nearest handle (as a press on it does);
+   * clearly away from every handle it adds a stop there, in the ramp's colour there, selected.
+   */
   private addAt(ev: PointerEvent): void {
     if (ev.button !== undefined && ev.button !== 0) return;
     const at = this.measure(ev);
     const ramp = this.host.read();
     if (!at || !ramp) return;
     ev.preventDefault?.();
+    let nearest = -1;
+    let best = Infinity;
+    ramp.stops.forEach((s, i) => {
+      const px = Math.abs(s.offset - at.offset) * at.width;
+      // The selected one first among equals: it is drawn on top.
+      if (px < best || (px === best && i === this.state.selected)) {
+        best = px;
+        nearest = i;
+      }
+    });
+    if (nearest >= 0 && best <= HANDLE_REACH_PX) {
+      this.pressHandle(ev, nearest);
+      return;
+    }
     const added = addStop(ramp, at.offset);
     this.state.selected = added.index;
     this.host.write(added.ramp, "own");
+  }
+
+  /**
+   * A press on handle `index`. The second of two presses on one handle (one offset) within `DOUBLE_PRESS_MS` and
+   * `DOUBLE_PRESS_PX`, with no drag between, opens the selected stop's colour picker. Otherwise it selects the handle,
+   * or on a stack of stops at one offset the next of them in turn, and starts a drag of it.
+   */
+  private pressHandle(ev: PointerEvent, index: number): void {
+    if (ev.button !== undefined && ev.button !== 0) return;
+    const ramp = this.host.read();
+    const stop = ramp?.stops[index];
+    if (!ramp || !stop) return;
+    const now = Date.now();
+    const last = this.lastPress;
+    if (last && last.offset === stop.offset && now - last.at <= DOUBLE_PRESS_MS && Math.hypot(ev.clientX - last.x, ev.clientY - last.y) <= DOUBLE_PRESS_PX) {
+      this.lastPress = null;
+      this.openPicker();
+      return;
+    }
+    this.lastPress = { offset: stop.offset, x: ev.clientX, y: ev.clientY, at: now };
+    const stack = ramp.stops.map((s, i) => (s.offset === stop.offset ? i : -1)).filter((i) => i >= 0);
+    const at = stack.indexOf(this.state.selected);
+    this.startDrag(ev, stack.length > 1 && at >= 0 ? stack[(at + 1) % stack.length] : index);
   }
 
   private startDrag(ev: PointerEvent, index: number): void {
@@ -388,8 +451,9 @@ export class RampSlider {
     // A solid's one stop has nowhere to go: a press only selects it.
     if (!at || !ramp || ramp.stops.length <= 1) return;
     drag.off = ramp.stops.length > 1 && at.below > DROP_OFF_PX;
-    this.handleEls[drag.index]?.toggleClass("lf-ramp-handle-off", drag.off);
+    this.showOff(drag.index, drag.off);
     if (drag.off || ramp.stops[drag.index]?.offset === at.offset) return;
+    this.lastPress = null;
     const moved = moveStop(ramp, drag.index, at.offset);
     const step: UndoStep = drag.started ? "continue" : "start";
     drag.started = true;
@@ -429,8 +493,18 @@ export class RampSlider {
       this.state.selected = Math.min(drag.index, ramp.stops.length - 2);
       this.host.write(removeStop(ramp, drag.index), drag.started ? "continue" : "start");
       drag.started = true;
-    } else this.handleEls[drag.index]?.toggleClass("lf-ramp-handle-off", false);
+    }
+    this.showOff(drag.index, false);
     if (drag.started) this.host.endMerge?.();
+  }
+
+  /** The cue that a release will remove handle `index`: a × on it, the track's cursor, and "Release to remove". */
+  private showOff(index: number, off: boolean): void {
+    const handle = this.handleEls[index];
+    handle?.toggleClass("lf-ramp-handle-off", off);
+    handle?.setText(off ? "×" : "");
+    this.track.toggleClass("lf-ramp-removing", off);
+    this.status.setText(off ? "Release to remove" : "");
   }
 
   private onKey(ev: KeyboardEvent, index: number): void {

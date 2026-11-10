@@ -720,7 +720,8 @@ describe("paint fields", () => {
     store.commit("paint", (d) => { (d.nodes[0] as FileNode).frame!.paint = linearDefaults(); });
     el.typeInto("frame.paint.stop.offset", "-2");
     el.typeInto("frame.paint.stop.opacity", "3");
-    expect((frameOf(store).paint.stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000", opacity: 1 });
+    // 3 is kept to 1, which the stop already is (no opacity): nothing more is written.
+    expect((frameOf(store).paint.stops as unknown[])[0]).toEqual({ offset: 0, color: "#000000" });
   });
 
   test("a stops field, which a plugin's paint may still use, is a list: a stop is added, edited and removed, and the last two cannot be removed", () => {
@@ -871,6 +872,25 @@ describe("shape fields", () => {
     expect(shapeOf(store).fill.bg).toBeNull();
     // Other rows are still labels.
     expect(rowOf(el.control("fill.fg")).tag).toBe("label");
+  });
+
+  test("a click on the Border row or its label changes nothing: an on/off toggle that removes a value is not in a label row", () => {
+    const { el, store, labels } = shaped();
+    const seen = labels();
+    const toggle = borderToggle(el);
+    const rowOf = (control: FakeEl) => el.find((e) => e.hasClass("lf-field") && !e.hasClass("lf-field-group") && e.contains(control))!;
+    const row = rowOf(toggle);
+    expect(row.tag).toBe("div");
+    row.fire("click");
+    row.find((e) => e.hasClass("lf-field-label"))!.fire("click");
+    expect(seen).toEqual([]);
+    expect(shapeOf(store).border).toEqual(defaultBorder());
+    // The checkbox itself still turns it off.
+    toggle.checked = false;
+    toggle.fire("change");
+    expect(shapeOf(store).border).toBeNull();
+    // A plain toggle (Locked) keeps its label row.
+    expect(rowOf(el.control("locked")).tag).toBe("label");
   });
 
   test("a pattern's background is a colour that may be none: a checkbox beside it turns it on and off", () => {

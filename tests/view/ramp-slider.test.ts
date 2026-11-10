@@ -552,6 +552,22 @@ describe("review fixes", () => {
     expect(t.listening()).toEqual([]);
   });
 
+  test("a drag under way when the control is drawn again releases its pointer capture, and keeps what it wrote", () => {
+    const t = setup(BLACK_WHITE);
+    const track = t.q(".lf-ramp-track") as HTMLElement & { setPointerCapture(id: number): void; releasePointerCapture(id: number): void };
+    const released: number[] = [];
+    const captured: number[] = [];
+    track.setPointerCapture = (id: number) => void captured.push(id);
+    track.releasePointerCapture = (id: number) => void released.push(id);
+    (track as unknown as { hasPointerCapture(id: number): boolean }).hasPointerCapture = (id: number) => captured.includes(id) && !released.includes(id);
+    t.pointer(t.handles()[0], "pointerdown", 0, 20);
+    t.pointer(track, "pointermove", 40);
+    expect(captured).toEqual([1]);
+    t.store.commit("paint", (d) => { (d.nodes[0] as ShapeNode).fill = { type: "solid", color: "#ff0000" }; });
+    expect(released).toEqual([1]);
+    expect(t.listening()).toEqual([]);
+  });
+
   test("an open presets menu's listener goes when the control is drawn again, and when the inspector is emptied", () => {
     const t = setup(BLACK_WHITE);
     t.click(t.q(".lf-ramp-presets-button"));

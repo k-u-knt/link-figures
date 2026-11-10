@@ -81,7 +81,7 @@ export class RampSlider {
   private drawnHandles: string | null = null;
   private drawnGeometry: string | null = null;
   private drawnRow: string | null = null;
-  private drag: { index: number; started: boolean; off: boolean; selected: number } | null = null;
+  private drag: { index: number; started: boolean; off: boolean; selected: number; pointerId?: number } | null = null;
   /** While a drag lasts: Escape takes it back. */
   private readonly escapeDrag = (e: Event): void => {
     const ev = e as KeyboardEvent;
@@ -121,11 +121,11 @@ export class RampSlider {
     this.sync();
   }
 
-  /** Lets go of the document: closes the menu, and ends a drag that is under way (its writes are kept). */
+  /** Lets go of the document: closes the menu, and ends a drag that is under way (its writes are kept, its pointer capture released). */
   destroy(): void {
     this.closeMenu();
     const drag = this.drag;
-    this.stopDragging();
+    this.stopDragging(drag?.pointerId);
     if (drag?.started) this.host.endMerge?.();
   }
 
@@ -363,8 +363,8 @@ export class RampSlider {
 
   private startDrag(ev: PointerEvent, index: number): void {
     if (ev.button !== undefined && ev.button !== 0) return;
-    this.stopDragging();
-    this.drag = { index, started: false, off: false, selected: this.state.selected };
+    this.stopDragging(this.drag?.pointerId);
+    this.drag = { index, started: false, off: false, selected: this.state.selected, pointerId: ev.pointerId };
     this.root.ownerDocument?.addEventListener?.("keydown", this.escapeDrag, true);
     this.select(index);
     try {
@@ -414,7 +414,7 @@ export class RampSlider {
   private cancelDrag(): void {
     const drag = this.drag;
     if (!drag) return;
-    this.stopDragging();
+    this.stopDragging(drag.pointerId);
     this.state.selected = drag.selected;
     if (drag.started) this.host.cancelMerge?.();
     this.sync();

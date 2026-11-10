@@ -1,4 +1,5 @@
 import type { Paint, Stop } from "../model/types";
+import { CommandError } from "../registry/command";
 import type { Field } from "../registry/fields";
 import type { PaintRegistry } from "../registry/paint";
 import type { ColorRamp, RampGeometry, RampGeometryRegistry, RampGeometryType, RampPreset } from "../registry/ramp";
@@ -54,7 +55,7 @@ export function rampKindName(paint: Paint, registries: PaintLookup): string {
  * The paint `ramp` writes. One stop is a `solid`: its colour, and its opacity when under 1. Two or more are the paint
  * of the ramp's geometry, written by its registered kind. A geometry that is not registered keeps the paint's type: the
  * `previous` paint's type writes it (`PaintType.ramp.write`, looked up in `paints`), or else `previous` is given back
- * as it was, with a console warning; with no `previous` it is an error. `previous`, when it is of the type written,
+ * as it was, with a console warning; with no `previous` it throws a `CommandError`. `previous`, when it is of the type written,
  * keeps its other keys and their order. The paint is whole: write it with `node.update`'s `replace`, or a key it
  * leaves out (a solid's opacity) is kept by the merge.
  */
@@ -72,7 +73,7 @@ export function paintOfRamp(ramp: ColorRamp, previous: Paint | undefined, geomet
   if (kind) return kind.toPaint(stops, ramp.geometry, previous);
   const own = previous ? paints?.get(previous.type)?.ramp?.write : undefined;
   if (own) return own({ ...ramp, stops }, previous);
-  if (!previous) throw new Error(`no ramp geometry "${ramp.geometry.kind}" is registered`);
+  if (!previous) throw new CommandError(`no ramp geometry "${ramp.geometry.kind}" is registered, and there is no paint to keep`);
   console.warn(`Link Figures: no ramp geometry "${ramp.geometry.kind}" is registered, and paint type "${previous.type}" cannot write its ramp: the paint is left as it was`);
   return previous;
 }

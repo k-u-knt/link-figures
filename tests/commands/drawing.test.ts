@@ -248,6 +248,38 @@ describe("node.update", () => {
     await expect(api.run(PATH, "node.update", { id: "s", patch: {}, replace: [3] })).rejects.toThrow(/replace/);
   });
 
+  test("replace takes only keys that hold a paint or a stroke, and that the patch gives; a replaced paint has its type's keys", async () => {
+    const { api, doc } = await withShapeAndConnector();
+    const before = await nodeOf<ShapeNode>(doc(), "s");
+    const refused = async (args: object, ...words: string[]) => {
+      const run = api.run(PATH, "node.update", { id: "s", ...args });
+      await expect(run).rejects.toBeInstanceOf(CommandError);
+      await expect(api.run(PATH, "node.update", { id: "s", ...args })).rejects.toThrow(/^node\.update: /);
+      for (const word of words) await expect(api.run(PATH, "node.update", { id: "s", ...args })).rejects.toThrow(word);
+    };
+    // Not a paint or a stroke.
+    await refused({ patch: { name: "Box" }, replace: ["name"] }, '"name"');
+    await refused({ patch: { params: { cornerRadius: 2 } }, replace: ["params"] }, '"params"');
+    // Not in the patch.
+    await refused({ patch: { name: "Box" }, replace: ["fill"] }, '"fill"');
+    // A paint without its type's keys.
+    await refused({ patch: { fill: { type: "solid" } }, replace: ["fill"] }, '"fill"', '"color"');
+    await refused({ patch: { fill: { type: "linear", angle: 0 } }, replace: ["fill"] }, '"stops"');
+    await refused({ patch: { border: { paint: { type: "radial", stops: [] }, width: 1, dash: "solid" } }, replace: ["border"] }, '"border"', '"cx"');
+    // A paint's own number outside its field's range.
+    await refused({ patch: { fill: { type: "solid", color: "#ff0000", opacity: 2 } }, replace: ["fill"] }, '"fill"', '"opacity"');
+    expect(await nodeOf<ShapeNode>(doc(), "s")).toEqual(before);
+    // A stroke, and a paint of a type no plugin registers, are taken.
+    await api.run(PATH, "node.update", { id: "s", patch: { border: { paint: { type: "solid", color: "#00ff00" }, width: 2, dash: "dash" } }, replace: ["border"] });
+    await api.run(PATH, "node.update", { id: "s", patch: { fill: { type: "x.future", amount: 1 } }, replace: ["fill"] });
+    const after = await nodeOf<ShapeNode>(doc(), "s");
+    expect(after.border).toEqual({ paint: { type: "solid", color: "#00ff00" }, width: 2, dash: "dash" });
+    expect(after.fill).toEqual({ type: "x.future", amount: 1 });
+    // A connector's line.
+    await api.run(PATH, "node.update", { id: "c", patch: { stroke: { paint: { type: "solid", color: "#0000ff" }, width: 1, dash: "solid" } }, replace: ["stroke"] });
+    expect((await nodeOf<ConnectorNode>(doc(), "c")).stroke).toEqual({ paint: { type: "solid", color: "#0000ff" }, width: 1, dash: "solid" });
+  });
+
   test("null turns a border off, a stroke turns it back on; an empty name removes the name", async () => {
     const { api, doc } = await withShapeAndConnector();
     await api.run(PATH, "node.update", { id: "s", patch: { border: null, name: "Box" } });

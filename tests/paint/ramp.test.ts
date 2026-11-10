@@ -15,6 +15,7 @@ import {
 } from "../../src/paint/ramp";
 import { createRegistries } from "../../src/registry";
 import { RampGeometryRegistry, type RampGeometryType } from "../../src/registry/ramp";
+import { CommandError } from "../../src/registry/command";
 import type { Paint } from "../../src/model/types";
 
 function registries() {
@@ -112,6 +113,9 @@ describe("rampOf and paintOfRamp", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toContain("x.conic");
     warn.mockRestore();
+    // With no previous paint there is nothing to keep: a CommandError.
+    expect(() => paintOfRamp(reversed, undefined, r.rampGeometries, r.paints)).toThrow(CommandError);
+    expect(() => paintOfRamp(reversed, undefined, r.rampGeometries, r.paints)).toThrow(/"x\.conic"/);
     // One stop is still a solid.
     expect(paintOfRamp({ ...reversed, stops: [reversed.stops[0]] }, previous, r.rampGeometries, r.paints)).toEqual({ type: "solid", color: "#ffffff" });
   });

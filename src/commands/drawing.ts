@@ -242,6 +242,7 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     throw new CommandError(`${command}: a node's "parent" is changed by group.add and group.remove`);
   }
   if (isGroup(ctx.store.doc, node.id, ctx.registries)) return updateGroup(ctx, node, patch);
+  checkReplace(command, ctx, node, patch, replace);
   const before = node as unknown as Record<string, unknown>;
   let after: Record<string, unknown> = { ...before };
   for (const [key, value] of Object.entries(patch)) after[key] = replace.has(key) ? structuredClone(value) : mergePatch(before[key], value);
@@ -268,6 +269,53 @@ function updateNode(ctx: CommandContext, args: { id: string; patch: Record<strin
     }
   });
   return { id: node.id };
+}
+
+/** The value at the dotted `path` inside `value` (`"paint"` in a stroke), or undefined. */
+function valueAtPath(value: unknown, path: string): unknown {
+  let at = value;
+  for (const part of path.split(".")) {
+    if (!isRecord(at)) return undefined;
+    at = at[part];
+  }
+  return at;
+}
+
+/**
+ * `node.update`'s check of `replace`: each key must be in the patch and hold a paint or a stroke, as the node type's
+ * own fields declare (a `paint` field at the key, or under it: `fill`, `border.paint`), read from the node as the
+ * patch would leave it. Each paint the replaced value holds must have every key of its type's defaults, and its type's
+ * number fields within their range; a paint of a type no plugin registers is taken as it is.
+ */
+function checkReplace(command: string, ctx: CommandContext, node: Node, patch: Record<string, unknown>, replace: ReadonlySet<string>): void {
+  if (replace.size === 0) return;
+  const type = nodeTypeFor(ctx.registries, node, unreadableIn(ctx));
+  const replaced = { ...(node as unknown as Record<string, unknown>) };
+  for (const key of replace) if (Object.hasOwn(patch, key)) replaced[key] = patch[key];
+  const paintFields = (type?.inspector(replaced as unknown as Node, { registries: ctx.registries }) ?? []).filter((f) => f.kind === "paint");
+  for (const key of replace) {
+    if (!Object.hasOwn(patch, key)) throw new CommandError(`${command}: "replace" names "${key}", which the patch does not give`);
+    const paths = paintFields.filter((f) => f.key === key || f.key.startsWith(`${key}.`)).map((f) => f.key.slice(key.length + 1));
+    if (paths.length === 0) throw new CommandError(`${command}: "replace" names "${key}", which holds no paint or stroke`);
+    for (const path of paths) {
+      const paint = path === "" ? patch[key] : valueAtPath(patch[key], path);
+      // A stroke turned off (null) holds no paint to check.
+      if (paint === null || paint === undefined) continue;
+      if (!isRecord(paint) || typeof paint.type !== "string") throw new CommandError(`${command}: "${key}" must hold a paint with a "type"`);
+      const paintType = ctx.registries.paints.get(paint.type);
+      if (!paintType) continue;
+      for (const needed of Object.keys(paintType.defaults())) {
+        if (!Object.hasOwn(paint, needed)) throw new CommandError(`${command}: "${key}" replaced by a ${paintType.name} paint without "${needed}"`);
+      }
+      for (const field of paintType.fields(paint as Paint)) {
+        const n = paint[field.key];
+        if (field.kind !== "number" || typeof n !== "number") continue;
+        if ((field.min !== undefined && n < field.min) || (field.max !== undefined && n > field.max)) {
+          throw new CommandError(`${command}: "${key}" has "${field.key}" ${n}, outside ${field.min ?? "-∞"} to ${field.max ?? "∞"}`);
+        }
+      }
+    }
+  }
 }
 
 /** `node.update`'s check of each field that `changed`: the base fields here, the type's own by its `checkField`. */

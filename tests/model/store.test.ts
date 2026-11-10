@@ -539,3 +539,40 @@ describe("rebasePaths: a source renamed while a node that links to it is only in
     expect(linkOf(s.doc, b)).toBe("only-here.svg");
   });
 });
+
+describe("revertMerge", () => {
+  test("takes back the merging run as though never made: the document before it, no undo or redo step, an undo event", () => {
+    let t = 0;
+    const s = new DocumentStore(doc(), () => t);
+    s.commit("width", d => { d.nodes[0].width = 50; });
+    s.endMerge();
+    s.commit("move", d => { d.nodes[0].x = 1; });
+    t = 10;
+    s.commit("move", d => { d.nodes[0].x = 2; });
+    const evs = record(s);
+    expect(s.revertMerge()).toBe(true);
+    expect(s.doc.nodes[0].x).toBe(0);
+    expect(s.doc.nodes[0].width).toBe(50);
+    expect(s.canRedo()).toBe(false);
+    expect(evs.map(e => e.kind)).toEqual(["undo"]);
+    // The edit before the run is still one undo step, and the only one.
+    expect(s.undo()).toBe(true);
+    expect(s.doc.nodes[0].width).not.toBe(50);
+    expect(s.canUndo()).toBe(false);
+  });
+
+  test("changes nothing with no run open: after endMerge, after an undo, or on a fresh store", () => {
+    const fresh = new DocumentStore(doc());
+    expect(fresh.revertMerge()).toBe(false);
+    const s = new DocumentStore(doc());
+    s.commit("move", d => { d.nodes[0].x = 1; });
+    s.endMerge();
+    expect(s.revertMerge()).toBe(false);
+    expect(s.doc.nodes[0].x).toBe(1);
+    s.commit("move", d => { d.nodes[0].x = 2; });
+    s.undo();
+    expect(s.revertMerge()).toBe(false);
+    expect(s.doc.nodes[0].x).toBe(1);
+    expect(s.canRedo()).toBe(true);
+  });
+});

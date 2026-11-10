@@ -423,7 +423,8 @@ export class PointerController {
       crop.finish();
     }
 
-    const grabbed = this.grabbedHandle(doc, world);
+    // A press on a grip (a note card's label, drawn just above the card) is the grip's, even within a handle's grab radius.
+    const grabbed = gripNode(ev.target) === null ? this.grabbedHandle(doc, world) : null;
     if (grabbed) {
       this.press(ev, world, grabbed, null);
       return;

@@ -4,6 +4,33 @@ import { NODE_GRIP } from "../constants";
 /** What separates the label's segments: Canvas's own (`Note › Heading` above a file card). */
 export const LABEL_SEPARATOR = " › ";
 
+/**
+ * The label's size on screen, as Canvas draws its label (see `.lf-card-label` in styles.css): the interface's medium
+ * text (`--font-ui-medium`, 15px by default) on lines 1.3 high, 3px above the card. These stay the same on screen at any
+ * zoom.
+ */
+export const LABEL_FONT_PX = 15;
+export const LABEL_LINE_HEIGHT = 1.3;
+export const LABEL_GAP_PX = 3;
+
+/**
+ * How far a card's label reaches above the card, gap included, in screen px: what a card stacked under another leaves
+ * free so that its label clears the card above (divide by the zoom for world px). Read from the theme's
+ * `--font-ui-medium` in `doc` when it has one.
+ */
+export function labelClearancePx(doc: { body?: HTMLElement | null; defaultView?: { getComputedStyle?(el: Element): CSSStyleDeclaration } | null } | undefined = globalThis.document): number {
+  let font = LABEL_FONT_PX;
+  try {
+    const body = doc?.body;
+    const value = body ? doc?.defaultView?.getComputedStyle?.(body).getPropertyValue("--font-ui-medium") : undefined;
+    const parsed = Number.parseFloat(value ?? "");
+    if (Number.isFinite(parsed) && parsed > 0) font = parsed;
+  } catch {
+    // No styles to read: the default.
+  }
+  return Math.ceil(font * LABEL_LINE_HEIGHT) + LABEL_GAP_PX;
+}
+
 /** A line in a note, as Obsidian's metadata cache gives a heading's or a block's position. */
 interface CachedAt {
   position: { start: { line: number } };

@@ -7,7 +7,7 @@ import { createDocument } from "../../src/model/defaults";
 import type { CardNode } from "../../src/model/types";
 import { cardNodeDefaults, cardNodeType } from "../../src/nodes/card-node";
 import type { RenderContext } from "../../src/registry/node-type";
-import { cardLabel, LABEL_SEPARATOR } from "../../src/view/card-label";
+import { cardLabel, LABEL_SEPARATOR, labelClearancePx } from "../../src/view/card-label";
 
 const setIcon = vi.hoisted(() => vi.fn((el: HTMLElement, icon: string) => el.setAttribute("data-icon", icon)));
 vi.mock("obsidian", () => ({
@@ -197,10 +197,21 @@ describe("the label above a note card", () => {
     expect(openLink).toHaveBeenCalledTimes(1);
   });
 
-  test("the label sits above the card clear of a resize handle's grab radius (6px) and a 2px gap", () => {
+  test("the label is placed as Canvas places its own: 15px interface text (--font-ui-medium), 3px above the card, flush with its left edge", () => {
     const css = readFileSync(join(process.cwd(), "styles.css"), "utf8");
     const rule = css.match(/\.lf-card-label \{[^}]*\}/)![0];
-    expect(rule).toContain("top: calc(-1 * var(--size-4-2, 8px) / var(--lf-zoom, 1));");
+    // The card's border is 2 screen px (2px / zoom): the label is placed from its outer edge, in screen px.
+    expect(rule).toContain("left: calc(-2px / var(--lf-zoom, 1));");
+    expect(rule).toContain("top: calc(-1 * (2px + 3px) / var(--lf-zoom, 1));");
+    expect(rule).toContain("font-size: var(--font-ui-medium, 15px);");
+    expect(rule).toContain("line-height: 1.3;");
+  });
+
+  test("how far a label reaches above its card: 15px on 1.3 lines and the 3px gap, or the theme's --font-ui-medium", () => {
+    expect(labelClearancePx(undefined)).toBe(23);
+    const body = document.createElement("body");
+    const doc = { body, defaultView: { getComputedStyle: () => ({ getPropertyValue: (name: string) => (name === "--font-ui-medium" ? " 20px" : "") }) as never } };
+    expect(labelClearancePx(doc)).toBe(29);
   });
 
   test("a middle-click on the label opens the note in a new tab too", () => {

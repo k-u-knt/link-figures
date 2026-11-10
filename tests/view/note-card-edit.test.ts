@@ -572,6 +572,21 @@ describe("the label above a note card", () => {
     expect(nodeWorldRect(s.store.doc, s.node("N")).y).toBeCloseTo(before.y + 30, 5);
   });
 
+  test("a grip wins over a resize handle's grab radius: a drag from the label near the selected card's corner moves it", async () => {
+    const s = await setup();
+    s.view.selection.set(["N"]);
+    const box = nodeWorldRect(s.store.doc, s.node("N"));
+    // On the label, 3px above the card and 2px in from its left edge: within the top-left handle's grab radius.
+    const at: [number, number] = [box.x + 2, box.y - 3];
+    const target = s.el("N").querySelector(".lf-card-label")!;
+    s.pointer("pointerdown", at, target);
+    s.pointerHeld("pointermove", [at[0] + 40, at[1] + 30], target);
+    s.pointerHeld("pointerup", [at[0] + 40, at[1] + 30], target);
+    await s.settled();
+    const after = nodeWorldRect(s.store.doc, s.node("N"));
+    expect([after.x, after.y, after.width, after.height]).toEqual([box.x + 40, box.y + 30, box.width, box.height]);
+  });
+
   test("a grip wins over the box under it: a drag from a card's label over another card moves the label's card", async () => {
     const s = await setup();
     // M's label lies over N's box: M's top is inside N.

@@ -63,6 +63,20 @@ export function isOwnClick(target: EventTarget | null): boolean {
   return typeof el?.closest === "function" && el.closest(`.lf-badge, .${LIVE_LINKS} a, .${LIVE_LINKS} .markdown-embed-link`) !== null;
 }
 
+/** Whether `target` is in a link in what a node renders whose links are live (`LIVE_LINKS`, a card's text). */
+export function isLivePress(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  return typeof el?.closest === "function" && el.closest(`.${LIVE_LINKS} a`) !== null;
+}
+
+/**
+ * Whether a press pans the canvas: the middle button, or the left with the space bar held (`spaceHeld`). A middle press
+ * on a link in a card is the link's (it opens on its `auxclick`, see `openCardLink`), not a pan.
+ */
+export function isPanPress(ev: { button: number; target: EventTarget | null }, spaceHeld: boolean): boolean {
+  return (ev.button === 1 && !isLivePress(ev.target)) || (ev.button === 0 && spaceHeld);
+}
+
 /** What a press turns into once it has travelled far enough. A `move` that has nothing to move becomes a marquee: see `begin`. */
 type Intent =
   | { kind: "move" }

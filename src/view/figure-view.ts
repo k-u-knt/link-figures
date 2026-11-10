@@ -35,7 +35,7 @@ import { Inspector } from "./inspector";
 import { ItemBar, wireItemBar, type ItemBarWiring } from "./item-bar";
 import { NodeHost } from "./node-host";
 import { PageLayer } from "./page-layer";
-import { isEditable, PointerController } from "./pointer";
+import { isEditable, isPanPress, PointerController } from "./pointer";
 import { SelectionState } from "./selection";
 import { Toolbar } from "./toolbar";
 import { scrollsUnderWheel } from "./wheel";
@@ -838,9 +838,12 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     });
   }
 
-  /** A pointerdown that pans the canvas (middle button, or the left with the space bar held), which the pointer controller leaves alone. */
+  /**
+   * A pointerdown that pans the canvas (middle button, or the left with the space bar held), which the pointer controller
+   * leaves alone. Not a middle press on a link in a card, which opens the link (see `isPanPress`).
+   */
   isPanGesture(ev: PointerEvent): boolean {
-    return ev.button === 1 || (ev.button === 0 && this.spaceHeld);
+    return isPanPress(ev, this.spaceHeld);
   }
 
   requestExport(): void {

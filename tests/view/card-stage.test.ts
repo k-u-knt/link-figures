@@ -59,7 +59,7 @@ vi.mock("obsidian", () => ({
   setIcon: () => {},
 }));
 
-const { PointerController } = await import("../../src/view/pointer");
+const { PointerController, isPanPress } = await import("../../src/view/pointer");
 const { SelectionState } = await import("../../src/view/selection");
 const { Viewport } = await import("../../src/view/viewport");
 const { Intake } = await import("../../src/links/intake");
@@ -591,6 +591,29 @@ describe("links in a card", () => {
     }
     expect(ctx.openLink).toHaveBeenCalledTimes(1);
     expect(inner).toHaveBeenCalledTimes(1);
+  });
+
+  test("a middle press on a card link is the link's, not a canvas pan: it opens the link once in a new tab", () => {
+    const s = setup();
+    render.mockImplementationOnce(async (_app, _markdown, el) => {
+      el.innerHTML = 'See <a class="internal-link" data-href="Notes/a">a</a> and plain text.';
+    });
+    const { el } = mountCard(s, "C");
+    const link = el.querySelector("a")!;
+    const ctx = (s as unknown as { lastCtx: { openLink: ReturnType<typeof vi.fn> } }).lastCtx;
+    // The view pans with the middle button anywhere but on a link in a card.
+    expect(isPanPress({ button: 1, target: link }, false)).toBe(false);
+    expect(isPanPress({ button: 1, target: el.querySelector(".lf-card-content")! }, false)).toBe(true);
+    expect(isPanPress({ button: 0, target: link }, true)).toBe(true);
+    expect(isPanPress({ button: 0, target: link }, false)).toBe(false);
+    // The press is not taken by the stage either, so the auxclick that follows reaches the link: one new tab.
+    const card = nodeWorldRect(s.store.doc, s.node("C"));
+    s.fire("pointerdown", { pointerId: 1, isPrimary: true, button: 1, shiftKey: false, altKey: false, clientX: card.x + 5, clientY: card.y + 5, target: link, preventDefault: vi.fn() });
+    s.fire("pointerup", { pointerId: 1, isPrimary: true, button: 1, clientX: card.x + 5, clientY: card.y + 5, target: link });
+    link.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    expect(ctx.openLink).toHaveBeenCalledTimes(1);
+    expect(ctx.openLink).toHaveBeenCalledWith("Notes/a", expect.anything(), "tab");
+    expect(s.view.selection.ids).toEqual([]);
   });
 
   test("the embed's open icon takes its own press: the stage does not select the card", () => {

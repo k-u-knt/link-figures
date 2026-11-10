@@ -92,7 +92,9 @@ type Snap = { pageId: PageId; lines: SnapLines } | null;
 
 /**
  * `idle -> pressed -> moving | resizing | handling | marquee -> idle`, and `idle -> drawing -> idle` for an armed tool
- * that is dragged out. (Panning the canvas is the view's own gesture, which this one stays out of: see
+ * that is dragged out. A press on a link in a card (`isLivePress`) is `link` (`down` is its pointerdown): it is the
+ * link's click if it is let go within the click threshold, and becomes the press on the card it would otherwise have
+ * been once it travels past it (`idle -> link -> pressed -> ...`). (Panning the canvas is the view's own gesture, which this one stays out of: see
  * `LinkFiguresView.isPanGesture`.) `world` is where the press began, in world pixels; `from` is the same point on the
  * press page, `under` the items there (topmost first), and `el` what the drag draws in that page's overlay (the dragged
  * box, or the tool's own preview), once the press has become a drag. `handling` drags a handle of a node's own (see
@@ -103,6 +105,7 @@ type Snap = { pageId: PageId; lines: SnapLines } | null;
 type Gesture =
   | { kind: "idle" }
   | { kind: "pressed"; pointerId: number; client: Pt; world: Pt; intent: Intent; collapseTo: NodeId | null }
+  | { kind: "link"; pointerId: number; client: Pt; down: PointerEvent }
   | { kind: "moving"; pointerId: number; world: Pt; ids: NodeId[]; moved: Pt; started: boolean; snap: Snap; bounds: Rect | null; offPaper: OffPaperDrag | null }
   | { kind: "resizing"; pointerId: number; world: Pt; id: NodeId; handle: Handle; start: Rect; group: { pageId: PageId; el: HTMLElement | null } | null; snap: Snap }
   | { kind: "handling"; pointerId: number; world: Pt; id: NodeId; handle: string; drag: HandleDrag | null; el: Element | null }
@@ -189,7 +192,7 @@ export class PointerController {
    * the item bar hides meanwhile. Listeners hear as one begins and ends (`onGestureChange`).
    */
   busy(): boolean {
-    return this.gesture.kind !== "idle" && this.gesture.kind !== "pressed";
+    return this.gesture.kind !== "idle" && this.gesture.kind !== "pressed" && this.gesture.kind !== "link";
   }
 
   private readonly gestureListeners = new Set<() => void>();
@@ -332,7 +335,20 @@ export class PointerController {
     // The link badge and the like are clickable themselves: capturing the pointer would send their click to the stage.
     // Not while a tool is armed: its press is the tool's wherever it lands (the Connector tool from a card's link).
     const target = ev.target as Element | null;
-    if (isEditable(target) || (!this.view.armedTool && isOwnClick(target))) return;
+    if (isEditable(target)) return;
+    if (!this.view.armedTool && isOwnClick(target)) {
+      // A press on a link waits: let go where it is, it is the link's click; moved on, it is a press on the card (see
+      // `onPointerMove`). The pointer is not captured meanwhile, so the click reaches the link.
+      if (isLivePress(target)) this.gesture = { kind: "link", pointerId: ev.pointerId, client: { x: ev.clientX, y: ev.clientY }, down: ev };
+      return;
+    }
+    this.take(ev);
+  }
+
+  /** A press on the stage that is the stage's (not a link's, nor an editor's): what it selects, and the gesture it starts. */
+  private take(ev: PointerEvent): void {
+    const stage = this.stage;
+    if (!stage) return;
 
     // An armed tool takes the press: it is placed where the press is, on any page and over any node, and selects nothing
     // itself. The stage does not take the focus, and the mousedown that follows must not move it either (hence
@@ -457,6 +473,14 @@ export class PointerController {
     if (g.kind === "cropping") {
       this.cropTo(g, ev);
       return;
+    }
+    if (g.kind === "link") {
+      if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) < DRAG_THRESHOLD_PX) return;
+      // Dragged from the link: the press is the card's after all, taken where it began.
+      this.gesture = { kind: "idle" };
+      this.take(g.down);
+      g = this.gesture as Gesture;
+      if (g.kind !== "pressed") return;
     }
     if (g.kind === "pressed") {
       if (Math.hypot(ev.clientX - g.client.x, ev.clientY - g.client.y) < DRAG_THRESHOLD_PX) return;
@@ -915,7 +939,7 @@ export class PointerController {
     this.dragStartedAt = null;
     this.clearGuides();
     if (g.kind === "idle") return;
-    if (g.kind !== "pressed") this.gestureChanged();
+    if (g.kind !== "pressed" && g.kind !== "link") this.gestureChanged();
     // A crop drag's step stays open for the session's next drag: the session closes it when it ends.
     if (g.kind === "cropping") this.cropSession.release();
     else this.store.endMerge();
@@ -990,7 +1014,7 @@ export class PointerController {
     // The menu is not for the tool: a right-click puts an armed one down.
     if (this.view.armedTool) this.view.disarmTool();
     // A press that has not become a drag gives way (a Control-click the platform check missed); a drag under way keeps on.
-    if (this.gesture.kind === "pressed") this.endGesture();
+    if (this.gesture.kind === "pressed" || this.gesture.kind === "link") this.endGesture();
     else if (this.gesture.kind !== "idle") return;
     this.stage?.focus({ preventScroll: true });
     const doc = this.store.doc;

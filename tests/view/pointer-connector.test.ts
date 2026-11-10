@@ -197,11 +197,12 @@ test("with the Connector tool armed, a press on a link in a node (its own click 
   // The pointer is captured, so the link's click goes to the stage: the link does not open.
   expect(stage.setPointerCapture).toHaveBeenCalledWith(1);
   expect(view.armedTool).toBeNull();
-  // With no tool armed, the press is the link's own: no drag, no selection.
+  // With no tool armed, a press that stays within the click threshold is the link's own: no drag, no selection.
+  // (One that travels past it moves the node: see card-stage.test.ts.)
   const idle = setup(null);
   idle.pointer("pointerdown", [140, 85], link);
-  idle.pointer("pointermove", [240, 70]);
-  idle.pointer("pointerup", [240, 70]);
+  idle.pointer("pointermove", [141, 86]);
+  idle.pointer("pointerup", [141, 86]);
   await idle.settled();
   expect(idle.view.selection.ids).toEqual([]);
   expect(idle.stage.setPointerCapture).not.toHaveBeenCalled();

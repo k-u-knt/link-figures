@@ -616,6 +616,44 @@ describe("links in a card", () => {
     expect(s.view.selection.ids).toEqual([]);
   });
 
+  test("a press on a link that travels past the click threshold moves the card like any press on it; one that stays is the link's click", async () => {
+    const s = setup();
+    render.mockImplementationOnce(async (_app, _markdown, el) => {
+      el.innerHTML = 'See <a class="internal-link" data-href="Notes/a">a</a>.';
+    });
+    const { el } = mountCard(s, "C");
+    const link = el.querySelector("a")!;
+    const start = nodeWorldRect(s.store.doc, s.node("C"));
+    const at = { x: start.x + 5, y: start.y + 5 };
+    const ev = (x: number, y: number) => ({ pointerId: 1, isPrimary: true, button: 0, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, clientX: x, clientY: y, target: link, preventDefault: vi.fn() });
+    // Within the threshold: nothing selected, nothing moved, no pointer capture (the click is the link's).
+    s.fire("pointerdown", ev(at.x, at.y));
+    // The press is the controller's while it waits: its mousedown is no native drag of the link (nor a text selection).
+    const mousedown = { button: 0, preventDefault: vi.fn() };
+    s.fire("mousedown", mousedown);
+    expect(mousedown.preventDefault).toHaveBeenCalled();
+    s.fire("pointermove", ev(at.x + 1, at.y + 1));
+    s.fire("pointerup", ev(at.x + 1, at.y + 1));
+    await s.settled();
+    expect(s.view.selection.ids).toEqual([]);
+    expect(nodeWorldRect(s.store.doc, s.node("C"))).toEqual(start);
+    expect(s.labels).toEqual([]);
+    // Past it: the card is selected and moves with the pointer, one undo step, and no marquee.
+    s.fire("pointerdown", ev(at.x, at.y));
+    s.fire("pointermove", ev(at.x + 40, at.y + 30));
+    s.fire("pointermove", ev(at.x + 80, at.y + 60));
+    s.fire("pointerup", ev(at.x + 80, at.y + 60));
+    await s.settled();
+    expect(s.view.selection.ids).toEqual(["C"]);
+    const moved = nodeWorldRect(s.store.doc, s.node("C"));
+    expect(moved.x).toBeCloseTo(start.x + 80, 1);
+    expect(moved.y).toBeCloseTo(start.y + 60, 1);
+    expect(s.labels.every((l) => l === "node.move")).toBe(true);
+    // One undo step puts it back.
+    s.store.undo();
+    expect(nodeWorldRect(s.store.doc, s.node("C"))).toEqual(start);
+  });
+
   test("the embed's open icon takes its own press: the stage does not select the card", () => {
     const s = setup();
     render.mockImplementationOnce(async (_app, _markdown, el) => {

@@ -232,6 +232,36 @@ describe("associations", () => {
     expect(node<ConnectorNode>(id)!.ends[1]).toEqual({ kind: "page", page: "pg-2", anchor: "n" });
   });
 
+  test("deleting a card deletes its associations in the same undo step; a connector between two cards is freed as before", async () => {
+    const { call, node, store, card } = await withCard(true);
+    const a = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: { kind: "page", page: "pg-1", anchor: "e" } })) as { id: string };
+    const b = (await call("connector.create", { page: "pg-1", from: { kind: "page", page: "pg-2", anchor: "n" }, to: cardEnd(card) })) as { id: string };
+    const other = (await call("card.create", { page: "pg-1", x: 220 * MM, y: 200 * MM, id: "c2" })) as { id: string };
+    const between = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: cardEnd(other.id) })) as { id: string };
+    await call("delete", { ids: [card] });
+    expect(node(card)).toBeUndefined();
+    expect(node(a.id)).toBeUndefined();
+    expect(node(b.id)).toBeUndefined();
+    // Not an association: it is freed at the deleted card's end, as for any item.
+    expect(node<ConnectorNode>(between.id)!.ends[0].kind).toBe("free");
+    // One undo brings back the card and both associations.
+    store.undo();
+    expect(node(card)).toBeDefined();
+    expect(node<ConnectorNode>(a.id)!.ends).toEqual([cardEnd(card), { kind: "page", page: "pg-1", anchor: "e" }]);
+    expect(node<ConnectorNode>(b.id)!.ends).toEqual([{ kind: "page", page: "pg-2", anchor: "n" }, cardEnd(card)]);
+    store.redo();
+    expect(node(a.id)).toBeUndefined();
+    expect(node(b.id)).toBeUndefined();
+  });
+
+  test("an association whose card is missing as the figure loads is freed, not deleted", () => {
+    const doc = figure(false, (d) => [
+      connectorNodeDefaults(d.pages[0], { id: "k", ends: [cardEnd("gone"), { kind: "page", page: "pg-1", anchor: "e" }] }, []),
+    ]);
+    const { node } = setup(doc);
+    expect(node<ConnectorNode>("k")).toBeDefined();
+  });
+
   test("an association across pages is accepted by node.update and moves with node.move of its card", async () => {
     const { call, node, store, r, card } = await withCard(true);
     const { id } = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: { kind: "page", page: "pg-1", anchor: "e" } })) as { id: string };
@@ -253,13 +283,6 @@ describe("associations", () => {
     expect(moved.ends[1]).toEqual({ kind: "page", page: "pg-2", anchor: "n" });
     expect({ x: moved.x, y: moved.y }).not.toEqual(box);
     expect(node(card)!.page).toBe("pg-1");
-  });
-
-  test("a page end whose card is deleted comes free, so no connector is tied to a page without a card", async () => {
-    const { call, node, card } = await withCard();
-    const { id } = (await call("connector.create", { page: "pg-1", from: cardEnd(card), to: { kind: "page", page: "pg-1", anchor: "e" } })) as { id: string };
-    await call("delete", { ids: [card] });
-    expect(node<ConnectorNode>(id)!.ends.map((e) => e.kind)).toEqual(["free", "free"]);
   });
 
   test("existing figures round-trip byte-identically", () => {

@@ -34,6 +34,8 @@ export interface NormaliseContext {
  */
 export function createFigureStore(doc: Document, registries: Registries, now?: () => number, unreadable?: Iterable<NodeId>): DocumentStore {
   const store = new DocumentStore(doc, now, unreadable);
+  // Before the connectors, which would free the page end of an association whose card is gone.
+  store.addNormaliser(tiedNormaliser(registries));
   // First, so a connector attached to an item pushed off the paper follows it in the same commit.
   store.addNormaliser(offPaperNormaliser(registries));
   // Every connector is kept in step with its items in each commit, and the document is brought in line now.
@@ -41,6 +43,30 @@ export function createFigureStore(doc: Document, registries: Registries, now?: (
   // After the connectors, so a group whose member is a connector takes in the connector's box as it now is.
   store.addNormaliser(groupNormaliser(registries));
   return store;
+}
+
+/**
+ * Deletes a node tied to pages (`NodeType.tiedPages`: an association) when an item it is drawn from (`dependsOn`) whose
+ * type may be tied to pages (`NodeType.pageTies`: a card) was deleted by this edit: the association goes with its card,
+ * in the same undo step. Only an item that was in `before` counts, so a figure loaded with an association whose card is
+ * missing keeps it (the connector normaliser frees its page end instead).
+ */
+export function tiedNormaliser(registries: Registries): Normaliser {
+  return (draft, before, ctx) => {
+    const unreadable = ctx?.unreadable;
+    const typeOf = (n: Node) => nodeTypeFor(registries, n, unreadable);
+    const tied = draft.nodes.filter((n) => (typeOf(n)?.tiedPages?.(n).length ?? 0) > 0);
+    if (tied.length === 0) return;
+    const present = new Set(draft.nodes.map((n) => n.id));
+    const deletedTie = (id: NodeId): boolean => {
+      if (present.has(id)) return false;
+      const was = before.nodes.find((n) => n.id === id);
+      return was !== undefined && nodeTypeFor(registries, was, unreadable)?.pageTies === true;
+    };
+    const gone = new Set(tied.filter((n) => (typeOf(n)?.dependsOn?.(n) ?? []).some(deletedTie)).map((n) => n.id));
+    if (gone.size === 0) return;
+    for (let i = draft.nodes.length - 1; i >= 0; i--) if (gone.has(draft.nodes[i].id)) draft.nodes.splice(i, 1);
+  };
 }
 
 /**
@@ -88,7 +114,8 @@ export function connectorNormaliser(registries: Registries): Normaliser {
           ends = withEnd(ends, i, { kind: "attached", node: end.node, snap: "center" });
         }
       }
-      // A page end with no card at the other end (the card was deleted or its end freed) comes free where it is drawn.
+      // A page end with no card at the other end (its end was moved off the card) comes free where it is drawn; an
+      // association whose card was deleted is gone already (see `tiedNormaliser`).
       for (const i of [0, 1] as const) {
         if (ends[i].kind === "page" && !onPageTiedItem(now, registries, ends[1 - i])) {
           const { pt } = resolved.ends[i];

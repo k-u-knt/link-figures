@@ -310,7 +310,7 @@ export interface NodeType<N extends Node = Node> {
   pageTies?: true;
   /**
    * The pages the node is tied to by itself (a connector's page ends). Deleting one of these pages deletes the node with
-   * it, in the same undo step. Such a node is not exported, as it is drawn from a card (see `isExported`).
+   * it, in the same undo step, and so does deleting an item it is drawn from (`dependsOn`) whose type has `pageTies`. Such a node is not exported, as it is drawn from a card (see `isExported`).
    */
   tiedPages?(node: N): PageId[];
   /**

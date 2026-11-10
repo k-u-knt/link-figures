@@ -184,9 +184,13 @@ describe("what a link led to before the rename", () => {
     expect(linkRenameFor("a/foo.md", "a/bar.md", "a/fig.lnkfig.md", "bar", now).resolve("foo")).toBe("a/foo.md");
     // From a figure in `b/`, it led to `b/foo.md`, which is not renamed.
     expect(linkRenameFor("a/foo.md", "a/bar.md", "b/fig.lnkfig.md", "bar", now).resolve("foo")).toBe("b/foo.md");
-    // From elsewhere: neither beside it, the one with the shorter path, the renamed file on a tie.
-    expect(linkRenameFor("a/foo.md", "a/bar.md", "fig.lnkfig.md", "bar", now).resolve("foo")).toBe("a/foo.md");
+    // From elsewhere: neither beside it, the one with the shorter path.
     expect(linkRenameFor("x/y/foo.md", "x/y/bar.md", "fig.lnkfig.md", "bar", now).resolve("foo")).toBe("b/foo.md");
+    expect(linkRenameFor("foo.md", "bar.md", "x/fig.lnkfig.md", "bar", now).resolve("foo")).toBe("foo.md");
+    // A tie (as deep, neither beside it): which one the link led to cannot be told, so it is left alone.
+    const tie = linkRenameFor("a/foo.md", "a/bar.md", "fig.lnkfig.md", "bar", now);
+    expect(tie.resolve("foo")).toBe("b/foo.md");
+    expect(renameInCardText("See [[foo]]", tie.resolve, tie.oldPath, tie.linktext)).toBe("See [[foo]]");
     // A folder move whose name still finds the moved file needs no rename.
     const moved = linkRenameFor("a/b/plot.png", "a/c/plot.png", "fig.lnkfig.md", "plot.png", (link) => (link === "plot.png" ? "a/c/plot.png" : null));
     expect(moved.resolve("plot.png")).toBe("a/c/plot.png");

@@ -41,13 +41,14 @@ function joinRelative(folder: string, link: string): string | null {
 
 /**
  * Which of two files a link that names both by name led to, as Obsidian picks: the one in the figure's own folder, else
- * the one with the shorter path, else `a` (the renamed file, which the link was written for).
+ * the one with the shorter path. On a tie (as deep, neither beside the figure) which one it led to cannot be told, so
+ * `b` (the file it finds now, not the renamed one): the link is left alone rather than renamed on a guess.
  */
 function pick(a: string, b: string, figureFolder: string): string {
   const here = (path: string) => folderOf(path) === figureFolder;
   if (here(a) !== here(b)) return here(a) ? a : b;
   const depth = (path: string) => path.split("/").length;
-  return depth(b) < depth(a) ? b : a;
+  return depth(a) < depth(b) ? a : b;
 }
 
 /**
@@ -56,7 +57,8 @@ function pick(a: string, b: string, figureFolder: string): string {
  * rename, as Obsidian resolved it then, with the old file still there:
  * - a relative target (`./`, `../`) is joined to the figure's folder, and is the old file when it names its path;
  * - a target that is one of the old file's names (`namesOf`) led to it, unless another file it finds now (`resolveNow`)
- *   would have been picked over it (`pick`: one beside the figure, or with a shorter path); a target that finds the
+ *   would have been picked over it, or might have been (`pick`: one beside the figure, or with a shorter path; a tie
+ *   leaves the link alone); a target that finds the
  *   renamed file itself (a folder move) leads there, needing no rename;
  * - any other target leads where it finds now.
  */

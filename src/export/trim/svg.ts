@@ -334,10 +334,16 @@ const REMOVED_ID = "lf-removed";
  * something (an `@import`, `image-set()`, a CSS escape that could spell either, a `url(` that was not understood).
  */
 function localCss(css: string): string | null {
-  const out = css.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/gi, (whole, _quote: string, target: string) => (isLocalTarget(target) ? whole : REMOVED_URL));
+  // Quoted or bare, with no two parts of a pattern able to match the same white space: `url(` and a long run of it
+  // cannot make either backtrack (they used to take time cubic, and quadratic, in the run).
+  const out = css.replace(/url\((?:\s*(["'])([^"')]*)\1\s*|([^()"']*))\)/gi, (whole, _quote: string, quoted: string | undefined, bare: string | undefined) =>
+    isLocalTarget(quoted ?? bare ?? "") ? whole : REMOVED_URL,
+  );
   if (/\\|@import|image-set\(|image\(|cross-fade\(|element\(/i.test(out)) return null;
+  const local = /url\(\s*(?:["']\s*)?(?:#|data:)/iy;
   for (const m of out.matchAll(/url\(/gi)) {
-    if (!/^url\(\s*["']?\s*(#|data:)/i.test(out.slice(m.index))) return null;
+    local.lastIndex = m.index;
+    if (!local.test(out)) return null;
   }
   return out;
 }

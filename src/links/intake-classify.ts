@@ -87,8 +87,13 @@ function wikilinksIn(text: string): string[] {
   return out;
 }
 
-/** A Markdown link or embed, `[text](target)` or `![alt](target)`, on one line; the target may be in `<…>`. */
-export const MD_LINK = /!?\[[^\]\r\n]*\]\(\s*(<[^>\r\n]*>|[^)\s]+)[^)\r\n]*\)/g;
+/**
+ * A Markdown link or embed, `[text](target)` or `![alt](target)`, on one line; the target may be in `<…>`, and a title
+ * after it must follow white space, as in CommonMark. The text holds no `[` and the title none either, so each `[` and
+ * each target is read once at most: a line of many `[` before a `](` with no `)` is read in linear time (it used to
+ * take time cubic in it).
+ */
+export const MD_LINK = /!?\[[^[\]\r\n]*\]\(\s*(<[^>\r\n]*>|[^)\s]+)(?:\s[^)[\r\n]*)?\)/g;
 
 /** The target of a Markdown link as written in its `(…)`, without `<>` and percent-escapes. */
 export function mdLinkTarget(raw: string): string {

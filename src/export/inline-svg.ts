@@ -31,7 +31,25 @@ const DEFAULT_WIDTH = 300;
 const DEFAULT_HEIGHT = 150;
 
 /** What may precede the root element: whitespace (a byte order mark counts), the XML declaration, comments, the DOCTYPE. */
-const PROLOG_ITEM = /\s+|<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE(?:[^>[]|\[[\s\S]*?\])*>/iy;
+const PROLOG_ITEM = /\s+|<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>[]*(?:\[[^\]]*\][^>[]*)?>/iy;
+
+/**
+ * Where the prolog of `text` ends, and where its DOCTYPE lies (null without one). The DOCTYPE's pattern has one way
+ * to match any text, so a run of `[]` cannot make it backtrack (it used to take time exponential in the run), and it is
+ * only looked for in the prolog, item by item, so text further on (a comment, say) is never read as one.
+ */
+function readProlog(text: string): { end: number; doctype: { start: number; end: number } | null } {
+  let pos = 0;
+  let doctype: { start: number; end: number } | null = null;
+  for (;;) {
+    PROLOG_ITEM.lastIndex = pos;
+    const item = PROLOG_ITEM.exec(text);
+    if (!item) break;
+    if (doctype === null && /^<!DOCTYPE/i.test(item[0])) doctype = { start: pos, end: pos + item[0].length };
+    pos += item[0].length;
+  }
+  return { end: pos, doctype };
+}
 
 const PREDEFINED_ENTITIES = new Set(["amp", "lt", "gt", "quot", "apos"]);
 /** An entity whose value would grow past this is not defined, so nested definitions cannot blow the text up. */
@@ -68,17 +86,17 @@ function expandEntityRefs(text: string, entities: Map<string, string>, budget: n
  */
 function expandEntities(text: string): { text: string; capped: boolean } {
   if (!text.includes("<!ENTITY")) return { text, capped: false };
-  const doctype = /<!DOCTYPE(?:[^>[]|\[[\s\S]*?\])*>/i.exec(text);
+  const doctype = readProlog(text).doctype;
   if (!doctype) return { text, capped: false };
   const entities = new Map<string, string>();
-  for (const m of doctype[0].matchAll(/<!ENTITY\s+([^\s%"']+)\s+(?:"([^"]*)"|'([^']*)')\s*>/g)) {
+  for (const m of text.slice(doctype.start, doctype.end).matchAll(/<!ENTITY\s+([^\s%"']+)\s+(?:"([^"]*)"|'([^']*)')\s*>/g)) {
     if (PREDEFINED_ENTITIES.has(m[1])) continue;
     const value = expandEntityRefs(m[2] ?? m[3] ?? "", entities, MAX_ENTITY_LENGTH);
     if (!value.capped && value.text.length <= MAX_ENTITY_LENGTH) entities.set(m[1], value.text);
   }
-  const rest = text.slice(doctype.index + doctype[0].length);
+  const rest = text.slice(doctype.end);
   const expanded = entities.size > 0 ? expandEntityRefs(rest, entities, MAX_EXPANSION_LENGTH) : { text: rest, capped: false };
-  return { text: text.slice(0, doctype.index) + expanded.text, capped: expanded.capped };
+  return { text: text.slice(0, doctype.start) + expanded.text, capped: expanded.capped };
 }
 
 // ---- The tokenizer ---------------------------------------------------------------------------------------------------
@@ -249,13 +267,7 @@ interface RootTag {
 /** Finds the root `<svg>` after the prolog; null when the text does not begin like an SVG file. */
 function parseRoot(text: string): RootTag | null {
   const { text: doc, capped } = expandEntities(text);
-  let pos = 0;
-  for (;;) {
-    PROLOG_ITEM.lastIndex = pos;
-    const item = PROLOG_ITEM.exec(doc);
-    if (!item) break;
-    pos += item[0].length;
-  }
+  const pos = readProlog(doc).end;
   if (!doc.startsWith("<svg", pos) || !/[\s/>]/.test(doc[pos + 4] ?? "")) return null;
   const tag = readTag(doc, pos);
   if (!tag.closed) return null;
@@ -329,8 +341,14 @@ function warn(scope: Scope, message: string): void {
 const XML_BASE = /^xml:base$/i;
 /** `href`, `xlink:href` or the attribute under any other prefix. */
 const HREF_NAME = /^(?:[^:]*:)*href$/i;
-/** `url(…)` with its value unquoted, quoted, or quoted with `&quot;` or `&apos;` (inside an attribute). */
-const URL_FUNCTION = /url\(\s*(?:"([^"]*)"|'([^']*)'|&quot;((?:(?!&quot;)[\s\S])*)&quot;|&apos;((?:(?!&apos;)[\s\S])*)&apos;|([^)"']*?))\s*\)/gi;
+/**
+ * `url(…)` with its value unquoted, quoted, or quoted with `&quot;` or `&apos;` (inside an attribute). The unquoted
+ * value keeps the white space around it (a caller trims it) and holds no `(` unless escaped (CSS reads an unescaped
+ * one as a bad URL, which loads nothing): no two parts of the pattern can match the same white space, so `url(`
+ * followed by a long run of it cannot make the match backtrack (it used to take time cubic in the run).
+ */
+const URL_FUNCTION =
+  /url\((?:\s*"([^"]*)"\s*|\s*'([^']*)'\s*|\s*&quot;((?:(?!&quot;)[\s\S])*)&quot;\s*|\s*&apos;((?:(?!&apos;)[\s\S])*)&apos;\s*|((?:[^()"'\\]|\\[\s\S])*))\)/gi;
 const MAX_REFERENCE_SHOWN = 80;
 
 /** A reference that stays in the document: a fragment (`#id`) or inline data (`data:`). Anything else would be fetched. */

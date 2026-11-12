@@ -119,8 +119,7 @@ const PLAIN_FAMILY = /^-?[A-Za-z_][A-Za-z0-9_-]*$/;
  * quoted, which svg2pdf.js's parser needs (it throws on an unquoted 日本語ゴシック). The value as it was when nothing needs it.
  */
 export function quoteFamilies(value: string): string {
-  const important = /\s*!\s*important\s*$/i.exec(value)?.[0] ?? "";
-  const list = important ? value.slice(0, value.length - important.length) : value;
+  const [list, important] = splitImportant(value);
   const items: string[] = [];
   let changed = false;
   const re = /\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,]+)\s*(?:,|$)/gy;
@@ -165,8 +164,11 @@ const FONT_SIZE = /^(?:\d*\.?\d+(?:px|pt|pc|em|rem|ex|ch|%|mm|cm|in|q|vw|vh|vmin
  * font such as `caption`).
  */
 export function expandFont(value: string): [string, string][] | null {
-  // "10px / 1.2" becomes the one token "10px/1.2".
-  const tokens = value.trim().replace(/\s*\/\s*/, "/").split(/\s+/);
+  // "10px / 1.2" becomes the one token "10px/1.2" (around the first slash, found without a pattern that backtracks).
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  const joined = slash < 0 ? trimmed : `${trimmed.slice(0, slash).trimEnd()}/${trimmed.slice(slash + 1).trimStart()}`;
+  const tokens = joined.split(/\s+/);
   const sizeAt = tokens.findIndex((t) => FONT_SIZE.test(t.split("/")[0]));
   if (sizeAt < 0) return null;
   let style = "normal";
@@ -192,7 +194,17 @@ interface Rule {
   declarations: Declaration[];
 }
 
-const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+/** `/* … *\/` comments removed, in one pass (an unclosed one runs to the end). */
+const stripComments = (css: string): string => {
+  let out = "";
+  let pos = 0;
+  for (let open = css.indexOf("/*"); open >= 0; open = css.indexOf("/*", pos)) {
+    out += css.slice(pos, open);
+    const close = css.indexOf("*/", open + 2);
+    pos = close < 0 ? css.length : close + 2;
+  }
+  return out + css.slice(pos);
+};
 
 /** Roughly a selector's CSS specificity: ids, then classes, attributes and pseudo-classes, then element names. */
 function specificity(selector: string): number {
@@ -205,12 +217,17 @@ function specificity(selector: string): number {
 /** The plain style rules of some `<style>` text (one per selector of a list). At-rules' own blocks are not read. */
 function parseRules(css: string, start: number): Rule[] {
   const rules: Rule[] = [];
-  const re = /([^{}]+)\{([^{}]*)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(stripComments(css)))) {
-    const decls = declarations(m[2]);
+  // `selector { declarations }` with neither part holding a brace, read off the runs between braces in one pass (an
+  // at-rule's own block is skipped, and the rules inside it read): a long run without braces cannot make a pattern
+  // backtrack, as `/([^{}]+)\{([^{}]*)\}/g` did (time quadratic in the run).
+  const parts = stripComments(css).split(/([{}])/);
+  for (let i = 0; i + 3 < parts.length; i += 2) {
+    if (parts[i] === "" || parts[i + 1] !== "{" || parts[i + 3] !== "}") continue;
+    const selectors = parts[i];
+    const decls = declarations(parts[i + 2]);
+    i += 2;
     if (decls.length === 0) continue;
-    for (const selector of m[1].split(",").map((s) => s.trim())) {
+    for (const selector of selectors.split(",").map((s) => s.trim())) {
       if (selector === "" || selector.startsWith("@")) continue;
       rules.push({ selector, specificity: specificity(selector), order: start + rules.length, declarations: decls });
     }
@@ -272,23 +289,75 @@ function weightKeyword(value: string): string {
 /** svg2pdf.js keys only "italic": an oblique style would be no face at all when bold, and upright when not. */
 const slantKeyword = (value: string) => (value.trim().toLowerCase() === "oblique" ? "italic" : value);
 
-const WEIGHT_DECL_RE = /(font-weight\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
-const FONT_FAMILY_DECL_RE = /(font-family\s*:\s*)([^;}]+?)(\s*(?:;|}|$))/gi;
-const SLANT_DECL_RE = /(font-style\s*:\s*)([^;}!]+?)(\s*(?:!\s*important\s*)?(?:;|}|$))/gi;
+/**
+ * `value` split before a trailing `!important` (with the white space before it): `["bold", " !important"]`, or
+ * `[value, ""]`. Found from the last `!`, not by a regular expression over the whole value.
+ */
+function splitImportant(value: string): [string, string] {
+  const bang = value.lastIndexOf("!");
+  if (bang < 0 || !/^!\s*important\s*$/i.test(value.slice(bang))) return [value, ""];
+  const before = value.slice(0, bang).trimEnd();
+  return [before, value.slice(before.length)];
+}
+
+/** One declaration in CSS text, split as `head` (property, colon and the white space after it), `value`, `tail` (trailing white space). */
+interface DeclText {
+  property: string;
+  head: string;
+  value: string;
+  tail: string;
+}
+
+/**
+ * `css` with each declaration `rewrite` gives a new text for replaced by it. Declarations are the runs between `;`,
+ * `{` and `}` that hold a colon (selectors without one are left alone), split in one pass: no regular expression
+ * backtracks over a value, whatever white space it holds.
+ */
+function rewriteDeclarations(css: string, rewrite: (decl: DeclText) => string | null): string {
+  const parts = css.split(/([;{}])/);
+  for (let i = 0; i < parts.length; i += 2) {
+    const part = parts[i];
+    const colon = part.indexOf(":");
+    if (colon < 0) continue;
+    const rest = part.slice(colon + 1);
+    const value = rest.trim();
+    const lead = rest.length - rest.trimStart().length;
+    const decl = {
+      property: part.slice(0, colon).trim().toLowerCase(),
+      head: part.slice(0, colon + 1 + lead),
+      value,
+      tail: rest.slice(lead + value.length),
+    };
+    const replaced = value === "" ? null : rewrite(decl);
+    if (replaced !== null) parts[i] = replaced;
+  }
+  return parts.join("");
+}
+
+/** A declaration's value rewritten by `keyword`, its `!important` kept; null for a value with any other `!` in it. */
+function rewriteKeyword(decl: DeclText, keyword: (value: string) => string): string {
+  const [value, important] = splitImportant(decl.value);
+  return value.includes("!") || value === "" ? `${decl.head}${decl.value}${decl.tail}` : `${decl.head}${keyword(value)}${important}${decl.tail}`;
+}
+
 /**
  * CSS text with each `font` shorthand written out as its longhands, which every reader understands, and each weight
  * as a keyword svg2pdf.js can key.
  */
 function rewriteFontDecls(css: string): string {
-  const expanded = css.replace(FONT_SHORTHAND_RE, (all, lead: string, value: string) => {
-    const important = /!\s*important\s*$/i.test(value) ? " !important" : "";
-    const longhands = expandFont(value.replace(/!\s*important\s*$/i, ""));
-    const trailing = /\s*$/.exec(value)?.[0] ?? "";
-    return longhands ? `${lead}${longhands.map(([p, v]) => `${p}: ${v}${important}`).join("; ")}${trailing}` : all;
+  const expanded = rewriteDeclarations(css, (decl) => {
+    if (decl.property !== "font") return null;
+    const [value, important] = splitImportant(decl.value);
+    const longhands = expandFont(value);
+    const lead = decl.head.slice(0, decl.head.length - decl.head.trimStart().length);
+    const bang = important ? " !important" : "";
+    return longhands ? `${lead}${longhands.map(([p, v]) => `${p}: ${v}${bang}`).join("; ")}${decl.tail}` : null;
   });
-  return expanded
-    .replace(WEIGHT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${weightKeyword(value)}${tail}`)
-    .replace(SLANT_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${slantKeyword(value)}${tail}`);
+  return rewriteDeclarations(expanded, (decl) => {
+    if (decl.property === "font-weight") return rewriteKeyword(decl, weightKeyword);
+    if (decl.property === "font-style") return rewriteKeyword(decl, slantKeyword);
+    return null;
+  });
 }
 
 /** Rewrites the weights and oblique styles (and `font` shorthands) in attributes, inline styles and `<style>` text; true when anything changed. */
@@ -323,7 +392,8 @@ function rewriteWeights(root: Element): boolean {
  */
 function quoteUnreadableFamilies(root: Element): boolean {
   let changed = false;
-  const quoteDecls = (css: string) => css.replace(FONT_FAMILY_DECL_RE, (all, head: string, value: string, tail: string) => `${head}${quoteFamilies(value)}${tail}`);
+  const quoteDecls = (css: string) =>
+    rewriteDeclarations(css, (decl) => (decl.property === "font-family" ? `${decl.head}${quoteFamilies(decl.value)}${decl.tail}` : null));
   for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
     const attr = el.getAttribute("font-family");
     if (attr !== null && quoteFamilies(attr) !== attr) {

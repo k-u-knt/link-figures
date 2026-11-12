@@ -351,9 +351,13 @@ const URL_FUNCTION =
   /url\((?:\s*"([^"]*)"\s*|\s*'([^']*)'\s*|\s*&quot;((?:(?!&quot;)[\s\S])*)&quot;\s*|\s*&apos;((?:(?!&apos;)[\s\S])*)&apos;\s*|((?:[^()"'\\]|\\[\s\S])*))\)/gi;
 const MAX_REFERENCE_SHOWN = 80;
 
-/** A reference that stays in the document: a fragment (`#id`) or inline data (`data:`). Anything else would be fetched. */
+/**
+ * A reference that stays in the document: a fragment (`#id`) or an image as inline data (`data:image/png…`, and the
+ * other types a browser draws as an image, where an SVG one runs no script and loads nothing). Anything else would be
+ * fetched, or (`data:text/html`) is a document of its own.
+ */
 function isLocalRef(value: string): boolean {
-  return /^\s*(?:#|data:)/i.test(value);
+  return /^\s*(?:#|data:image\/(?:png|jpe?g|gif|webp|bmp|avif|svg\+xml)[;,])/i.test(value);
 }
 
 function externalRemoved(scope: Scope, value: string): void {
@@ -776,7 +780,7 @@ export function svgRootAttributes(text: string, idPrefix = "", warnings?: string
  * other prefix), every `class` name, and every `<style>` rule, which is also scoped to `#{idPrefix}root`, the id
  * the element that takes the root's place must carry. Dropped: the XML declaration, DOCTYPE (its entities are
  * expanded first), comments, `<script>` and `<foreignObject>` (under any prefix), `on…` attributes, and `<style>`
- * at-rules; every `href` (any prefix) and `url()` that leads out of the document (not `#…` or `data:…`, so
+ * at-rules; every `href` (any prefix) and `url()` that leads out of the document (not `#…` or an image's `data:…`, so
  * `javascript:` too), the `href` dropped and the `url()` made `none`. `url()` is read in attribute values and
  * `<style>` text only, never in text content. At-rules and references out add a message to `warnings` (one per kind
  * or value), as does an entity expansion that stopped at its limit.

@@ -104,6 +104,17 @@ async function fontsFor(fonts: FontPass, svg: string, doc: Document, page: Page)
 }
 
 /**
+ * The only images svg2pdf.js may load: raster data URIs. It loads every other `<image>` with `XMLHttpRequest`, and it
+ * reads an SVG data URI as a nested SVG whose own images it loads in turn, unsanitised; so an image that is neither
+ * would be a request out of the document (the inlined SVGs' outside references are already gone, see `inlineSvg`).
+ * The pattern applies to nested images too.
+ */
+export const pdfLoadableImage = /^\s*data:image\/(?:png|jpe?g|gif|webp|bmp|avif)[;,]/i;
+/** An `<image>` of an SVG data URI, which the PDF leaves out (see `pdfLoadableImage`). */
+const SVG_DATA_IMAGE = /href\s*=\s*["']\s*data:image\/svg\+xml/i;
+const SVG_DATA_IMAGE_WARNING = "an SVG image embedded as a data URI was left out of the PDF";
+
+/**
  * The page's SVG drawn as vectors, over the whole of jsPDF's current page. Markers sized in user units are first
  * swapped for copies that svg2pdf.js draws at their own size (it scales every marker by the stroke width), and gradient
  * and pattern strokes, which svg2pdf.js leaves unpainted, for their outlines filled with the paint. Patterns placed by
@@ -113,7 +124,8 @@ async function fontsFor(fonts: FontPass, svg: string, doc: Document, page: Page)
 async function drawSvg(pdf: JsPdf, svg: string, doc: Document, page: Page, warnings: Set<string>): Promise<void> {
   const outlined = outlinePaintedStrokes(normaliseUserSpaceMarkers(svg), ownerLabel(doc, page));
   for (const warning of outlined.warnings) warnings.add(warning);
-  await pdf.svg(parseSvg(normalisePatternOrigins(outlined.svg), page), { x: 0, y: 0, width: page.width, height: page.height });
+  if (SVG_DATA_IMAGE.test(outlined.svg)) warnings.add(SVG_DATA_IMAGE_WARNING);
+  await pdf.svg(parseSvg(normalisePatternOrigins(outlined.svg), page), { x: 0, y: 0, width: page.width, height: page.height, loadImages: pdfLoadableImage });
 }
 
 /**

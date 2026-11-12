@@ -9,6 +9,9 @@ import type { ExportInput } from "../../src/registry/exporter";
 import { createRegistries } from "../../src/registry";
 import type { NodeType, SvgContext } from "../../src/registry/node-type";
 
+/** svg2pdf.js may load raster data URIs only (see `pdfLoadableImage`). */
+const LOADABLE = expect.any(RegExp);
+
 // jsPDF and svg2pdf.js are replaced by a recorder: what is checked here is what the exporter asks of them, per page.
 // (Whether the PDF they make is right can only be seen in a real browser.)
 const calls = vi.hoisted(() => [] as unknown[][]);
@@ -83,9 +86,9 @@ test("one PDF: the first page sets the document up, later pages are added, each 
   const { files } = await pdfExporter.run(input(), {});
   expect(calls).toEqual([
     ["new", { unit: "mm", format: [183, 170], orientation: "landscape", compress: true }],
-    ["svg", "<svg>Page 1</svg>", { x: 0, y: 0, width: 183, height: 170 }],
+    ["svg", "<svg>Page 1</svg>", { x: 0, y: 0, width: 183, height: 170, loadImages: LOADABLE }],
     ["addPage", [210, 297], "portrait"],
-    ["svg", "<svg>Page 2</svg>", { x: 0, y: 0, width: 210, height: 297 }],
+    ["svg", "<svg>Page 2</svg>", { x: 0, y: 0, width: 210, height: 297, loadImages: LOADABLE }],
     ["output", "blob"],
   ]);
   expect(files.map((f) => f.name)).toEqual(["Untitled figure.pdf"]);
@@ -246,7 +249,7 @@ test("each layer is its own single-page jsPDF at the figure page's size, and the
   f.label(f.first, 2);
   await pdfExporter.run(f.i, {});
   const options = { unit: "mm", format: [183, 170], orientation: "landscape", compress: true };
-  const box = { x: 0, y: 0, width: 183, height: 170 };
+  const box = { x: 0, y: 0, width: 183, height: 170, loadImages: LOADABLE };
   // Page 1 is two jsPDF documents (the layers around the panel, which has none of its own), page 2 is one.
   expect(calls.map((c) => c[0])).toEqual(["new", "svg", "output", "new", "svg", "output", "new", "svg", "output"]);
   expect(calls[0]).toEqual(["new", options]);
@@ -255,7 +258,7 @@ test("each layer is its own single-page jsPDF at the figure page's size, and the
   expect(calls[3]).toEqual(["new", options]);
   // The page with no PDF panel is its SVG as it was built, in one layer.
   expect(calls[6]).toEqual(["new", { unit: "mm", format: [210, 297], orientation: "portrait", compress: true }]);
-  expect(calls[7]).toEqual(["svg", "<svg>Page 2</svg>", { x: 0, y: 0, width: 210, height: 297 }]);
+  expect(calls[7]).toEqual(["svg", "<svg>Page 2</svg>", { x: 0, y: 0, width: 210, height: 297, loadImages: LOADABLE }]);
   expect(calls).toHaveLength(9);
 });
 
@@ -328,7 +331,7 @@ test("a PDF panel on the second page only: the first page stays an ordinary one-
   const f = panelFigure();
   f.panel(f.second, 0, [20, 20, 300, 200], pdfAsset(await sourcePdf([[300, 200]])));
   const { files } = await pdfExporter.run(f.i, {});
-  expect(calls[1]).toEqual(["svg", "<svg>Page 1</svg>", { x: 0, y: 0, width: 183, height: 170 }]);
+  expect(calls[1]).toEqual(["svg", "<svg>Page 1</svg>", { x: 0, y: 0, width: 183, height: 170, loadImages: LOADABLE }]);
   const out = await PDFDocument.load(await files[0].blob.arrayBuffer());
   expect(out.getPageCount()).toBe(2);
   expect(out.getPage(1).getSize().height).toBeCloseTo(297 * MM_TO_PT);

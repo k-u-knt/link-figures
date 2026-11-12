@@ -165,8 +165,8 @@ describe("inlineSvg: fidelity and safety", () => {
   });
 
   test("an href with any namespace prefix is carried over", () =>
-    expect(inlineSvg('<svg><use xl:href="#g"/><use xlink:href="#g"/><image xlink:href="data:x#g"/></svg>', "p-")).toBe(
-      '<use xl:href="#p-g"/><use xlink:href="#p-g"/><image xlink:href="data:x#g"/>',
+    expect(inlineSvg('<svg><use xl:href="#g"/><use xlink:href="#g"/><image xlink:href="data:image/png;base64,QQ==#g"/></svg>', "p-")).toBe(
+      '<use xl:href="#p-g"/><use xlink:href="#p-g"/><image xlink:href="data:image/png;base64,QQ==#g"/>',
     ));
 
   test("every quoting of url() is carried over", () =>

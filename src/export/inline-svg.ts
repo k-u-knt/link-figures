@@ -314,6 +314,8 @@ function prefixClasses(value: string, idPrefix: string): string {
 
 interface Scope {
   idPrefix: string;
+  /** The namespaces in scope in the root's content: SVG's as the default (the root's place is taken by an SVG `<svg>`), and the prefixes the root binds. */
+  namespaces: Namespaces;
   /** The root's own class names, as the file wrote them: a rule for `.svglite polyline` must still reach the root's children. */
   rootClasses: Set<string>;
   warnings?: string[];
@@ -323,6 +325,8 @@ function warn(scope: Scope, message: string): void {
   if (scope.warnings && !scope.warnings.includes(message)) scope.warnings.push(message);
 }
 
+/** `xml:base`, which would change what every relative reference below it points at. */
+const XML_BASE = /^xml:base$/i;
 /** `href`, `xlink:href` or the attribute under any other prefix. */
 const HREF_NAME = /^(?:[^:]*:)*href$/i;
 /** `url(…)` with its value unquoted, quoted, or quoted with `&quot;` or `&apos;` (inside an attribute). */
@@ -503,6 +507,62 @@ function sanitiseStyleContent(css: string, scope: Scope, inline: boolean): strin
 
 /** Elements dropped with all they hold, by local name in lower case. */
 const DROPPED_ELEMENTS = new Set(["script", "foreignobject"]);
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/**
+ * The SVG elements an inlined file keeps, by local name in lower case: what draws, its containers, paint servers,
+ * filters, text, fonts, descriptive elements and declarative animation. Anything else — `<script>`,
+ * `<foreignObject>`, SVG Tiny's `<handler>`, and every element of another namespace (an XHTML `<iframe>`, Inkscape's
+ * `<sodipodi:namedview>`, RDF metadata) — is dropped with all it holds.
+ */
+const SVG_ELEMENTS = new Set(
+  [
+    "a", "circle", "clipPath", "defs", "desc", "ellipse", "g", "image", "line", "linearGradient", "marker", "mask",
+    "metadata", "path", "pattern", "polygon", "polyline", "radialGradient", "rect", "stop", "style", "svg", "switch",
+    "symbol", "text", "textPath", "title", "tref", "tspan", "use", "view",
+    "filter", "feBlend", "feColorMatrix", "feComponentTransfer", "feComposite", "feConvolveMatrix", "feDiffuseLighting",
+    "feDisplacementMap", "feDistantLight", "feDropShadow", "feFlood", "feFuncA", "feFuncB", "feFuncG", "feFuncR",
+    "feGaussianBlur", "feImage", "feMerge", "feMergeNode", "feMorphology", "feOffset", "fePointLight",
+    "feSpecularLighting", "feSpotLight", "feTile", "feTurbulence",
+    "font", "font-face", "font-face-format", "font-face-name", "font-face-src", "font-face-uri", "glyph", "glyphRef",
+    "hkern", "missing-glyph", "vkern", "altGlyph", "altGlyphDef", "altGlyphItem",
+    "animate", "animateColor", "animateMotion", "animateTransform", "mpath", "set",
+  ].map((name) => name.toLowerCase()),
+);
+/** Animation elements: one that changes an `href` (`<set attributeName="href" to="javascript:…">`) is dropped. */
+const ANIMATIONS = new Set(["animate", "animatecolor", "animatemotion", "animatetransform", "set"]);
+
+/** The namespaces in scope by prefix ("" for the default one). */
+type Namespaces = ReadonlyMap<string, string>;
+
+/** `namespaces` with the declarations `tag` makes (`xmlns`, `xmlns:p`) added. */
+function declaredNamespaces(tag: Tag, namespaces: Namespaces): Namespaces {
+  let out: Map<string, string> | null = null;
+  for (const { name, value } of tag.attributes) {
+    const m = /^xmlns(?::(.*))?$/.exec(name);
+    if (!m) continue;
+    out ??= new Map(namespaces);
+    out.set(m[1] ?? "", value.trim());
+  }
+  return out ?? namespaces;
+}
+
+/**
+ * Whether the element `tag` opens is kept: an SVG element (see `SVG_ELEMENTS`) whose prefix, or the default
+ * namespace, is bound to SVG's where it stands, and no animation that changes an `href`.
+ */
+function isKeptElement(tag: Tag, namespaces: Namespaces): boolean {
+  const local = localName(tag.name);
+  if (!SVG_ELEMENTS.has(local)) return false;
+  const colon = tag.name.lastIndexOf(":");
+  if (namespaces.get(colon < 0 ? "" : tag.name.slice(0, colon)) !== SVG_NAMESPACE) return false;
+  if (ANIMATIONS.has(local)) {
+    const target = tag.attributes.find((a) => a.name === "attributeName")?.value.trim() ?? "";
+    if (HREF_NAME.test(target)) return false;
+  }
+  return true;
+}
 /** The start of a dropped element's tag wherever it occurs in the text, under any namespace prefix. */
 const DROPPED_START = /<(?:[^\s/<>:"'=]+:)*(script|foreignObject)\b/gi;
 const DROPPED_END = /<\/(?:[^\s/<>:"'=]+:)*(script|foreignObject)\s*>/gi;
@@ -515,7 +575,7 @@ const DROPPED_END = /<\/(?:[^\s/<>:"'=]+:)*(script|foreignObject)\s*>/gi;
  */
 function keptValue(attribute: TagAttribute, scope: Scope, inline: boolean): string | null {
   const { name, value } = attribute;
-  if (/^on/i.test(name) || /["'<=]/.test(name)) return null;
+  if (/^on/i.test(name) || /["'<=]/.test(name) || XML_BASE.test(name)) return null;
   if (HREF_NAME.test(name)) {
     if (!isLocalRef(value)) {
       externalRemoved(scope, value);
@@ -547,12 +607,15 @@ function rebuildTag(tag: Tag, scope: Scope, inline: boolean): string {
 /**
  * One pass over the markup, token by token: start tags are rebuilt from the attributes they keep, end tags written
  * as `</name>`, `<script>` and `<foreignObject>` (any prefix) dropped with everything up to their end tag (or to the
- * end of the markup), comments and other `<!…>`/`<?…>` dropped, `<style>` content cleaned (see
+ * end of the markup), every element that is not an SVG one (see `SVG_ELEMENTS`, `isKeptElement`) dropped with
+ * everything up to its end tag (or, without one, its start tag alone), comments and other `<!…>`/`<?…>` dropped, `<style>` content cleaned (see
  * `sanitiseStyleContent`), text and CDATA sections copied, and a `<` that opens nothing written as `&lt;`. Where the
  * markup ends inside a tag, the tag and what follows are dropped, as a lenient parser does.
  */
 function sanitiseMarkup(markup: string, scope: Scope, inline: boolean): string {
   let out = "";
+  // The elements open where the token stands, each with the namespaces in scope inside it; the first is the root's.
+  const open: { name: string; namespaces: Namespaces }[] = [{ name: "", namespaces: scope.namespaces }];
   for (let i = 0; i < markup.length; ) {
     const token = readToken(markup, i);
     if (token.tag && !token.tag.closed) break;
@@ -565,17 +628,29 @@ function sanitiseMarkup(markup: string, scope: Scope, inline: boolean): string {
       case "lt":
         out += "&lt;";
         break;
-      case "end":
+      case "end": {
         out += `</${token.tag!.name}>`;
+        const at = open.findLastIndex((e) => e.name === token.tag!.name);
+        if (at > 0) open.length = at;
         break;
+      }
       case "start": {
         const tag = token.tag!;
         const local = localName(tag.name);
-        if (DROPPED_ELEMENTS.has(local)) {
-          if (!tag.selfClosing) i = findEndTag(markup, tag.end, local).end;
+        const namespaces = declaredNamespaces(tag, open[open.length - 1].namespaces);
+        // A name with `<` in it is no element to any parser (see `localName`); `dropElementFragments` peels what it hides.
+        const scripted = DROPPED_ELEMENTS.has(local);
+        if (scripted || (local !== "" && !isKeptElement(tag, namespaces))) {
+          // Dropped with all it holds. `<script>` and `<foreignObject>` without an end tag take the rest of the markup
+          // with them; any other element without one loses its start tag only, and what follows is judged on its own.
+          if (!tag.selfClosing) {
+            const end = findEndTag(markup, tag.end, local);
+            if (scripted || end.contentEnd < markup.length) i = end.end;
+          }
           break;
         }
         out += rebuildTag(tag, scope, inline);
+        if (!tag.selfClosing && local !== "style") open.push({ name: tag.name, namespaces });
         if (local === "style" && !tag.selfClosing) {
           const { contentEnd, end } = findEndTag(markup, tag.end, local);
           out += `${sanitiseStyleContent(markup.slice(tag.end, contentEnd), scope, inline)}</${tag.name}>`;
@@ -658,10 +733,10 @@ const OWN_ROOT_ATTRIBUTES = new Set(["x", "y", "width", "height", "viewBox", "pr
 export function svgRootAttributes(text: string, idPrefix = "", warnings?: string[]): string {
   const root = parseRoot(text);
   if (!root) return "";
-  const scope: Scope = { idPrefix, rootClasses: new Set(), warnings };
+  const scope: Scope = { idPrefix, namespaces: new Map(), rootClasses: new Set(), warnings };
   let out = "";
   for (const { name, value } of root.tag.attributes) {
-    if (OWN_ROOT_ATTRIBUTES.has(name) || /^on/i.test(name) || /["'<=]/.test(name)) continue;
+    if (OWN_ROOT_ATTRIBUTES.has(name) || /^on/i.test(name) || /["'<=]/.test(name) || XML_BASE.test(name)) continue;
     let carried: string;
     if (HREF_NAME.test(name)) {
       if (!isLocalRef(value)) {
@@ -693,6 +768,7 @@ export function inlineSvg(text: string, idPrefix: string, warnings?: string[]): 
   if (!root) return "";
   const scope: Scope = {
     idPrefix,
+    namespaces: new Map([...declaredNamespaces(root.tag, new Map()), ["", SVG_NAMESPACE]]),
     rootClasses: new Set((attributesOf(root.tag).get("class") ?? "").split(/\s+/).filter(Boolean)),
     warnings,
   };

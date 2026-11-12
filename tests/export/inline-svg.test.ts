@@ -348,9 +348,10 @@ describe("inlineSvg: malformed quoting cannot smuggle a reference", () => {
   test("removing an attribute cannot join a tag name into script", () => {
     const warnings: string[] = [];
     const out = inlineSvg(`<svg><scr href="x"ipt>alert(1)</script><g/></svg>`, "p-", warnings);
-    expect(out).toBe(`<scr ipt="">alert(1)</script><g/>`);
+    // `<scr>` is no SVG element, so its tag goes whole (it has no end tag: the start tag alone) before any attribute is read.
+    expect(out).toBe(`alert(1)</script><g/>`);
     expect(out).not.toMatch(/<script/i);
-    expect(warnings).toEqual(["external reference removed: x"]);
+    expect(warnings).toEqual([]);
   });
 
   test("removing an event attribute cannot join its neighbours into another", () => {

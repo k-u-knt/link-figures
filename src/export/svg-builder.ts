@@ -38,8 +38,11 @@ export interface BuildOptions {
 /** A node's fragment, wrapped in a group when it is translucent or rotated (about its own centre). */
 function wrap(node: Node, fragment: string): string {
   const attrs: string[] = [];
-  if (node.opacity < 1) attrs.push(`opacity="${node.opacity}"`);
-  if (node.rotation !== 0) attrs.push(`transform="rotate(${node.rotation} ${node.x + node.width / 2} ${node.y + node.height / 2})"`);
+  // Written through Number(): a figure file is checked by `migrate`, but nothing else read from it may become markup.
+  const opacity = Number(node.opacity);
+  const rotation = Number(node.rotation);
+  if (opacity < 1) attrs.push(`opacity="${opacity}"`);
+  if (rotation !== 0) attrs.push(`transform="rotate(${rotation} ${Number(node.x) + Number(node.width) / 2} ${Number(node.y) + Number(node.height) / 2})"`);
   return attrs.length === 0 ? fragment : `<g ${attrs.join(" ")}>${fragment}</g>`;
 }
 

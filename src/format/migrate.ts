@@ -163,6 +163,10 @@ function migrateNode(raw: unknown, index: number, nodeTypes?: NodeMigrations, fa
   for (const key of ["x", "y", "width", "height"]) {
     if (!isNumber(raw[key])) throw new FormatError(`Node ${id}: "${key}" must be a number`);
   }
+  // Written into exported SVG as numbers; when the file has them they must be numbers (a missing one is filled in).
+  for (const key of ["z", "rotation", "opacity"]) {
+    if (raw[key] !== undefined && !isNumber(raw[key])) throw new FormatError(`Node ${id}: "${key}" must be a number`);
+  }
   // Whether the group it names exists is the store's group normaliser's to check, as the document is loaded.
   if (raw.parent !== undefined && typeof raw.parent !== "string") throw new FormatError(`Node ${id}: "parent" must be a string`);
   if (!Object.hasOwn(NODE_DEFAULTS, type)) return migrateForeign(id, type, raw, nodeTypes, failures);

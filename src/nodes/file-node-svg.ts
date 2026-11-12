@@ -44,6 +44,19 @@ function clipRect(id: string, node: FileNode, region: Rect): string {
   return `<clipPath id="${id}"><rect x="${node.x + region.x}" y="${node.y + region.y}" width="${region.width}" height="${region.height}"/></clipPath>`;
 }
 
+/** What an id may hold to be written into an attribute and a CSS selector as it is. */
+const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The start of the ids, classes and selectors a nested SVG gets: the node's id when it is made of letters, digits, `_` and
+ * `-` (as ids the plugin makes are); otherwise, since a figure file can hold any string there, the id with every other
+ * character made `_` and a unique suffix, so it can break out of neither an attribute nor a `<style>` rule.
+ */
+function idPrefixBase(node: FileNode, ctx: SvgContext): string {
+  if (SAFE_ID.test(node.id)) return node.id;
+  return `${node.id.replace(/[^A-Za-z0-9_-]/g, "_")}_${ctx.uid("id")}`;
+}
+
 /**
  * The linked SVG as a nested `<svg>`: its viewBox (or the crop's part of it) fills the crop's region as `fit` says, and
  * a clip to that region cuts off what `cover` pushes beyond the node's rectangle. The nested `<svg>`'s viewport has the
@@ -58,7 +71,7 @@ function nestedSvg(node: FileNode, text: string, ctx: SvgContext): string {
   const { fitted, region } = cropPlacement({ width: node.width, height: node.height }, { width: vw, height: vh }, c, node.fit);
   const clip = ctx.uid("clip");
   ctx.defs.push(clipRect(clip, node, region));
-  const prefix = `${node.id}-`;
+  const prefix = `${idPrefixBase(node, ctx)}-`;
   const dropped: string[] = [];
   const rootAttributes = svgRootAttributes(text, prefix, dropped);
   const content = inlineSvg(text, prefix, dropped);

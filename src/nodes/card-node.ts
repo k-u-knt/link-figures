@@ -1,4 +1,4 @@
-import { EDITING_CLASS, EDITING_EVENT, LIVE_LINKS } from "../constants";
+import { EDITING_CLASS, EDITING_EVENT, LIVE_LINKS, type ActivateDetail } from "../constants";
 import { boxAttachable } from "../model/attach";
 import { newId } from "../model/defaults";
 import { mmToPx, type Pt, type Rect } from "../model/geometry";
@@ -51,6 +51,32 @@ export function cardContentError(card: { text?: unknown; file?: unknown; subpath
   return null;
 }
 
+/**
+ * The note a card shows as a note card does: its link as written (`linktext`, a path or a name) and the place in it
+ * (`subpath`, "" for the whole note). `embedded`: the link is a text card's whole text, a single embed.
+ */
+export interface CardNoteLink {
+  linktext: string;
+  subpath: string;
+  embedded: boolean;
+}
+
+/**
+ * A card's note link (see `CardNoteLink`), or null: a note card's `file` and `subpath`; or, for a text card whose whole
+ * text (trimmed) is exactly one embed naming a file, `![[note]]`, `![[note#Heading]]` or `![[note#^block]]`, with no
+ * alias or size, that embed's. Whether such an embed is of a note in the vault is the renderer's to find out. The card
+ * is not changed: its text stays what it is, and is what is saved.
+ */
+export function cardNoteLink(node: CardNode): CardNoteLink | null {
+  if (node.file !== undefined) return { linktext: node.file, subpath: node.subpath ?? "", embedded: false };
+  const text = (node.text ?? "").trim();
+  const links = cardLinks(text);
+  if (links.length !== 1) return null;
+  const [link] = links;
+  if (!link.embed || link.alias !== null || link.target === "" || link.start !== 0 || link.end !== text.length) return null;
+  return { linktext: link.target, subpath: link.subpath, embedded: true };
+}
+
 /** The part of the figure view (`RenderContext.component`) that editing a card goes through. */
 interface EditingView {
   readOnly: boolean;
@@ -68,11 +94,25 @@ function within(el: HTMLElement, target: EventTarget | null | undefined): boolea
   return !!node && typeof node.nodeType === "number" && el.contains(node);
 }
 
-/** The part of Obsidian's metadata cache a note card's label uses. */
+/** The part of Obsidian's metadata cache a note card's label, and a text card's single embed, use. */
 interface MetadataCacheLike {
   getCache?(path: string): unknown;
+  getFirstLinkpathDest?(linkpath: string, sourcePath: string): { path?: unknown; extension?: unknown } | null;
   on?(name: "changed", callback: (file: { path?: unknown } | null | undefined) => void): unknown;
   offref?(ref: unknown): void;
+}
+
+/** The vault's note object, as `noteFile` gives it. */
+type NoteFile = NonNullable<ReturnType<typeof noteFile>>;
+
+/**
+ * What a card shows as a note card (see `CardNodeRenderer.note`): its link, what the stage resolved for a note card's
+ * link, and the note (null: not found, or for a single embed, renamed and not found again yet while the embed follows it).
+ */
+interface NoteShown {
+  link: CardNoteLink;
+  resolved: Resolved | undefined;
+  file: NoteFile | null;
 }
 
 /** A note card's live embed (see `openEmbed`): of which file object (kept across a rename) and subpath. */
@@ -99,6 +139,12 @@ interface Live {
  * another note, or its note goes. Without the embed (`openEmbed` gives null), the card shows its section read-only, as
  * a text card is shown. The pointer controller leaves presses and keys in an editor to it (`isEditing`).
  *
+ * A text card whose whole text is one embed of a note in the vault (`cardNoteLink`, found from the figure's place with
+ * Obsidian's metadata cache) is shown exactly as a note card of that note and place is: the live embed, the label, the
+ * select-then-click edit. Its text is not changed. A double-click opens no textarea on it, as on a note card; the item
+ * bar's Edit (`card.edit`, an `lf-activate` from a command) does, for its own text. An embed of a file that is not a
+ * note, or of none, keeps the text card's rendering.
+ *
  * A note card has a label above it (`CardLabel`), exactly as Canvas's file card has: `Note › Heading` (`cardLabel`), with
  * the note's full vault path as its tooltip, drawn again when Obsidian's cache of the note changes; or the link as
  * stored, greyed out after an alert icon, when the note is missing. A click on it shows the note at
@@ -116,7 +162,7 @@ class CardNodeRenderer implements NodeRenderer {
   private unwatchCache: () => void = () => {};
   private shown: CardBody | null = null;
   /** What the body was drawn from (the content and what was resolved for it), so an update that leaves it alone draws nothing. */
-  private drawnFrom: { key: string; resolved: Resolved | undefined } | null = null;
+  private drawnFrom: { key: string; resolved: Resolved | undefined; file: object | null } | null = null;
   private editor: HTMLTextAreaElement | null = null;
   /** The text when editing began: what tells whether anything was typed. */
   private before = "";
@@ -137,7 +183,8 @@ class CardNodeRenderer implements NodeRenderer {
     this.label = new CardLabel(this.el, (ev) => this.openNote(ev));
     // From the pointer controller only, as a text node is told: its press captured the pointer, so it finds the card in
     // the model and tells it, after a double-click on a member of a group that is not entered has entered the group.
-    this.el.addEventListener("lf-activate", () => this.beginEdit());
+    // From a command (the item bar's Edit), the text is edited even when the card shows a note (see `cardNoteLink`).
+    this.el.addEventListener("lf-activate", (ev) => this.beginEdit((ev as CustomEvent<ActivateDetail | null>).detail?.command === true));
     // A link in what the card shows opens in a new tab beside the figure (the pointer controller leaves its press alone).
     // In the capture phase: before Obsidian's own handlers in a rendered embed, so a link opens once (`openCardLink`).
     for (const type of ["click", "auxclick"] as const) this.body.addEventListener(type, (ev) => void openCardLink(ev, this.ctx), { capture: true });
@@ -156,7 +203,6 @@ class CardNodeRenderer implements NodeRenderer {
     style.height = `${n.height}px`;
     style.zIndex = String(n.z);
     style.opacity = n.opacity === 1 ? "" : String(n.opacity);
-    this.el.classList.toggle("is-note", n.file !== undefined);
     // What is being typed is the user's: a change of the node does not overwrite it.
     if (!this.editor) this.draw();
     this.drawLabel();
@@ -227,22 +273,22 @@ class CardNodeRenderer implements NodeRenderer {
    * resolved to, else the link as stored), and the place in it; the link as stored, greyed out, when it is missing.
    */
   private drawLabel(): void {
-    const n = this.node;
-    if (n.file === undefined) {
-      this.labelPath = null;
+    const note = this.note();
+    this.el.classList.toggle("is-note", note !== null);
+    this.labelPath = null;
+    if (!note) {
       this.label.hide();
       return;
     }
-    const subpath = n.subpath ?? "";
-    const resolved = this.ctx.resolved(n.id);
-    this.labelPath = null;
+    const { linktext, subpath } = note.link;
+    const resolved = note.resolved;
     if (resolved?.kind === "missing" && !this.live) {
-      const linktext = joinLinktext(n.file, subpath);
-      this.label.show([linktext], linktext, true);
+      const stored = joinLinktext(linktext, subpath);
+      this.label.show([stored], stored, true);
       return;
     }
     const livePath = (this.live?.file as { path?: unknown } | undefined)?.path;
-    const path = typeof livePath === "string" ? livePath : resolved?.kind === "content" ? resolved.file.path : n.file;
+    const path = typeof livePath === "string" ? livePath : resolved?.kind === "content" ? resolved.file.path : (note.file?.path ?? linktext);
     this.labelPath = path;
     this.label.show(cardLabel(path, subpath, this.noteCache(path)), path, false);
   }
@@ -281,9 +327,41 @@ class CardNodeRenderer implements NodeRenderer {
    * (focused), else in a new tab beside the figure (as Open source).
    */
   private openNote(ev: MouseEvent): void {
-    const n = this.node;
+    const note = this.note();
     // A middle-click asks for a new tab, as on any link.
-    if (n.file !== undefined) this.ctx.openLink(joinLinktext(n.file, n.subpath ?? ""), ev, ev.type === "auxclick" ? "tab" : OPEN_TAB);
+    if (note) this.ctx.openLink(joinLinktext(note.link.linktext, note.link.subpath), ev, ev.type === "auxclick" ? "tab" : OPEN_TAB);
+  }
+
+  /**
+   * What the card shows as a note card, or null (a text card that is not one embed of a note in the vault). A note
+   * card's link is resolved by the stage (`ctx.resolved`); a text card's single embed here, from the figure's place, as
+   * Obsidian finds an embed's target. While its live embed follows its note through a rename, before its text is
+   * rewritten to the new name, it is still shown as the note (with no file found).
+   */
+  private note(): NoteShown | null {
+    const n = this.node;
+    const link = cardNoteLink(n);
+    if (!link) return null;
+    if (!link.embedded) {
+      const resolved = this.ctx.resolved(n.id);
+      return { link, resolved, file: resolved?.kind === "content" ? noteFile(this.ctx.app, resolved.file.path) : null };
+    }
+    const file = this.embeddedNote(link.linktext);
+    if (!file && !(this.live?.subpath === link.subpath && this.followsFile())) return null;
+    return { link, resolved: undefined, file };
+  }
+
+  /** The note in the vault that an embed's `linktext` leads to from the figure, or null (none, or a file that is not a note). */
+  private embeddedNote(linktext: string): NoteFile | null {
+    const cache = this.metadataCache();
+    if (typeof cache?.getFirstLinkpathDest !== "function") return null;
+    let dest: { path?: unknown; extension?: unknown } | null;
+    try {
+      dest = cache.getFirstLinkpathDest(linktext, this.ctx.figurePath);
+    } catch {
+      return null;
+    }
+    return dest && dest.extension === "md" && typeof dest.path === "string" ? noteFile(this.ctx.app, dest.path) : null;
   }
 
   /**
@@ -309,14 +387,17 @@ class CardNodeRenderer implements NodeRenderer {
   private draw(): void {
     const n = this.node;
     const key = JSON.stringify([n.text, n.file, n.subpath]);
-    const resolved = n.file === undefined ? undefined : this.ctx.resolved(n.id);
-    if (this.drawnFrom && this.drawnFrom.key === key && this.drawnFrom.resolved === resolved) return;
-    this.drawnFrom = { key, resolved };
-    const content = n.file !== undefined && resolved?.kind === "content" ? resolved : null;
-    const file = content && noteFile(this.ctx.app, content.file.path);
-    const subpath = n.subpath ?? "";
+    const note = this.note();
+    const resolved = note?.resolved;
+    const file = note?.file ?? null;
+    const from = this.drawnFrom;
+    if (from && from.key === key && from.resolved === resolved && from.file === file) return;
+    this.drawnFrom = { key, resolved, file };
+    // A note card's link resolved to the note's content, or a text card's single embed of a note.
+    const shown = note !== null && (note.link.embedded || resolved?.kind === "content");
+    const subpath = note?.link.subpath ?? "";
     const live = this.live;
-    if (live && content && live.subpath === subpath) {
+    if (live && shown && live.subpath === subpath) {
       if (file === live.file) return;
       // A resolution from before a rename (its path is the note's old one) while the new one is made: the embed follows
       // the note itself, so it stays until the new resolution says what the card shows.
@@ -328,7 +409,7 @@ class CardNodeRenderer implements NodeRenderer {
   }
 
   /** Puts Obsidian's editable embed of `file`'s `subpath` in the body; null (the body untouched) when there is none to be had. */
-  private openLive(file: NonNullable<ReturnType<typeof noteFile>>, subpath: string): CardBody | null {
+  private openLive(file: NoteFile, subpath: string): CardBody | null {
     const holder = this.body.ownerDocument.createElement("div");
     // Its links take their own clicks (`openCardLink`), not the stage's.
     holder.classList.add("lf-card-content", "lf-card-embed", LIVE_LINKS);
@@ -382,12 +463,18 @@ class CardNodeRenderer implements NodeRenderer {
     return typeof view.runCommandById === "function" ? (view as EditingView) : null;
   }
 
-  private beginEdit(): void {
+  /**
+   * Swaps the body for a textarea holding the card's text. A note card has none to edit; a text card shown as a note
+   * (`cardNoteLink`) only when a command asks (`command`, the item bar's Edit), not on a double-click.
+   */
+  private beginEdit(command = false): void {
     const n = this.node;
     if (this.editor || n.file !== undefined || n.locked) return;
+    if (!command && this.note() !== null) return;
     const view = this.view();
     if (!view || view.readOnly) return;
     this.before = n.text ?? "";
+    this.dropLive();
     this.shown?.release();
     this.shown = null;
     this.drawnFrom = null;

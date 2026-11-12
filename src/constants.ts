@@ -13,6 +13,13 @@ export const EDITING_CLASS = "is-editing";
 /** The bubbling event a node's element sends as its in-place edit begins and ends, so the item bar is brought in line. */
 export const EDITING_EVENT = "lf-editing";
 /**
+ * The `detail` of the `lf-activate` event a node's element is sent: what a double-click tells it (no detail), or a
+ * command (`command: true`, see `LinkFiguresView.activateNode`), which a card shown as a note takes as "edit the text".
+ */
+export interface ActivateDetail {
+  command?: boolean;
+}
+/**
  * The class of a part of a node's element drawn outside its box (a note card's label above it). A press on it waits, as
  * on a live link: let go in place, it is the part's own click; dragged, it is a press on the node, which the box's hit
  * test would not find (see `isOwnClick` and `gripNode` in `view/pointer.ts`).

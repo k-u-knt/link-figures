@@ -2,7 +2,7 @@ import { Notice, parseLinktext, TextFileView, TFile, type Menu, type PaneType, t
 import type { EditorView } from "../commands/builtin";
 import { prepareCall, runCall } from "../commands/headless";
 import { LOADING_WAIT_MS } from "../api";
-import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE } from "../constants";
+import { DEFAULT_PAGE_LIMIT_MM, FILE_SUFFIX, VIEW_TYPE, type ActivateDetail } from "../constants";
 import { ExportModal } from "../export/export-modal";
 import { FontFamilyList } from "../fonts/family-list";
 import { FormatError, NotFigureError } from "../format/errors";
@@ -1014,9 +1014,13 @@ export class LinkFiguresView extends TextFileView implements EditorView {
     this.renderChrome();
   }
 
-  /** What a double-click tells a node, from a command: an `lf-activate` event on its element (a text node starts editing). */
+  /**
+   * What a double-click tells a node, from a command: an `lf-activate` event on its element (a text node starts
+   * editing), marked as a command's (`ActivateDetail`): a card shown as a note starts editing its own text.
+   */
   activateNode(id: NodeId): void {
-    this.nodeHost.elementFor(id)?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false }));
+    const detail: ActivateDetail = { command: true };
+    this.nodeHost.elementFor(id)?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false, detail }));
   }
 
   /** Does what `command` does; a failure, thrown or rejected, is shown to the user rather than lost. */

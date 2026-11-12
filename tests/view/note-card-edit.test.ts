@@ -8,6 +8,7 @@ import { EDITING_CLASS } from "../../src/constants";
 import { builtinCapKinds, builtinRoutes } from "../../src/connectors/builtin";
 import { InvalidationIndex } from "../../src/links/invalidation";
 import type { Resolved } from "../../src/links/types";
+import { emptyParsed, serializeFigureFile } from "../../src/format/serialize";
 import { createDocument, fileNodeDefaults, shapeNodeDefaults } from "../../src/model/defaults";
 import { nodeWorldRect } from "../../src/model/geometry";
 import { createFigureStore } from "../../src/model/normalise";
@@ -119,18 +120,34 @@ class FakeStage {
   focus = () => {};
 }
 
-async function setup(options: { registry?: boolean; panel?: boolean } = {}) {
+async function setup(options: { registry?: boolean; panel?: boolean; texts?: Record<string, string> } = {}) {
   const r = registries();
   let controller: { commitTime(): number } | null = null;
-  const store = createFigureStore(options.panel ? figureWithPanel() : figure(), r, () => controller?.commitTime() ?? Date.now());
+  const start = options.panel ? figureWithPanel() : figure();
+  // Text cards beside the figure, by id, each with its text, 300 px apart below C.
+  Object.entries(options.texts ?? {}).forEach(([id, text], i) => {
+    start.nodes.push({ ...cardNodeDefaults(start.pages[0], -400, 1000 + 300 * i, start.nodes.map((n) => n.id)), id, text });
+  });
+  const store = createFigureStore(start, r, () => controller?.commitTime() ?? Date.now());
   const pending: Promise<unknown>[] = [];
   const { registry, embeds } = fakeEmbedRegistry();
   // The vault's files, by path: one object per file, which a rename keeps (as Obsidian's TFile).
-  const tfiles = new Map<string, { path: string; extension: string; basename: string }>([["Notes/a.md", { path: "Notes/a.md", extension: "md", basename: "a" }]]);
+  const tfiles = new Map<string, { path: string; extension: string; basename: string }>([
+    ["Notes/a.md", { path: "Notes/a.md", extension: "md", basename: "a" }],
+    ["Notes/plot.png", { path: "Notes/plot.png", extension: "png", basename: "plot" }],
+  ]);
   const vaultFiles: Record<string, string> = { "Notes/a.md": "# A\n## Legend\nBody" };
   const headings: Record<string, Record<string, { start: number; end: number | null }>> = { "Notes/a.md": { Legend: { start: 4, end: null } } };
   const access = new FakeAccess({ files: vaultFiles, headings });
-  const app: Record<string, unknown> = { vault: { getFileByPath: (p: string) => tfiles.get(p) ?? null } };
+  // A link's target, as Obsidian's metadata cache finds it: by path (with or without ".md") or by file name.
+  const getFirstLinkpathDest = vi.fn((linkpath: string, _source: string) => {
+    for (const file of tfiles.values()) {
+      const name = file.path.split("/").pop();
+      if (file.path === linkpath || file.path === `${linkpath}.md` || name === linkpath || (file.extension === "md" && file.basename === linkpath)) return file;
+    }
+    return null;
+  });
+  const app: Record<string, unknown> = { vault: { getFileByPath: (p: string) => tfiles.get(p) ?? null }, metadataCache: { getFirstLinkpathDest } };
   if (options.registry !== false) app.embedRegistry = registry;
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -161,6 +178,7 @@ async function setup(options: { registry?: boolean; panel?: boolean } = {}) {
       pending.push(runCall(store, view.commandContext(), prepareCall(r, { id, args }), step));
     },
     contextMenuOpen: false,
+    activateNode: (id: string) => view.nodeHost.elementFor(id)?.dispatchEvent(new CustomEvent("lf-activate", { bubbles: false, detail: { command: true } })),
   };
   const nodeHost = new NodeHost(view, { nodesHost: () => host } as never, r);
   view.nodeHost = nodeHost;
@@ -192,7 +210,7 @@ async function setup(options: { registry?: boolean; panel?: boolean } = {}) {
   };
   const key = (name: string, target: unknown) => stage.fire("keydown", { key: name, target, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, preventDefault: vi.fn() });
   const embedOf = (id: string): FakeEmbed => embeds.find((e) => el(id).contains(e.containerEl))!;
-  return { r, store, view, nodeHost, embeds, embedOf, tfiles, vaultFiles, headings, node, el, inside, pointer, pointerHeld, click, key, settled: () => Promise.all(pending) };
+  return { r, store, view, nodeHost, embeds, embedOf, getFirstLinkpathDest, stage, tfiles, vaultFiles, headings, node, el, inside, pointer, pointerHeld, click, key, settled: () => Promise.all(pending) };
 }
 
 describe("a note card's body is Obsidian's editable embed", () => {
@@ -529,7 +547,7 @@ describe("ending and unloading", () => {
     expect(embed.calls.slice(-2)).toEqual(["showPreview(true)", "unload"]);
   });
 
-  test("converting the card while editing saves, then unloads, and the text card renders its embed text", async () => {
+  test("converting the card while editing keeps its embed and the edit: its text is one embed of the same section", async () => {
     const s = await setup();
     const embed = s.embedOf("N");
     await s.click("N");
@@ -537,9 +555,31 @@ describe("ending and unloading", () => {
     embed.type("Typed");
     s.view.runCommandById("card.convert", { id: "N" });
     await s.settled();
-    expect(embed.writes).toEqual(["Typed"]);
-    expect(embed.calls.slice(-2)).toEqual(["showPreview(true)", "unload"]);
     expect(s.node<CardNode>("N").text).toMatch(/^!\[\[.*#Legend\]\]$/);
+    expect(s.embedOf("N")).toBe(embed);
+    expect(embed.unloaded).toBe(false);
+    expect(embed.editMode).not.toBeNull();
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(embed.writes).toEqual(["Typed"]);
+  });
+
+  test("converting the card, then typing words around its embed with Edit, saves, unloads, and renders the text", async () => {
+    const s = await setup();
+    const embed = s.embedOf("N");
+    await s.click("N");
+    await s.click("N");
+    embed.type("Typed");
+    s.view.runCommandById("card.convert", { id: "N" });
+    s.view.runCommandById("card.edit");
+    await s.settled();
+    expect(embed.writes).toEqual(["Typed"]);
+    expect(embed.unloaded).toBe(true);
+    const area = s.el("N").querySelector("textarea")!;
+    area.value = `See ${area.value}`;
+    area.dispatchEvent(new Event("blur"));
+    await s.settled();
+    expect(s.node<CardNode>("N").text).toMatch(/^See !\[\[.*#Legend\]\]$/);
+    expect(s.embeds.some((e) => !e.unloaded && s.el("N").contains(e.containerEl))).toBe(false);
   });
 
   test("endEdits (before the pages' sheets move) ends every open edit with a save, and keeps the embeds", async () => {
@@ -634,5 +674,138 @@ describe("the label above a note card", () => {
     expect(s.view.selection.ids).toEqual(["M"]);
     expect(nodeWorldRect(s.store.doc, s.node("M")).x).toBeCloseTo(beforeM.x + 40, 5);
     expect(nodeWorldRect(s.store.doc, s.node("N")).x).toBeCloseTo(beforeN.x, 5);
+  });
+});
+
+describe("a text card whose whole text is one embed of a note is shown as a note card", () => {
+  const label = (s: Awaited<ReturnType<typeof setup>>, id: string) => s.el(id).querySelector(".lf-card-label");
+
+  test("![[a]] gets the note's live embed (the whole note) and its label", async () => {
+    const s = await setup({ texts: { E: "![[a]]" } });
+    const embed = s.embedOf("E");
+    expect(embed).toBeDefined();
+    expect(embed.file).toBe(s.tfiles.get("Notes/a.md"));
+    expect(embed.subpath).toBe("");
+    expect(embed.ctx.sourcePath).toBe("fig.lnkfig.md");
+    expect(s.getFirstLinkpathDest).toHaveBeenCalledWith("a", "fig.lnkfig.md");
+    expect(label(s, "E")?.textContent).toBe("a");
+    expect(s.el("E").classList.contains("is-note")).toBe(true);
+    expect(render).not.toHaveBeenCalledWith(expect.anything(), "![[a]]", expect.anything(), expect.anything(), expect.anything());
+  });
+
+  test("![[a#Legend]] passes the subpath; surrounding blank space is allowed; ![[a#^block]] too", async () => {
+    const s = await setup({ texts: { E: "  ![[a#Legend]]\n", B: "![[a#^b1]]" } });
+    expect(s.embedOf("E").subpath).toBe("#Legend");
+    expect(label(s, "E")?.textContent).toBe("a › Legend");
+    expect(s.embedOf("B").subpath).toBe("#^b1");
+  });
+
+  test("anything more than one embed of a resolved note keeps today's rendering, with no label", async () => {
+    const texts = { W: "see ![[a]]", P: "![[plot.png]]", U: "![[nothere]]", A: "![[a|alias]]", T: "![[a]] ![[a]]", L: "[[a]]" };
+    const s = await setup({ texts });
+    for (const [id, text] of Object.entries(texts)) {
+      expect(s.embeds.some((e) => s.el(id).contains(e.containerEl))).toBe(false);
+      expect(label(s, id)).toBeNull();
+      expect(s.el(id).classList.contains("is-note")).toBe(false);
+      expect(render).toHaveBeenCalledWith(expect.anything(), text, expect.anything(), "fig.lnkfig.md", expect.anything());
+    }
+  });
+
+  test("select, then click: the note's editor opens, and the edit is written to the note", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    const embed = s.embedOf("E");
+    await s.click("E");
+    expect(s.view.selection.ids).toEqual(["E"]);
+    expect(embed.editMode).toBeNull();
+    await s.click("E");
+    expect(embed.editMode).not.toBeNull();
+    embed.type("Typed");
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(embed.writes).toEqual(["Typed"]);
+    expect(s.node<CardNode>("E").text).toBe("![[a#Legend]]");
+  });
+
+  test("a double-click opens no textarea, as on a note card; the bar's Edit opens the card's own text", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    const { at, target } = s.inside("E");
+    s.stage.fire("dblclick", { clientX: at[0], clientY: at[1], target, button: 0, preventDefault: vi.fn() });
+    expect(s.el("E").querySelector("textarea")).toBeNull();
+    s.view.selection.set(["E"]);
+    s.view.runCommandById("card.edit");
+    await s.settled();
+    const area = s.el("E").querySelector("textarea")!;
+    expect(area).not.toBeNull();
+    expect(area.value).toBe("![[a#Legend]]");
+    // The embed is let go of while its text is typed in.
+    expect(s.embedOf("E")).toBeUndefined();
+    area.value = "![[a]]";
+    area.dispatchEvent(new Event("blur"));
+    await s.settled();
+    expect(s.node<CardNode>("E").text).toBe("![[a]]");
+    expect(s.embedOf("E").subpath).toBe("");
+    expect(label(s, "E")?.textContent).toBe("a");
+  });
+
+  test("a click on the label opens the note at the place embedded", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    (label(s, "E") as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    expect(s.view.openLink).toHaveBeenCalledWith("a#Legend", expect.anything());
+  });
+
+  test("the figure saves byte-identically after the card is shown and its note edited", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    const before = serializeFigureFile(s.store.doc, emptyParsed());
+    const doc = s.store.doc;
+    await s.click("E");
+    await s.click("E");
+    s.embedOf("E").type("Typed");
+    await s.nodeHost.flushAll();
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await s.settled();
+    expect(s.store.doc).toBe(doc);
+    expect(serializeFigureFile(s.store.doc, emptyParsed())).toBe(before);
+  });
+
+  test("an export's flushAll writes what was typed in its embed, and waits for the note", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    const settled = vi.fn(async (_path: string) => {});
+    (s.view.plugin.access as { settled?: (path: string) => Promise<void> }).settled = settled;
+    const embed = s.embedOf("E");
+    await s.click("E");
+    await s.click("E");
+    embed.type("Just typed");
+    await s.nodeHost.flushAll();
+    expect(embed.writes).toEqual(["Just typed"]);
+    expect(settled).toHaveBeenCalledWith("Notes/a.md");
+  });
+
+  test("it follows a rename of its note, drops its embed when the note is deleted, and is live again when it is made again", async () => {
+    const s = await setup({ texts: { E: "![[a#Legend]]" } });
+    const embed = s.embedOf("E");
+    const file = s.tfiles.get("Notes/a.md")!;
+    // Renamed: the file object is renamed in place, and the plugin rewrites the card's link.
+    file.path = "Notes/b.md";
+    file.basename = "b";
+    s.tfiles.delete("Notes/a.md");
+    s.tfiles.set("Notes/b.md", file);
+    // The watcher hears of it before the link is rewritten: the embed follows the note itself, and stays.
+    await s.nodeHost.invalidate(["E"]);
+    expect(embed.unloaded).toBe(false);
+    s.view.runCommandById("node.update", { id: "E", patch: { text: "![[b#Legend]]" } });
+    await s.settled();
+    expect(s.embedOf("E")).toBe(embed);
+    expect(embed.unloaded).toBe(false);
+    expect(label(s, "E")?.textContent).toBe("b › Legend");
+    // Deleted: the watcher's invalidation reaches the card, which shows its text as a text card does.
+    s.tfiles.delete("Notes/b.md");
+    await s.nodeHost.invalidate(["E"]);
+    expect(embed.unloaded).toBe(true);
+    expect(label(s, "E")).toBeNull();
+    expect(render).toHaveBeenCalledWith(expect.anything(), "![[b#Legend]]", expect.anything(), "fig.lnkfig.md", expect.anything());
+    // Made again: a new file object, and the card is live on it.
+    s.tfiles.set("Notes/b.md", { ...file });
+    await s.nodeHost.invalidate(["E"]);
+    expect(s.embedOf("E").file).toBe(s.tfiles.get("Notes/b.md"));
+    expect(label(s, "E")?.textContent).toBe("b › Legend");
   });
 });

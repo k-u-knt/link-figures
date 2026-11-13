@@ -397,7 +397,7 @@ Milestone 1 also settles three things the design leaves open. Run each check in 
 
 ## Roadmap
 
-M2 is the editor: its first part (shapes and connectors, fills and paints, scripting) is in, as are alignment, crop, groups and PNG and TIFF export; PowerPoint export follows; M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission. The design, the file format and the milestones are in [docs/superpowers/specs/2026-10-27-link-figures-design.md](docs/superpowers/specs/2026-10-27-link-figures-design.md).
+M2 is the editor: its first part (shapes and connectors, fills and paints, scripting) is in, as are alignment, crop, groups and PNG and TIFF export; PowerPoint export follows; M3 is presentation mode, figures embedded in notes, hover previews and the community plugin submission.
 
 ## Development
 

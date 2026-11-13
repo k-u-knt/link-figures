@@ -3,6 +3,9 @@ main.js
 test-vault/.obsidian/
 *.map
 .superpowers/
+# Working notes (plans, ledgers, manual checks) stay local
+docs/superpowers/
+CLAUDE-SECURITY-*/
 .DS_Store
 
 # The test vault is a scratch space: only the fixtures that scripts/make-fixtures.mjs writes are tracked.

@@ -21,6 +21,26 @@ const copyAfterBuild = {
   },
 };
 
+/**
+ * jsPDF's `output("pdfobjectnewwindow")` opens a window and loads PDFObject from a CDN with a <script> element. The PDF
+ * exporter only calls `output("blob")` and `output("arraybuffer")`, so that branch is dead code, but Obsidian's plugin
+ * review flags any runtime script injection. Replace the branch with an error; fail the build if jsPDF's code changed.
+ */
+const noJspdfScriptInjection = {
+  name: "no-jspdf-script-injection",
+  setup(build) {
+    build.onLoad({ filter: /[\\/]jspdf[\\/]dist[\\/]jspdf\.es\.min\.js$/ }, async (args) => {
+      const { readFile } = await import("node:fs/promises");
+      const source = await readFile(args.path, "utf8");
+      const branch = /case"pdfobjectnewwindow":[\s\S]*?(?=case"pdfjsnewwindow":)/;
+      if (!branch.test(source)) throw new Error("jsPDF changed: update the no-jspdf-script-injection patch in esbuild.config.mjs");
+      const contents = source.replace(branch, 'case"pdfobjectnewwindow":throw new Error("pdfobjectnewwindow is not available in Link Figures");');
+      if (contents.includes('createElement("script")')) throw new Error("jsPDF still creates a script element");
+      return { contents, loader: "js" };
+    });
+  },
+};
+
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
@@ -32,7 +52,7 @@ const context = await esbuild.context({
   minify: false,
   treeShaking: true,
   outfile: "main.js",
-  plugins: watch ? [copyAfterBuild] : [],
+  plugins: watch ? [noJspdfScriptInjection, copyAfterBuild] : [noJspdfScriptInjection],
 });
 
 if (watch) {

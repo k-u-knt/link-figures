@@ -774,6 +774,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
+  white-space: pre-wrap;
   cursor: default;
 }
 
@@ -999,4 +1000,9 @@
   padding: 2px;
   pointer-events: none;
   user-select: none;
+}
+
+/* The link suggestions under a text card being typed into: placed at the caret (see `card-link-suggest.ts`). */
+.suggestion-container.lf-link-suggest {
+  position: fixed;
 }

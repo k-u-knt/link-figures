@@ -1,6 +1,6 @@
 {
   "name": "link-figures",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Page-based figure and slide editor where every panel is a live link to its source.",
   "private": true,
   "type": "module",
@@ -10,7 +10,8 @@
     "dev": "node esbuild.config.mjs --watch",
     "test": "vitest run",
     "deploy": "node scripts/deploy.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "author": "Kenta Ninomiya",
   "license": "MIT",
@@ -19,10 +20,13 @@
     "@types/pako": "^2.0.4",
     "builtin-modules": "^5.4.0",
     "esbuild": "^0.28.2",
+    "eslint": "10.15.0",
+    "eslint-plugin-obsidianmd": "0.5.1",
     "happy-dom": "^21.0.4",
     "obsidian": "^1.14.4",
     "obsidian-typings": "^6.51.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "8.72.2",
     "vitest": "^4.1.12"
   },
   "dependencies": {

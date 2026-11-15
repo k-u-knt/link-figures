@@ -64,8 +64,6 @@ class TextNodeRenderer implements NodeRenderer {
     this.node = node;
     this.el = host.createDiv({ cls: "lf-node" });
     this.textEl = this.el.createDiv({ cls: "lf-node-body" }).createDiv({ cls: "lf-text" });
-    this.textEl.style.whiteSpace = "pre-wrap";
-    this.textEl.style.overflow = "hidden";
     // The pointer controller leaves presses and keys on an editable element to it, so these need no `stopPropagation`.
     this.textEl.addEventListener("dblclick", () => this.beginEdit());
     // The same, from the pointer controller: its press captured the pointer, so the double-click that follows reaches the

@@ -197,8 +197,6 @@ describe("mount and update", () => {
       color: "#000000",
       textAlign: "left",
       lineHeight: "1.2",
-      whiteSpace: "pre-wrap",
-      overflow: "hidden",
     });
     expect(text.textContent).toBe("Panel A");
   });
@@ -448,4 +446,13 @@ describe("editing", () => {
     text.fire("dblclick");
     expect(text.attrs.has("contenteditable")).toBe(false);
   });
+});
+
+test("styles.css keeps a text node's line breaks and clips it to its box (not inline styles)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+  const rule = /\.lf-text \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(rule).toContain("white-space: pre-wrap;");
+  expect(rule).toContain("overflow: hidden;");
+  expect(css).toMatch(/\.suggestion-container\.lf-link-suggest \{\s*position: fixed;/);
 });

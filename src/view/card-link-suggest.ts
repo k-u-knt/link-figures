@@ -377,7 +377,6 @@ export function attachLinkSuggest(textarea: HTMLTextAreaElement, app: App | Link
     const win = doc.defaultView;
     const height = container.offsetHeight;
     const below = !win || at.bottom + height <= win.innerHeight || at.top - height < 0;
-    container.style.position = "fixed";
     container.style.left = `${Math.max(0, at.x)}px`;
     container.style.top = `${below ? at.bottom : at.top - height}px`;
   };
